@@ -48,9 +48,9 @@ type PickerTarget = "create" | "edit";
 type PickerKind = "file" | "folder";
 
 const actionLabels: Record<AliasAction, string> = {
-  navigate: "Navigiere zu Ordner",
-  open: "Öffnen",
-  execute: "Ausführen",
+  navigate: "Go to Folder",
+  open: "Open",
+  execute: "Run",
   compile_gradle: "Gradle Build",
   compile_maven: "Maven Build",
   custom: "Custom Command"
@@ -109,7 +109,7 @@ async function openPathPicker(target: PickerTarget, kind: PickerKind) {
   editError = "";
 
   if (!isTauriRuntime()) {
-    error = "Der Datei-/Ordner-Picker funktioniert nur in der Tauri-App, nicht in der Browser-Vorschau.";
+    error = "The file/folder picker only works in the Tauri app, not in browser preview.";
     render();
     return;
   }
@@ -134,7 +134,7 @@ async function openPathPicker(target: PickerTarget, kind: PickerKind) {
     const input = document.querySelector<HTMLInputElement>('input[name="edit-path"]');
     if (input) input.value = selected;
   } catch (pickerError) {
-    const message = `Picker konnte nicht geöffnet werden: ${String(pickerError)}`;
+    const message = `Picker could not be opened: ${String(pickerError)}`;
     if (target === "edit") {
       editError = message;
     } else {
@@ -158,7 +158,7 @@ async function openRepository(event: Event) {
     const { openUrl } = await import("@tauri-apps/plugin-opener");
     await openUrl(repoUrl);
   } catch (openError) {
-    error = `GitHub konnte nicht geöffnet werden: ${String(openError)}`;
+    error = `GitHub could not be opened: ${String(openError)}`;
     render();
   }
 }
@@ -222,15 +222,15 @@ function buildCommandPreview(entry: Pick<AliasEntry, "path" | "action" | "custom
 // Alias names are intentionally conservative because they become shell identifiers.
 function validateAlias(formValue: AliasForm) {
   if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(formValue.name.trim())) {
-    return "Alias-Name muss mit Buchstabe oder _ starten und darf nur Buchstaben, Zahlen, _ oder - enthalten.";
+    return "Alias name must start with a letter or _ and may only contain letters, numbers, _ or -.";
   }
 
   if (formValue.action === "custom") {
-    if (!formValue.customCommand.trim()) return "Custom Command darf nicht leer sein.";
+    if (!formValue.customCommand.trim()) return "Custom Command cannot be empty.";
     return "";
   }
 
-  if (!formValue.path.trim()) return "Bitte einen Pfad oder Befehl eintragen.";
+  if (!formValue.path.trim()) return "Please enter a path or command.";
 
   return "";
 }
@@ -278,7 +278,7 @@ async function saveState() {
 
   appState = { ...appState, aliases };
   localStorage.setItem("easyalias-state", JSON.stringify(appState));
-  notice = "Browser-Vorschau gespeichert. In Tauri schreibt die App echte Dateien.";
+  notice = "Browser preview saved. In Tauri, the app writes real files.";
   render();
 }
 
@@ -465,14 +465,14 @@ function updateEditForm<K extends keyof AliasForm>(key: K, value: AliasForm[K], 
 
 // Centralized display formatting for timestamps shown in alias cards.
 function formatDate(value: string) {
-  return new Intl.DateTimeFormat("de-DE", {
+  return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(value));
 }
 
 function formPreview() {
-  return buildCommandPreview(form) || "Noch kein Befehl generiert";
+  return buildCommandPreview(form) || "No command generated yet";
 }
 
 function updatePreview() {
@@ -483,7 +483,7 @@ function updatePreview() {
 }
 
 function editPreview() {
-  return editForm ? buildCommandPreview(editForm) || "Noch kein Befehl generiert" : "";
+  return editForm ? buildCommandPreview(editForm) || "No command generated yet" : "";
 }
 
 function updateEditPreview() {
@@ -509,20 +509,20 @@ function render() {
           <p class="eyebrow">Windows Alias Manager</p>
           <h1>EasyAlias</h1>
         </div>
-        <button class="ghost-button" data-action="reset">Neu</button>
+        <button class="ghost-button" data-action="reset">New</button>
       </header>
 
       <section class="status-grid">
         <div>
-          <span>Alias-Datei</span>
+          <span>Alias File</span>
           <strong>${appState.aliasesFile}</strong>
         </div>
         <div>
           <span>PowerShell Profile</span>
-          <strong>${appState.shellProfileSourcePresent ? "Verbunden" : "Noch einzutragen"}</strong>
+          <strong>${appState.shellProfileSourcePresent ? "Connected" : "Not connected yet"}</strong>
         </div>
         <div>
-          <span>Aliase</span>
+          <span>Aliases</span>
           <strong>${aliases.length}</strong>
         </div>
       </section>
@@ -531,7 +531,7 @@ function render() {
         appState.shellProfileSourcePresent
           ? ""
           : `<aside class="source-hint">
-              <span>Wird beim ersten Tauri-Start automatisch im PowerShell-Profil eingerichtet:</span>
+              <span>Automatically added to the PowerShell profile on first Tauri startup:</span>
               <code>${appState.sourceLine}</code>
             </aside>`
       }
@@ -543,7 +543,7 @@ function render() {
         <form class="editor" id="alias-form">
           <div class="form-title">
             <h2>Alias erstellen</h2>
-            <button class="primary-button" type="submit">Hinzufügen</button>
+            <button class="primary-button" type="submit">Add</button>
           </div>
 
           <label>
@@ -552,16 +552,16 @@ function render() {
           </label>
 
           <label>
-            Ort / Datei / Befehl
+            Location / File / Command
             <span class="path-picker-row">
-              <input name="path" value="${escapeHtml(form.path)}" placeholder="~/Desktop/projekte/beerv2_app" autocomplete="off" />
-              <button class="picker-button" type="button" title="Datei auswählen" data-action="pick-path" data-target="create" data-kind="file">Datei</button>
-              <button class="picker-button" type="button" title="Ordner auswählen" data-action="pick-path" data-target="create" data-kind="folder">Ordner</button>
+              <input name="path" value="${escapeHtml(form.path)}" placeholder="~/Desktop/projects/beerv2_app" autocomplete="off" />
+              <button class="picker-button" type="button" title="Choose file" data-action="pick-path" data-target="create" data-kind="file">File</button>
+              <button class="picker-button" type="button" title="Choose folder" data-action="pick-path" data-target="create" data-kind="folder">Folder</button>
             </span>
           </label>
 
           <label>
-            Aktion
+            Action
             <select name="action">
               ${Object.entries(actionLabels)
                 .map(
@@ -582,15 +582,15 @@ function render() {
           }
 
           <div class="preview">
-            <span>Vorschau</span>
+            <span>Preview</span>
             <code>${escapeHtml(formPreview())}</code>
           </div>
         </form>
 
-        <section class="list" aria-label="Aliase">
+        <section class="list" aria-label="Aliases">
           <div class="list-header">
-            <h2>Deine Aliase</h2>
-            <span>${aliases.length} Einträge</span>
+            <h2>Your Aliases</h2>
+            <span>${aliases.length} entries</span>
           </div>
 
           ${
@@ -603,17 +603,17 @@ function render() {
                           <span class="alias-name">${alias.name}</span>
                           <span class="alias-action">${actionLabels[alias.action]}</span>
                           <code>${escapeHtml(alias.commandPreview)}</code>
-                          <span class="created">Erstellt ${formatDate(alias.createdAt)}</span>
+                          <span class="created">Created ${formatDate(alias.createdAt)}</span>
                         </div>
-                        <button class="edit-button" title="Bearbeiten" data-action="edit" data-id="${alias.id}">Edit</button>
-                        <button class="icon-button" title="Löschen" data-action="delete" data-id="${alias.id}">×</button>
+                        <button class="edit-button" title="Edit" data-action="edit" data-id="${alias.id}">Edit</button>
+                        <button class="icon-button" title="Delete" data-action="delete" data-id="${alias.id}">×</button>
                       </article>
                     `
                   )
                   .join("")
               : `<div class="empty-state">
-                  <strong>Noch keine Aliase</strong>
-                  <span>Leg links deinen ersten Command an.</span>
+                  <strong>No aliases yet</strong>
+                  <span>Create your first command on the left.</span>
                 </div>`
           }
         </section>
@@ -645,7 +645,7 @@ function renderEditModal() {
             <p class="eyebrow">Alias bearbeiten</p>
             <h2 id="edit-title">${escapeHtml(editForm.name || "Alias")}</h2>
           </div>
-          <button class="ghost-button modal-close" type="button" data-action="close-edit">Schließen</button>
+          <button class="ghost-button modal-close" type="button" data-action="close-edit">Close</button>
         </div>
 
         ${editError ? `<p class="modal-error">${escapeHtml(editError)}</p>` : ""}
@@ -656,16 +656,16 @@ function renderEditModal() {
         </label>
 
         <label>
-          Ort / Datei / Befehl
+          Location / File / Command
           <span class="path-picker-row">
-            <input name="edit-path" value="${escapeHtml(editForm.path)}" placeholder="~/Desktop/projekte/beerv2_app" autocomplete="off" />
-            <button class="picker-button" type="button" title="Datei auswählen" data-action="pick-path" data-target="edit" data-kind="file">Datei</button>
-            <button class="picker-button" type="button" title="Ordner auswählen" data-action="pick-path" data-target="edit" data-kind="folder">Ordner</button>
+            <input name="edit-path" value="${escapeHtml(editForm.path)}" placeholder="~/Desktop/projects/beerv2_app" autocomplete="off" />
+            <button class="picker-button" type="button" title="Choose file" data-action="pick-path" data-target="edit" data-kind="file">File</button>
+            <button class="picker-button" type="button" title="Choose folder" data-action="pick-path" data-target="edit" data-kind="folder">Folder</button>
           </span>
         </label>
 
         <label>
-          Aktion
+          Action
           <select name="edit-action">
             ${Object.entries(actionLabels)
               .map(
@@ -686,13 +686,13 @@ function renderEditModal() {
         }
 
         <div class="preview modal-preview">
-          <span>Vorschau</span>
+          <span>Preview</span>
           <code>${escapeHtml(editPreview())}</code>
         </div>
 
         <div class="modal-actions">
-          <button class="ghost-button" type="button" data-action="close-edit">Abbrechen</button>
-          <button class="primary-button" type="submit">Speichern</button>
+          <button class="ghost-button" type="button" data-action="close-edit">Cancel</button>
+          <button class="primary-button" type="submit">Save</button>
         </div>
       </form>
     </section>
