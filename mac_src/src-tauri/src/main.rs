@@ -38,7 +38,7 @@ const APP_ALIAS_LINE: &str = "alias easya='open /Applications/EasyAlias.app'";
 fn home_dir() -> Result<PathBuf, String> {
     env::var_os("HOME")
         .map(PathBuf::from)
-        .ok_or_else(|| "HOME konnte nicht gelesen werden.".to_string())
+        .ok_or_else(|| "HOME could not be read.".to_string())
 }
 
 // All app-managed files live below ~/.easyalias.
@@ -72,16 +72,12 @@ fn zshrc_source_present() -> bool {
 fn ensure_app_files() -> Result<(), String> {
     let directory = app_dir()?;
     fs::create_dir_all(&directory)
-        .map_err(|error| format!("{} konnte nicht erstellt werden: {}", directory.display(), error))?;
+        .map_err(|error| format!("{} could not be created: {}", directory.display(), error))?;
 
     let aliases_path = aliases_file()?;
     if !aliases_path.exists() {
         fs::write(&aliases_path, render_aliases(&[])?).map_err(|error| {
-            format!(
-                "{} konnte nicht angelegt werden: {}",
-                aliases_path.display(),
-                error
-            )
+            format!("{} could not be created: {}", aliases_path.display(), error)
         })?;
     }
 
@@ -95,9 +91,10 @@ fn ensure_zshrc_source() -> Result<(), String> {
     let content = fs::read_to_string(&path).unwrap_or_default();
 
     let source_present = content.lines().any(|line| line.trim() == SOURCE_LINE);
-    let app_alias_present = content
-        .lines()
-        .any(|line| line.trim_start().starts_with(&format!("alias {}=", APP_ALIAS_NAME)));
+    let app_alias_present = content.lines().any(|line| {
+        line.trim_start()
+            .starts_with(&format!("alias {}=", APP_ALIAS_NAME))
+    });
 
     if source_present && app_alias_present {
         return Ok(());
@@ -121,7 +118,7 @@ fn ensure_zshrc_source() -> Result<(), String> {
     }
 
     fs::write(&path, next_content)
-        .map_err(|error| format!("{} konnte nicht aktualisiert werden: {}", path.display(), error))
+        .map_err(|error| format!("{} could not be updated: {}", path.display(), error))
 }
 
 // Shorten paths below HOME for display, e.g. /Users/name/.easyalias -> ~/.easyalias.
@@ -165,11 +162,11 @@ fn render_aliases(aliases: &[AliasEntry]) -> Result<String, String> {
 
     for alias in aliases {
         if !validate_alias_name(&alias.name) {
-            return Err(format!("Ungueltiger Alias-Name: {}", alias.name));
+            return Err(format!("Invalid alias name: {}", alias.name));
         }
 
         if alias.command_preview.trim().is_empty() {
-            return Err(format!("Alias {} hat keinen Befehl.", alias.name));
+            return Err(format!("Alias {} has no command.", alias.name));
         }
 
         lines.push(format!(
@@ -207,10 +204,10 @@ fn load_aliases() -> Result<AppState, String> {
     }
 
     let content = fs::read_to_string(&path)
-        .map_err(|error| format!("{} konnte nicht gelesen werden: {}", path.display(), error))?;
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
 
     let aliases = serde_json::from_str::<Vec<AliasEntry>>(&content)
-        .map_err(|error| format!("config.json ist kein gueltiges Alias-JSON: {}", error))?;
+        .map_err(|error| format!("config.json is not valid alias JSON: {}", error))?;
 
     app_state(aliases)
 }
@@ -221,19 +218,19 @@ fn load_aliases() -> Result<AppState, String> {
 fn save_aliases(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
     let directory = app_dir()?;
     fs::create_dir_all(&directory)
-        .map_err(|error| format!("{} konnte nicht erstellt werden: {}", directory.display(), error))?;
+        .map_err(|error| format!("{} could not be created: {}", directory.display(), error))?;
 
     let config = serde_json::to_string_pretty(&aliases)
-        .map_err(|error| format!("Aliase konnten nicht serialisiert werden: {}", error))?;
+        .map_err(|error| format!("Aliases could not be serialized: {}", error))?;
     let aliases_zsh = render_aliases(&aliases)?;
 
     let config_path = config_file()?;
     let aliases_path = aliases_file()?;
 
     fs::write(&config_path, format!("{}\n", config))
-        .map_err(|error| format!("{} konnte nicht geschrieben werden: {}", config_path.display(), error))?;
+        .map_err(|error| format!("{} could not be written: {}", config_path.display(), error))?;
     fs::write(&aliases_path, aliases_zsh)
-        .map_err(|error| format!("{} konnte nicht geschrieben werden: {}", aliases_path.display(), error))?;
+        .map_err(|error| format!("{} could not be written: {}", aliases_path.display(), error))?;
 
     app_state(aliases)
 }
