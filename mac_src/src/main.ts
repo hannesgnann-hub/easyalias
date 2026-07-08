@@ -1,5 +1,7 @@
 import "./styles.css";
 
+// Actions are the high-level choices shown in the dropdown.
+// The selected action decides how the final shell command is generated.
 type AliasAction =
   | "navigate"
   | "open"
@@ -8,6 +10,9 @@ type AliasAction =
   | "compile_maven"
   | "custom";
 
+// This is the canonical alias data shape used by the UI and persisted as JSON.
+// commandPreview is stored too, so the backend can write aliases.zsh without
+// needing to duplicate all frontend command-generation rules.
 type AliasEntry = {
   id: string;
   name: string;
@@ -19,6 +24,8 @@ type AliasEntry = {
   updatedAt: string;
 };
 
+// AppState mirrors what the Rust backend returns to the frontend.
+// The file paths are included so the UI can show where EasyAlias stores data.
 type AppState = {
   aliases: AliasEntry[];
   configFile: string;
@@ -27,6 +34,8 @@ type AppState = {
   zshrcSourcePresent: boolean;
 };
 
+// AliasForm is the temporary state for either the create form or the edit modal.
+// It is intentionally close to AliasEntry but does not include timestamps.
 type AliasForm = {
   id?: string;
   name: string;
@@ -54,6 +63,8 @@ const emptyForm: AliasForm = {
   customCommand: ""
 };
 
+// Global UI state. For this prototype we keep state in module-level variables
+// and re-render the app when larger UI structure changes.
 let appState: AppState = {
   aliases: [],
   configFile: "~/.easyalias/config.json",
@@ -69,6 +80,7 @@ let notice = "";
 let error = "";
 let editError = "";
 
+// Vite mounts the app into <main id="app"> from index.html.
 const app = document.querySelector<HTMLDivElement>("#app");
 
 if (!app) {
@@ -78,15 +90,20 @@ if (!app) {
 const appElement = app;
 const repoUrl = "https://github.com/hannesgnann-hub/easyalias";
 
+// Tauri injects this marker only inside the native desktop runtime.
+// Browser preview mode uses localStorage and skips native-only features.
 function isTauriRuntime() {
   return "__TAURI_INTERNALS__" in window;
 }
 
+// Small wrapper around Tauri's invoke API, keeping the rest of the code typed.
 async function invokeCommand<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(command, args);
 }
 
+// Opens the native macOS file/folder picker through Tauri.
+// In browser preview mode, there is no native dialog, so we show a friendly message.
 async function openPathPicker(target: PickerTarget, kind: PickerKind) {
   clearMessages();
   editError = "";
@@ -127,6 +144,8 @@ async function openPathPicker(target: PickerTarget, kind: PickerKind) {
   }
 }
 
+// Footer links need Tauri's opener plugin in the desktop app.
+// A normal target="_blank" link is fine in browser preview, but not reliable in WebView.
 async function openRepository(event: Event) {
   event.preventDefault();
 
@@ -144,6 +163,7 @@ async function openRepository(event: Event) {
   }
 }
 
+// Prefer a browser UUID. The fallback only exists for older WebViews.
 function createId() {
   if ("crypto" in window && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -152,10 +172,13 @@ function createId() {
   return `alias_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
+// Store timestamps as ISO strings because they are easy to persist and format later.
 function nowIso() {
   return new Date().toISOString();
 }
 
+// Converts a user-entered path into a safe zsh command argument.
+// "~/" is expanded to "$HOME/" so generated aliases keep working reliably.
 function shellPath(path: string) {
   const trimmed = path.trim();
   if (!trimmed) return "";
@@ -168,10 +191,13 @@ function shellPath(path: string) {
   return `"${escapeDoubleQuoted(trimmed)}"`;
 }
 
+// Escape characters that can break a double-quoted zsh string.
 function escapeDoubleQuoted(value: string) {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/`/g, "\\`").replace(/\$/g, "\\$");
 }
 
+// Converts the selected action + path/custom command into the shell command
+// that will later be written into aliases.zsh.
 function buildCommandPreview(entry: Pick<AliasEntry, "path" | "action" | "customCommand">) {
   const path = shellPath(entry.path);
 
@@ -191,6 +217,8 @@ function buildCommandPreview(entry: Pick<AliasEntry, "path" | "action" | "custom
   }
 }
 
+// Shared validation for create and edit forms.
+// Alias names are intentionally conservative because they become shell identifiers.
 function validateAlias(formValue: AliasForm) {
   if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(formValue.name.trim())) {
     return "Alias-Name muss mit Buchstabe oder _ starten und darf nur Buchstaben, Zahlen, _ oder - enthalten.";
@@ -206,6 +234,7 @@ function validateAlias(formValue: AliasForm) {
   return "";
 }
 
+// Loads aliases from the Rust backend in Tauri, or from localStorage in browser preview.
 async function loadState() {
   clearMessages();
 
@@ -227,6 +256,7 @@ async function loadState() {
   render();
 }
 
+// Persists current aliases. Tauri writes real files; browser preview only writes localStorage.
 async function saveState() {
   clearMessages();
 
@@ -251,6 +281,7 @@ async function saveState() {
   render();
 }
 
+// Message helpers keep the visible notice/error state separate from form data.
 function clearMessages() {
   notice = "";
   error = "";
@@ -267,6 +298,8 @@ function resetForm() {
   render();
 }
 
+// Opens the edit modal by copying the persisted alias into temporary editForm state.
+// Changes are not saved until the modal form is submitted.
 function openEditModal(id: string) {
   const alias = appState.aliases.find((item) => item.id === id);
   if (!alias) return;
@@ -333,6 +366,7 @@ async function upsertAlias(event: SubmitEvent) {
   await saveState();
 }
 
+// Saves edits from the modal while preserving the original id and createdAt timestamp.
 async function updateAlias(event: SubmitEvent) {
   event.preventDefault();
   if (!editForm || !editingId) return;
@@ -381,6 +415,7 @@ async function updateAlias(event: SubmitEvent) {
   await saveState();
 }
 
+// Removes an alias and then rewrites the generated alias file through saveState().
 async function deleteAlias(id: string) {
   appState = {
     ...appState,
@@ -396,6 +431,8 @@ async function deleteAlias(id: string) {
   await saveState();
 }
 
+// Updates the create form. Most text changes update only the command preview,
+// avoiding a full re-render so input focus is not lost while typing.
 function updateForm<K extends keyof AliasForm>(key: K, value: AliasForm[K], rerender = false) {
   form = { ...form, [key]: value };
   clearMessages();
@@ -409,6 +446,7 @@ function updateForm<K extends keyof AliasForm>(key: K, value: AliasForm[K], rere
   updatePreview();
 }
 
+// Same as updateForm(), but scoped to the edit modal.
 function updateEditForm<K extends keyof AliasForm>(key: K, value: AliasForm[K], rerender = false) {
   if (!editForm) return;
 
@@ -424,6 +462,7 @@ function updateEditForm<K extends keyof AliasForm>(key: K, value: AliasForm[K], 
   updateEditPreview();
 }
 
+// Centralized display formatting for timestamps shown in alias cards.
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("de-DE", {
     dateStyle: "medium",
@@ -457,6 +496,8 @@ function clearRenderedEditError() {
   document.querySelector(".modal-error")?.remove();
 }
 
+// Main render function. This replaces the app HTML from state and then calls bindEvents().
+// For a larger app, this would be a good candidate to split into smaller render helpers.
 function render() {
   const aliases = [...appState.aliases].sort((a, b) => a.name.localeCompare(b.name));
 
@@ -590,6 +631,8 @@ function render() {
   bindEvents();
 }
 
+// Renders the modal only when editForm/editingId are set.
+// Returning an empty string keeps the main template simple.
 function renderEditModal() {
   if (!editForm || !editingId) return "";
 
@@ -655,6 +698,8 @@ function renderEditModal() {
   `;
 }
 
+// Because render() replaces the DOM, event listeners are reattached after every render.
+// Small live-preview updates skip render(), so their listeners stay intact.
 function bindEvents() {
   document.querySelector<HTMLFormElement>("#alias-form")?.addEventListener("submit", upsertAlias);
   document.querySelector<HTMLFormElement>("#edit-form")?.addEventListener("submit", updateAlias);
@@ -712,6 +757,7 @@ function bindEvents() {
   });
 }
 
+// Escape user-controlled strings before inserting them into template-string HTML.
 function escapeHtml(value: string) {
   return value
     .replace(/&/g, "&amp;")
@@ -721,4 +767,5 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#039;");
 }
 
+// Initial app boot.
 void loadState();
