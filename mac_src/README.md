@@ -127,9 +127,9 @@ An alias is stored like this:
 {
   "id": "uuid",
   "name": "beerv2",
-  "path": "~/Desktop/projekte/beerv2_app",
+  "path": "~/Desktop/projects/beerv2_app",
   "action": "navigate",
-  "commandPreview": "cd \"$HOME/Desktop/projekte/beerv2_app\"",
+  "commandPreview": "cd \"$HOME/Desktop/projects/beerv2_app\"",
   "createdAt": "2026-07-08T16:35:00.000Z",
   "updatedAt": "2026-07-08T16:35:00.000Z"
 }
