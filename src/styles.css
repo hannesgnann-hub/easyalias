@@ -298,26 +298,6 @@ textarea:focus {
   color: #1d2528;
 }
 
-.generated {
-  margin-top: 18px;
-  border: 1px solid #d5dfdb;
-  border-radius: 8px;
-  background: #fff;
-}
-
-.generated summary {
-  padding: 14px 16px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.generated pre {
-  overflow: auto;
-  margin: 0;
-  padding: 0 16px 16px;
-  color: #29413b;
-}
-
 @media (max-width: 860px) {
   .shell {
     width: min(100% - 20px, 680px);
