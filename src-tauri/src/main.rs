@@ -56,6 +56,46 @@ fn zshrc_source_present() -> bool {
         .unwrap_or(false)
 }
 
+fn ensure_app_files() -> Result<(), String> {
+    let directory = app_dir()?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("{} konnte nicht erstellt werden: {}", directory.display(), error))?;
+
+    let aliases_path = aliases_file()?;
+    if !aliases_path.exists() {
+        fs::write(&aliases_path, render_aliases(&[])?).map_err(|error| {
+            format!(
+                "{} konnte nicht angelegt werden: {}",
+                aliases_path.display(),
+                error
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn ensure_zshrc_source() -> Result<(), String> {
+    let path = zshrc_file()?;
+    let content = fs::read_to_string(&path).unwrap_or_default();
+
+    if content.lines().any(|line| line.trim() == SOURCE_LINE) {
+        return Ok(());
+    }
+
+    let mut next_content = content;
+    if !next_content.is_empty() && !next_content.ends_with('\n') {
+        next_content.push('\n');
+    }
+
+    next_content.push_str("\n# EasyAlias aliases\n");
+    next_content.push_str(SOURCE_LINE);
+    next_content.push('\n');
+
+    fs::write(&path, next_content)
+        .map_err(|error| format!("{} konnte nicht aktualisiert werden: {}", path.display(), error))
+}
+
 fn display_home_path(path: PathBuf) -> Result<String, String> {
     let home = home_dir()?;
     if let Ok(stripped) = path.strip_prefix(&home) {
@@ -120,6 +160,9 @@ fn app_state(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
 
 #[tauri::command]
 fn load_aliases() -> Result<AppState, String> {
+    ensure_app_files()?;
+    ensure_zshrc_source()?;
+
     let path = config_file()?;
 
     if !path.exists() {
