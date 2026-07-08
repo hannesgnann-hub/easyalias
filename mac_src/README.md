@@ -1,19 +1,19 @@
-# EasyAlias
+# EasyAlias macOS
 
-EasyAlias ist ein kleiner macOS-Prototyp zum Erstellen, Anzeigen und Verwalten von zsh-Aliasen.
+EasyAlias macOS is a Tauri prototype for creating and managing zsh aliases through a desktop UI.
 
-Die App nutzt Tauri: Die Oberflaeche wird mit Web-Technologie gebaut, laeuft aber als lokale Desktop-App und darf Dateien auf deinem Mac verwalten.
+The app uses web technology for the interface, but runs as a local macOS desktop app and can manage files on your machine.
 
 ## Highlights
 
-- Aliase ueber eine UI erstellen, bearbeiten und loeschen
-- Aktion per Dropdown auswaehlen
-- Shell-Befehl vor dem Speichern als Vorschau sehen
-- Dateien und Ordner ueber den nativen macOS-Picker auswaehlen
-- `createdAt` und `updatedAt` pro Alias speichern
-- Alias-Daten strukturiert als JSON halten
-- automatisch eine `aliases.zsh` fuer dein Terminal generieren
-- beim ersten Tauri-Start automatisch mit `~/.zshrc` verbinden
+- create, edit, and delete aliases through a UI
+- choose an action from a dropdown
+- preview the generated shell command before saving
+- choose files and folders through the native macOS picker
+- store `createdAt` and `updatedAt` per alias
+- keep alias data as structured JSON
+- automatically generate an `aliases.zsh` file for your terminal
+- connect itself to `~/.zshrc` on first Tauri startup
 
 ## Quickstart
 
@@ -22,27 +22,27 @@ npm install
 npm run dev
 ```
 
-Das startet nur die Web-UI im Browser. In diesem Modus speichert EasyAlias testweise im Browser-`localStorage`.
+This starts only the web UI in the browser. In this mode, EasyAlias stores test data in browser `localStorage`.
 
-Fuer die echte macOS-App:
+For the real macOS app:
 
 ```zsh
 npm run tauri dev
 ```
 
-Dann schreibt EasyAlias echte Dateien unter `~/.easyalias/`.
+In this mode, EasyAlias writes real files under `~/.easyalias/`.
 
-## Voraussetzungen
+## Requirements
 
-VS Code reicht als Editor. Fuer die Tauri-App brauchst du lokal:
+VS Code is enough as an editor. For the Tauri app, you need:
 
-| Tool | Zweck |
+| Tool | Purpose |
 | --- | --- |
-| Node.js + npm | Frontend, Dev-Server, Build |
-| Xcode Command Line Tools oder Xcode | macOS Build-Toolchain |
-| Rust + Cargo | Tauri Backend und Desktop-App |
+| Node.js + npm | frontend, dev server, build |
+| Xcode Command Line Tools or Xcode | macOS build toolchain |
+| Rust + Cargo | Tauri backend and desktop app |
 
-Pruefen:
+Check your setup:
 
 ```zsh
 node -v
@@ -52,76 +52,76 @@ rustc --version
 cargo --version
 ```
 
-Falls Rust fehlt:
+If Rust is missing:
 
 ```zsh
 curl --proto '=https' --tlsv1.2 https://sh.rustup.rs -sSf | sh
 ```
 
-Danach ein neues Terminal oeffnen.
+Then open a new terminal.
 
-## Dateien auf deinem Mac
+## Files on Your Mac
 
-EasyAlias verwaltet bewusst eigene Dateien und schreibt nicht direkt deine komplette `~/.zshrc` um.
+EasyAlias intentionally manages its own files and does not directly rewrite your whole `~/.zshrc`.
 
 ```text
 ~/.easyalias/config.json
 ~/.easyalias/aliases.zsh
 ```
 
-Beim ersten Tauri-Start haengt EasyAlias diese Zeile an `~/.zshrc` an, falls sie noch fehlt:
+On first Tauri startup, EasyAlias appends this line to `~/.zshrc` if it is missing:
 
 ```zsh
 source ~/.easyalias/aliases.zsh
 ```
 
-Ausserdem wird dieser Shortcut angelegt, falls `easya` noch nicht existiert:
+It also creates this shortcut if `easya` does not already exist:
 
 ```zsh
 alias easya='open /Applications/EasyAlias.app'
 ```
 
-Damit kannst du die installierte App spaeter im Terminal starten:
+After installing the app to `/Applications`, you can open it from the terminal:
 
 ```zsh
 easya
 ```
 
-Neue oder geaenderte Aliase gelten in neuen Terminal-Fenstern automatisch. In einem bereits offenen Terminal kannst du sie direkt nachladen:
+New or changed aliases are available automatically in new terminal windows. In an already open terminal, reload them with:
 
 ```zsh
 source ~/.zshrc
 ```
 
-## Entwicklung
+## Development
 
-| Kommando | Wirkung |
+| Command | Effect |
 | --- | --- |
-| `npm run dev` | startet die Browser-Vorschau |
-| `npm run build` | baut und prueft die Web-UI |
-| `npm run tauri dev` | startet die echte Tauri-App |
-| `npm run tauri build` | baut spaeter das macOS-App-Bundle |
+| `npm run dev` | starts the browser preview |
+| `npm run build` | builds and checks the web UI |
+| `npm run tauri dev` | starts the real Tauri app |
+| `npm run tauri build` | builds the macOS app bundle |
 
-## Projektstruktur
+## Project Structure
 
 ```text
 easyalias/
   src/
-    main.ts            UI-Logik, Datenmodell, Command-Preview
-    styles.css         Styling
+    main.ts            UI logic, data model, command preview
+    styles.css         styling
 
   src-tauri/
-    src/main.rs        Tauri Commands fuer Laden/Speichern
-    tauri.conf.json    Tauri App-Konfiguration
-    icons/icon.png     Platzhalter-App-Icon
+    src/main.rs        Tauri commands for loading/saving
+    tauri.conf.json    Tauri app configuration
+    icons/icon.png     placeholder app icon
 
   docs/
-    ARCHITECTURE.md    Technischer Aufbau
+    ARCHITECTURE.md    technical architecture
 ```
 
-## Datenmodell
+## Data Model
 
-Ein Alias sieht intern so aus:
+An alias is stored like this:
 
 ```json
 {
@@ -135,21 +135,20 @@ Ein Alias sieht intern so aus:
 }
 ```
 
-## Alias-Aktionen
+## Alias Actions
 
-| Aktion | Generierter Befehl |
+| Action | Generated command |
 | --- | --- |
-| Navigiere zu Ordner | `cd "<pfad>"` |
-| Oeffnen | `open "<pfad>"` |
-| Ausfuehren | `"<pfad>"` |
-| Gradle Build | `cd "<pfad>" && ./gradlew build` |
-| Maven Build | `cd "<pfad>" && mvn clean package` |
-| Custom Command | frei eingetragener Shell-Befehl |
+| Navigate to folder | `cd "<path>"` |
+| Open | `open "<path>"` |
+| Execute | `"<path>"` |
+| Gradle Build | `cd "<path>" && ./gradlew build` |
+| Maven Build | `cd "<path>" && mvn clean package` |
+| Custom Command | user-provided shell command |
 
 ## Roadmap
 
-- Finder-Dialog fuer Datei-/Ordnerauswahl
-- Import bestehender Aliase aus `~/.zshrc`
-- Suchfeld und Filter fuer viele Aliase
-- richtiges macOS-App-Icon
-- macOS-Bundle mit `npm run tauri build`
+- import existing aliases from `~/.zshrc`
+- search and filter for large alias lists
+- polished macOS app icon
+- macOS bundle via `npm run tauri build`
