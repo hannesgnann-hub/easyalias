@@ -25,6 +25,8 @@ struct AppState {
 }
 
 const SOURCE_LINE: &str = "source ~/.easyalias/aliases.zsh";
+const APP_ALIAS_NAME: &str = "easya";
+const APP_ALIAS_LINE: &str = "alias easya='open /Applications/EasyAlias.app'";
 
 fn home_dir() -> Result<PathBuf, String> {
     env::var_os("HOME")
@@ -79,7 +81,12 @@ fn ensure_zshrc_source() -> Result<(), String> {
     let path = zshrc_file()?;
     let content = fs::read_to_string(&path).unwrap_or_default();
 
-    if content.lines().any(|line| line.trim() == SOURCE_LINE) {
+    let source_present = content.lines().any(|line| line.trim() == SOURCE_LINE);
+    let app_alias_present = content
+        .lines()
+        .any(|line| line.trim_start().starts_with(&format!("alias {}=", APP_ALIAS_NAME)));
+
+    if source_present && app_alias_present {
         return Ok(());
     }
 
@@ -88,9 +95,17 @@ fn ensure_zshrc_source() -> Result<(), String> {
         next_content.push('\n');
     }
 
-    next_content.push_str("\n# EasyAlias aliases\n");
-    next_content.push_str(SOURCE_LINE);
-    next_content.push('\n');
+    if !source_present {
+        next_content.push_str("\n# EasyAlias aliases\n");
+        next_content.push_str(SOURCE_LINE);
+        next_content.push('\n');
+    }
+
+    if !app_alias_present {
+        next_content.push_str("\n# EasyAlias app shortcut\n");
+        next_content.push_str(APP_ALIAS_LINE);
+        next_content.push('\n');
+    }
 
     fs::write(&path, next_content)
         .map_err(|error| format!("{} konnte nicht aktualisiert werden: {}", path.display(), error))
@@ -201,6 +216,8 @@ fn save_aliases(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![load_aliases, save_aliases])
         .run(tauri::generate_context!())
         .expect("error while running EasyAlias");

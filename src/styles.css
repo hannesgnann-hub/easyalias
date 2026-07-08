@@ -67,7 +67,9 @@ h2 {
 
 .ghost-button,
 .primary-button,
-.icon-button {
+.icon-button,
+.edit-button,
+.picker-button {
   border: 0;
   border-radius: 8px;
   font-weight: 800;
@@ -221,6 +223,26 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
 }
 
+.path-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+}
+
+.picker-button {
+  min-width: 74px;
+  padding: 0 12px;
+  color: #17423d;
+  background: #d9f4ef;
+  font-size: 0.82rem;
+}
+
+.picker-button:hover,
+.edit-button:hover,
+.ghost-button:hover {
+  filter: brightness(0.97);
+}
+
 .preview {
   display: grid;
   gap: 8px;
@@ -244,7 +266,7 @@ textarea:focus {
 
 .alias-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 38px;
+  grid-template-columns: minmax(0, 1fr) 64px 38px;
   gap: 8px;
   align-items: stretch;
   margin-bottom: 8px;
@@ -258,7 +280,6 @@ textarea:focus {
   border-radius: 8px;
   padding: 12px;
   color: inherit;
-  text-align: left;
   background: #fbfdfc;
 }
 
@@ -284,6 +305,12 @@ textarea:focus {
   font-size: 1.2rem;
 }
 
+.edit-button {
+  color: #17423d;
+  background: #d9f4ef;
+  font-size: 0.78rem;
+}
+
 .empty-state {
   display: grid;
   place-items: center;
@@ -296,6 +323,73 @@ textarea:focus {
 
 .empty-state strong {
   color: #1d2528;
+}
+
+.modal-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(18, 32, 29, 0.44);
+}
+
+.modal-card {
+  display: grid;
+  gap: 16px;
+  width: min(560px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: auto;
+  border: 1px solid #d5dfdb;
+  border-radius: 8px;
+  padding: 18px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(18, 32, 29, 0.28);
+}
+
+.modal-title,
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-close {
+  white-space: nowrap;
+}
+
+.modal-error {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  color: #812626;
+  background: #fbe0de;
+  font-weight: 700;
+}
+
+.modal-actions {
+  justify-content: flex-end;
+}
+
+.app-footer {
+  display: flex;
+  justify-content: center;
+  margin-top: 28px;
+  color: #66736f;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.app-footer a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-footer a:hover {
+  color: #0f766e;
+  text-decoration: underline;
 }
 
 @media (max-width: 860px) {
@@ -318,5 +412,28 @@ textarea:focus {
   .primary-button,
   .ghost-button {
     width: 100%;
+  }
+
+  .path-picker-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .path-picker-row input {
+    grid-column: 1 / -1;
+  }
+
+  .alias-row {
+    grid-template-columns: minmax(0, 1fr) 58px 38px;
+  }
+
+  .modal-layer {
+    align-items: end;
+    padding: 12px;
+  }
+
+  .modal-title,
+  .modal-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
