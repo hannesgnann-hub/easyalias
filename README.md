@@ -32,7 +32,7 @@ flowchart LR
 
 ## Current Status
 
-The macOS version already works as a Tauri app.
+The macOS version works as a Tauri app. The Windows source now exists as a PowerShell-based Tauri variant.
 
 It can:
 
@@ -45,6 +45,14 @@ It can:
 - automatically connect `~/.easyalias/aliases.zsh` to `~/.zshrc`
 - start from the terminal through `easya` if the app is installed at `/Applications/EasyAlias.app`
 
+The Windows version can:
+
+- create, edit, and delete PowerShell shortcuts
+- choose files and folders through the native Windows picker
+- generate `~/.easyalias/aliases.ps1`
+- connect the generated file to the common PowerShell profile locations
+- build as a Windows installer target through Tauri/NSIS
+
 ## Folder Structure
 
 ```text
@@ -52,7 +60,7 @@ easyalias/
   mac_src/          macOS source code for the Tauri app
   mac_export/       built macOS export, e.g. EasyAlias.zip
 
-  windows_src/      planned Windows source code
+  windows_src/      Windows source code for the Tauri app
   windows_erxport/  planned Windows export
 
   README.md         this project overview
@@ -63,13 +71,16 @@ flowchart TD
   Root["easyalias/"]
   Root --> MacSrc["mac_src/ macOS source"]
   Root --> MacExport["mac_export/ macOS export"]
-  Root --> WinSrc["windows_src/ Windows source target"]
+  Root --> WinSrc["windows_src/ Windows source"]
   Root --> WinExport["windows_erxport/ Windows export target"]
   Root --> RootReadme["README.md project overview"]
 
-  MacSrc --> Frontend["src/ UI"]
-  MacSrc --> Backend["src-tauri/ Tauri backend"]
-  MacSrc --> Docs["docs/ architecture"]
+  MacSrc --> MacFrontend["src/ macOS UI"]
+  MacSrc --> MacBackend["src-tauri/ macOS backend"]
+  MacSrc --> MacDocs["docs/ macOS architecture"]
+  WinSrc --> WinFrontend["src/ Windows UI"]
+  WinSrc --> WinBackend["src-tauri/ Windows backend"]
+  WinSrc --> WinDocs["docs/ Windows architecture"]
 ```
 
 Note: `windows_erxport` is currently only a folder name and does not contain a finished export yet. The name can be corrected to `windows_export` later.
@@ -103,9 +114,29 @@ cp -R src-tauri/target/release/bundle/macos/EasyAlias.app /Applications/
 ditto -c -k --keepParent src-tauri/target/release/bundle/macos/EasyAlias.app ../mac_export/EasyAlias.zip
 ```
 
-## Windows Target
+## Windows
 
-The Windows version should use the same UI and product idea, but integrate with PowerShell instead of zsh.
+The Windows source lives in:
+
+```text
+windows_src/
+```
+
+Typical workflow on Windows:
+
+```powershell
+cd windows_src
+npm install
+npm run tauri dev
+```
+
+Build:
+
+```powershell
+npm run tauri build
+```
+
+The Windows version uses the same UI and product idea, but integrates with PowerShell instead of zsh.
 
 ```mermaid
 flowchart LR
@@ -129,14 +160,14 @@ macOS uses:
 source ~/.easyalias/aliases.zsh
 ```
 
-Windows should use:
+Windows uses:
 
 ```powershell
 $HOME\.easyalias\aliases.ps1
 . "$HOME\.easyalias\aliases.ps1"
 ```
 
-Instead of zsh `alias` lines, Windows should generate PowerShell functions, for example:
+Instead of zsh `alias` lines, Windows generates PowerShell functions, for example:
 
 ```powershell
 function beerv2 { Set-Location "$HOME\Desktop\projekte\beerv2_app" }
