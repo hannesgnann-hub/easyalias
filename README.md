@@ -4,6 +4,8 @@ EasyAlias is a small desktop app project for creating, viewing, and managing ter
 
 The idea: instead of manually editing shell files like `~/.zshrc` or PowerShell profiles, EasyAlias gives you a simple interface. You enter a command name, choose a file or folder, select what should happen from a dropdown, and the app generates the matching shell command.
 
+![EasyAlias desktop UI](docs/assets/easyalias-ui.png)
+
 ## What EasyAlias Solves
 
 Small terminal shortcuts tend to pile up over time:

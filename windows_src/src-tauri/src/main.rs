@@ -40,7 +40,7 @@ fn home_dir() -> Result<PathBuf, String> {
     env::var_os("USERPROFILE")
         .or_else(|| env::var_os("HOME"))
         .map(PathBuf::from)
-        .ok_or_else(|| "USERPROFILE/HOME konnte nicht gelesen werden.".to_string())
+        .ok_or_else(|| "USERPROFILE/HOME could not be read.".to_string())
 }
 
 // All app-managed files live below ~/.easyalias.
@@ -90,22 +90,13 @@ fn profile_source_present() -> bool {
 // Creating aliases.ps1 early prevents PowerShell from dot-sourcing a missing file.
 fn ensure_app_files() -> Result<(), String> {
     let directory = app_dir()?;
-    fs::create_dir_all(&directory).map_err(|error| {
-        format!(
-            "{} konnte nicht erstellt werden: {}",
-            directory.display(),
-            error
-        )
-    })?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("{} could not be created: {}", directory.display(), error))?;
 
     let aliases_path = aliases_file()?;
     if !aliases_path.exists() {
         fs::write(&aliases_path, render_aliases(&[])?).map_err(|error| {
-            format!(
-                "{} konnte nicht angelegt werden: {}",
-                aliases_path.display(),
-                error
-            )
+            format!("{} could not be created: {}", aliases_path.display(), error)
         })?;
     }
 
@@ -117,13 +108,8 @@ fn ensure_app_files() -> Result<(), String> {
 fn ensure_profile_source() -> Result<(), String> {
     for path in powershell_profile_files()? {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                format!(
-                    "{} konnte nicht erstellt werden: {}",
-                    parent.display(),
-                    error
-                )
-            })?;
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("{} could not be created: {}", parent.display(), error))?;
         }
 
         let content = fs::read_to_string(&path).unwrap_or_default();
@@ -156,13 +142,8 @@ fn ensure_profile_source() -> Result<(), String> {
             next_content.push('\n');
         }
 
-        fs::write(&path, next_content).map_err(|error| {
-            format!(
-                "{} konnte nicht aktualisiert werden: {}",
-                path.display(),
-                error
-            )
-        })?;
+        fs::write(&path, next_content)
+            .map_err(|error| format!("{} could not be updated: {}", path.display(), error))?;
     }
 
     Ok(())
@@ -203,11 +184,11 @@ fn render_aliases(aliases: &[AliasEntry]) -> Result<String, String> {
 
     for alias in aliases {
         if !validate_alias_name(&alias.name) {
-            return Err(format!("Ungueltiger Alias-Name: {}", alias.name));
+            return Err(format!("Invalid alias name: {}", alias.name));
         }
 
         if alias.command_preview.trim().is_empty() {
-            return Err(format!("Alias {} hat keinen Befehl.", alias.name));
+            return Err(format!("Alias {} has no command.", alias.name));
         }
 
         lines.push(format!(
@@ -244,10 +225,10 @@ fn load_aliases() -> Result<AppState, String> {
     }
 
     let content = fs::read_to_string(&path)
-        .map_err(|error| format!("{} konnte nicht gelesen werden: {}", path.display(), error))?;
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
 
     let aliases = serde_json::from_str::<Vec<AliasEntry>>(&content)
-        .map_err(|error| format!("config.json ist kein gueltiges Alias-JSON: {}", error))?;
+        .map_err(|error| format!("config.json is not valid alias JSON: {}", error))?;
 
     app_state(aliases)
 }
@@ -257,35 +238,20 @@ fn load_aliases() -> Result<AppState, String> {
 #[tauri::command]
 fn save_aliases(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
     let directory = app_dir()?;
-    fs::create_dir_all(&directory).map_err(|error| {
-        format!(
-            "{} konnte nicht erstellt werden: {}",
-            directory.display(),
-            error
-        )
-    })?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("{} could not be created: {}", directory.display(), error))?;
 
     let config = serde_json::to_string_pretty(&aliases)
-        .map_err(|error| format!("Aliase konnten nicht serialisiert werden: {}", error))?;
+        .map_err(|error| format!("Aliases could not be serialized: {}", error))?;
     let aliases_ps1 = render_aliases(&aliases)?;
 
     let config_path = config_file()?;
     let aliases_path = aliases_file()?;
 
-    fs::write(&config_path, format!("{}\n", config)).map_err(|error| {
-        format!(
-            "{} konnte nicht geschrieben werden: {}",
-            config_path.display(),
-            error
-        )
-    })?;
-    fs::write(&aliases_path, aliases_ps1).map_err(|error| {
-        format!(
-            "{} konnte nicht geschrieben werden: {}",
-            aliases_path.display(),
-            error
-        )
-    })?;
+    fs::write(&config_path, format!("{}\n", config))
+        .map_err(|error| format!("{} could not be written: {}", config_path.display(), error))?;
+    fs::write(&aliases_path, aliases_ps1)
+        .map_err(|error| format!("{} could not be written: {}", aliases_path.display(), error))?;
 
     app_state(aliases)
 }
