@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default permissions for EasyAlias",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:default", "opener:default"]
 }

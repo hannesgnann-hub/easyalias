@@ -35,6 +35,9 @@ type AliasForm = {
   customCommand: string;
 };
 
+type PickerTarget = "create" | "edit";
+type PickerKind = "file" | "folder";
+
 const actionLabels: Record<AliasAction, string> = {
   navigate: "Navigiere zu Ordner",
   open: "Öffnen",
@@ -60,9 +63,11 @@ let appState: AppState = {
 };
 
 let form: AliasForm = { ...emptyForm };
-let selectedId: string | null = null;
+let editForm: AliasForm | null = null;
+let editingId: string | null = null;
 let notice = "";
 let error = "";
+let editError = "";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -71,6 +76,7 @@ if (!app) {
 }
 
 const appElement = app;
+const repoUrl = "https://github.com/hannesgnann-hub/easyalias";
 
 function isTauriRuntime() {
   return "__TAURI_INTERNALS__" in window;
@@ -79,6 +85,63 @@ function isTauriRuntime() {
 async function invokeCommand<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(command, args);
+}
+
+async function openPathPicker(target: PickerTarget, kind: PickerKind) {
+  clearMessages();
+  editError = "";
+
+  if (!isTauriRuntime()) {
+    error = "Der Datei-/Ordner-Picker funktioniert nur in der Tauri-App, nicht in der Browser-Vorschau.";
+    render();
+    return;
+  }
+
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({
+      multiple: false,
+      directory: kind === "folder"
+    });
+
+    if (typeof selected !== "string") return;
+
+    if (target === "create") {
+      updateForm("path", selected);
+      const input = document.querySelector<HTMLInputElement>('input[name="path"]');
+      if (input) input.value = selected;
+      return;
+    }
+
+    updateEditForm("path", selected);
+    const input = document.querySelector<HTMLInputElement>('input[name="edit-path"]');
+    if (input) input.value = selected;
+  } catch (pickerError) {
+    const message = `Picker konnte nicht geöffnet werden: ${String(pickerError)}`;
+    if (target === "edit") {
+      editError = message;
+    } else {
+      error = message;
+    }
+    render();
+  }
+}
+
+async function openRepository(event: Event) {
+  event.preventDefault();
+
+  if (!isTauriRuntime()) {
+    window.open(repoUrl, "_blank", "noopener,noreferrer");
+    return;
+  }
+
+  try {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(repoUrl);
+  } catch (openError) {
+    error = `GitHub konnte nicht geöffnet werden: ${String(openError)}`;
+    render();
+  }
 }
 
 function createId() {
@@ -200,24 +263,31 @@ function clearRenderedMessages() {
 
 function resetForm() {
   form = { ...emptyForm };
-  selectedId = null;
   clearMessages();
   render();
 }
 
-function selectAlias(id: string) {
+function openEditModal(id: string) {
   const alias = appState.aliases.find((item) => item.id === id);
   if (!alias) return;
 
-  selectedId = id;
-  form = {
+  editingId = id;
+  editForm = {
     id: alias.id,
     name: alias.name,
     path: alias.path,
     action: alias.action,
     customCommand: alias.customCommand ?? ""
   };
+  editError = "";
   clearMessages();
+  render();
+}
+
+function closeEditModal() {
+  editingId = null;
+  editForm = null;
+  editError = "";
   render();
 }
 
@@ -233,7 +303,7 @@ async function upsertAlias(event: SubmitEvent) {
   }
 
   const duplicate = appState.aliases.find(
-    (alias) => alias.name === form.name.trim() && alias.id !== selectedId
+    (alias) => alias.name === form.name.trim()
   );
 
   if (duplicate) {
@@ -242,28 +312,72 @@ async function upsertAlias(event: SubmitEvent) {
     return;
   }
 
-  const existing = selectedId ? appState.aliases.find((alias) => alias.id === selectedId) : undefined;
   const timestamp = nowIso();
   const nextAlias: AliasEntry = {
-    id: existing?.id ?? createId(),
+    id: createId(),
     name: form.name.trim(),
     path: form.path.trim(),
     action: form.action,
     customCommand: form.action === "custom" ? form.customCommand.trim() : undefined,
     commandPreview: buildCommandPreview(form),
-    createdAt: existing?.createdAt ?? timestamp,
+    createdAt: timestamp,
     updatedAt: timestamp
   };
 
   appState = {
     ...appState,
-    aliases: existing
-      ? appState.aliases.map((alias) => (alias.id === existing.id ? nextAlias : alias))
-      : [...appState.aliases, nextAlias]
+    aliases: [...appState.aliases, nextAlias]
   };
 
   form = { ...emptyForm };
-  selectedId = null;
+  await saveState();
+}
+
+async function updateAlias(event: SubmitEvent) {
+  event.preventDefault();
+  if (!editForm || !editingId) return;
+
+  editError = validateAlias(editForm);
+  if (editError) {
+    render();
+    return;
+  }
+
+  const duplicate = appState.aliases.find(
+    (alias) => alias.name === editForm?.name.trim() && alias.id !== editingId
+  );
+
+  if (duplicate) {
+    editError = `Alias "${editForm.name.trim()}" gibt es schon.`;
+    render();
+    return;
+  }
+
+  const existing = appState.aliases.find((alias) => alias.id === editingId);
+  if (!existing) {
+    closeEditModal();
+    return;
+  }
+
+  const nextAlias: AliasEntry = {
+    id: existing.id,
+    name: editForm.name.trim(),
+    path: editForm.path.trim(),
+    action: editForm.action,
+    customCommand: editForm.action === "custom" ? editForm.customCommand.trim() : undefined,
+    commandPreview: buildCommandPreview(editForm),
+    createdAt: existing.createdAt,
+    updatedAt: nowIso()
+  };
+
+  appState = {
+    ...appState,
+    aliases: appState.aliases.map((alias) => (alias.id === existing.id ? nextAlias : alias))
+  };
+
+  editingId = null;
+  editForm = null;
+  editError = "";
   await saveState();
 }
 
@@ -273,9 +387,10 @@ async function deleteAlias(id: string) {
     aliases: appState.aliases.filter((alias) => alias.id !== id)
   };
 
-  if (selectedId === id) {
-    form = { ...emptyForm };
-    selectedId = null;
+  if (editingId === id) {
+    editingId = null;
+    editForm = null;
+    editError = "";
   }
 
   await saveState();
@@ -294,6 +409,21 @@ function updateForm<K extends keyof AliasForm>(key: K, value: AliasForm[K], rere
   updatePreview();
 }
 
+function updateEditForm<K extends keyof AliasForm>(key: K, value: AliasForm[K], rerender = false) {
+  if (!editForm) return;
+
+  editForm = { ...editForm, [key]: value };
+  editError = "";
+
+  if (rerender) {
+    render();
+    return;
+  }
+
+  clearRenderedEditError();
+  updateEditPreview();
+}
+
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("de-DE", {
     dateStyle: "medium",
@@ -310,6 +440,21 @@ function updatePreview() {
   if (preview) {
     preview.textContent = formPreview();
   }
+}
+
+function editPreview() {
+  return editForm ? buildCommandPreview(editForm) || "Noch kein Befehl generiert" : "";
+}
+
+function updateEditPreview() {
+  const preview = document.querySelector<HTMLElement>(".modal-preview code");
+  if (preview) {
+    preview.textContent = editPreview();
+  }
+}
+
+function clearRenderedEditError() {
+  document.querySelector(".modal-error")?.remove();
 }
 
 function render() {
@@ -355,8 +500,8 @@ function render() {
       <section class="workspace">
         <form class="editor" id="alias-form">
           <div class="form-title">
-            <h2>${selectedId ? "Alias bearbeiten" : "Alias erstellen"}</h2>
-            <button class="primary-button" type="submit">${selectedId ? "Aktualisieren" : "Hinzufügen"}</button>
+            <h2>Alias erstellen</h2>
+            <button class="primary-button" type="submit">Hinzufügen</button>
           </div>
 
           <label>
@@ -366,7 +511,11 @@ function render() {
 
           <label>
             Ort / Datei / Befehl
-            <input name="path" value="${escapeHtml(form.path)}" placeholder="~/Desktop/projekte/beerv2_app" autocomplete="off" />
+            <span class="path-picker-row">
+              <input name="path" value="${escapeHtml(form.path)}" placeholder="~/Desktop/projekte/beerv2_app" autocomplete="off" />
+              <button class="picker-button" type="button" title="Datei auswählen" data-action="pick-path" data-target="create" data-kind="file">Datei</button>
+              <button class="picker-button" type="button" title="Ordner auswählen" data-action="pick-path" data-target="create" data-kind="folder">Ordner</button>
+            </span>
           </label>
 
           <label>
@@ -407,13 +556,14 @@ function render() {
               ? aliases
                   .map(
                     (alias) => `
-                      <article class="alias-row ${alias.id === selectedId ? "selected" : ""}">
-                        <button class="row-main" data-action="select" data-id="${alias.id}">
+                      <article class="alias-row ${alias.id === editingId ? "selected" : ""}">
+                        <div class="row-main">
                           <span class="alias-name">${alias.name}</span>
                           <span class="alias-action">${actionLabels[alias.action]}</span>
                           <code>${escapeHtml(alias.commandPreview)}</code>
                           <span class="created">Erstellt ${formatDate(alias.createdAt)}</span>
-                        </button>
+                        </div>
+                        <button class="edit-button" title="Bearbeiten" data-action="edit" data-id="${alias.id}">Edit</button>
                         <button class="icon-button" title="Löschen" data-action="delete" data-id="${alias.id}">×</button>
                       </article>
                     `
@@ -427,14 +577,88 @@ function render() {
         </section>
       </section>
 
+      ${renderEditModal()}
+
+      <footer class="app-footer">
+        <a href="${repoUrl}" target="_blank" rel="noreferrer" data-action="open-repo">
+          © Hannes Gnann
+        </a>
+      </footer>
     </section>
   `;
 
   bindEvents();
 }
 
+function renderEditModal() {
+  if (!editForm || !editingId) return "";
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <form class="modal-card" id="edit-form" role="dialog" aria-modal="true" aria-labelledby="edit-title">
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">Alias bearbeiten</p>
+            <h2 id="edit-title">${escapeHtml(editForm.name || "Alias")}</h2>
+          </div>
+          <button class="ghost-button modal-close" type="button" data-action="close-edit">Schließen</button>
+        </div>
+
+        ${editError ? `<p class="modal-error">${escapeHtml(editError)}</p>` : ""}
+
+        <label>
+          Command Name
+          <input name="edit-name" value="${escapeHtml(editForm.name)}" placeholder="beerv2" autocomplete="off" />
+        </label>
+
+        <label>
+          Ort / Datei / Befehl
+          <span class="path-picker-row">
+            <input name="edit-path" value="${escapeHtml(editForm.path)}" placeholder="~/Desktop/projekte/beerv2_app" autocomplete="off" />
+            <button class="picker-button" type="button" title="Datei auswählen" data-action="pick-path" data-target="edit" data-kind="file">Datei</button>
+            <button class="picker-button" type="button" title="Ordner auswählen" data-action="pick-path" data-target="edit" data-kind="folder">Ordner</button>
+          </span>
+        </label>
+
+        <label>
+          Aktion
+          <select name="edit-action">
+            ${Object.entries(actionLabels)
+              .map(
+                ([value, label]) =>
+                  `<option value="${value}" ${editForm?.action === value ? "selected" : ""}>${label}</option>`
+              )
+              .join("")}
+          </select>
+        </label>
+
+        ${
+          editForm.action === "custom"
+            ? `<label>
+                Custom Command
+                <textarea name="edit-customCommand" rows="4" placeholder='cd "$HOME/project" && ./run.sh'>${escapeHtml(editForm.customCommand)}</textarea>
+              </label>`
+            : ""
+        }
+
+        <div class="preview modal-preview">
+          <span>Vorschau</span>
+          <code>${escapeHtml(editPreview())}</code>
+        </div>
+
+        <div class="modal-actions">
+          <button class="ghost-button" type="button" data-action="close-edit">Abbrechen</button>
+          <button class="primary-button" type="submit">Speichern</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
 function bindEvents() {
   document.querySelector<HTMLFormElement>("#alias-form")?.addEventListener("submit", upsertAlias);
+  document.querySelector<HTMLFormElement>("#edit-form")?.addEventListener("submit", updateAlias);
+  document.querySelector<HTMLAnchorElement>('[data-action="open-repo"]')?.addEventListener("click", openRepository);
 
   document.querySelector<HTMLInputElement>('input[name="name"]')?.addEventListener("input", (event) => {
     updateForm("name", (event.target as HTMLInputElement).value);
@@ -452,13 +676,37 @@ function bindEvents() {
     updateForm("customCommand", (event.target as HTMLTextAreaElement).value);
   });
 
+  document.querySelector<HTMLInputElement>('input[name="edit-name"]')?.addEventListener("input", (event) => {
+    updateEditForm("name", (event.target as HTMLInputElement).value);
+  });
+
+  document.querySelector<HTMLInputElement>('input[name="edit-path"]')?.addEventListener("input", (event) => {
+    updateEditForm("path", (event.target as HTMLInputElement).value);
+  });
+
+  document.querySelector<HTMLSelectElement>('select[name="edit-action"]')?.addEventListener("change", (event) => {
+    updateEditForm("action", (event.target as HTMLSelectElement).value as AliasAction, true);
+  });
+
+  document.querySelector<HTMLTextAreaElement>('textarea[name="edit-customCommand"]')?.addEventListener("input", (event) => {
+    updateEditForm("customCommand", (event.target as HTMLTextAreaElement).value);
+  });
+
   document.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const action = button.dataset.action;
       const id = button.dataset.id;
 
       if (action === "reset") resetForm();
-      if (action === "select" && id) selectAlias(id);
+      if (action === "edit" && id) openEditModal(id);
+      if (action === "close-edit") closeEditModal();
+      if (action === "pick-path") {
+        const target = button.dataset.target;
+        const kind = button.dataset.kind;
+        if ((target === "create" || target === "edit") && (kind === "file" || kind === "folder")) {
+          void openPathPicker(target, kind);
+        }
+      }
       if (action === "delete" && id) void deleteAlias(id);
     });
   });

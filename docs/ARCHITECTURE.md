@@ -12,6 +12,7 @@ EasyAlias besteht aus zwei Schichten:
 | Styling | `src/styles.css` | Layout und visuelle Oberflaeche |
 | Backend | `src-tauri/src/main.rs` | lokale Dateien lesen/schreiben |
 | Tauri Config | `src-tauri/tauri.conf.json` | App-Fenster, Build, Bundle |
+| Tauri Dialog Plugin | `@tauri-apps/plugin-dialog` | nativer Datei-/Ordner-Picker |
 
 Die Grundidee: EasyAlias verwaltet nicht die gesamte `~/.zshrc`, sondern erzeugt eine separate Alias-Datei und verbindet diese einmalig mit zsh.
 
@@ -43,6 +44,7 @@ Beim ersten Tauri-Start stellt das Backend sicher:
 1. `~/.easyalias/` existiert.
 2. `~/.easyalias/aliases.zsh` existiert.
 3. `~/.zshrc` enthaelt `source ~/.easyalias/aliases.zsh`.
+4. `~/.zshrc` enthaelt `alias easya='open /Applications/EasyAlias.app'`, falls `easya` noch nicht existiert.
 
 ## Frontend
 
@@ -98,6 +100,7 @@ save_aliases(aliases)
 - App-Ordner erstellen
 - leere `aliases.zsh` anlegen, falls sie fehlt
 - `source`-Zeile in `~/.zshrc` sicherstellen
+- `easya`-Shortcut in `~/.zshrc` sicherstellen
 - `config.json` laden, falls vorhanden
 
 `save_aliases` schreibt:
@@ -130,6 +133,9 @@ EasyAlias veraendert `~/.zshrc` nur minimal:
 ```zsh
 # EasyAlias aliases
 source ~/.easyalias/aliases.zsh
+
+# EasyAlias app shortcut
+alias easya='open /Applications/EasyAlias.app'
 ```
 
 Bestehende Inhalte bleiben erhalten.
@@ -145,7 +151,6 @@ Wichtige Grenzen:
 
 Kurzfristig:
 
-- Tauri Dialog Plugin fuer Datei-/Ordnerauswahl
 - Import bestehender Aliase
 - Tests fuer Command-Generierung
 

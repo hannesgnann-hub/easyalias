@@ -9,6 +9,7 @@ Die App nutzt Tauri: Die Oberflaeche wird mit Web-Technologie gebaut, laeuft abe
 - Aliase ueber eine UI erstellen, bearbeiten und loeschen
 - Aktion per Dropdown auswaehlen
 - Shell-Befehl vor dem Speichern als Vorschau sehen
+- Dateien und Ordner ueber den nativen macOS-Picker auswaehlen
 - `createdAt` und `updatedAt` pro Alias speichern
 - Alias-Daten strukturiert als JSON halten
 - automatisch eine `aliases.zsh` fuer dein Terminal generieren
@@ -72,6 +73,18 @@ Beim ersten Tauri-Start haengt EasyAlias diese Zeile an `~/.zshrc` an, falls sie
 
 ```zsh
 source ~/.easyalias/aliases.zsh
+```
+
+Ausserdem wird dieser Shortcut angelegt, falls `easya` noch nicht existiert:
+
+```zsh
+alias easya='open /Applications/EasyAlias.app'
+```
+
+Damit kannst du die installierte App spaeter im Terminal starten:
+
+```zsh
+easya
 ```
 
 Neue oder geaenderte Aliase gelten in neuen Terminal-Fenstern automatisch. In einem bereits offenen Terminal kannst du sie direkt nachladen:
