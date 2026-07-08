@@ -1,20 +1,20 @@
-# Architektur
+# Architecture
 
-Dieses Dokument beschreibt den technischen Aufbau von EasyAlias.
+This document describes the technical structure of EasyAlias.
 
-## Ueberblick
+## Overview
 
-EasyAlias besteht aus zwei Schichten:
+EasyAlias consists of a small frontend and a Tauri/Rust backend:
 
-| Schicht | Datei | Aufgabe |
+| Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | UI, Formular-State, Command-Preview |
-| Styling | `src/styles.css` | Layout und visuelle Oberflaeche |
-| Backend | `src-tauri/src/main.rs` | lokale Dateien lesen/schreiben |
-| Tauri Config | `src-tauri/tauri.conf.json` | App-Fenster, Build, Bundle |
-| Tauri Dialog Plugin | `@tauri-apps/plugin-dialog` | nativer Datei-/Ordner-Picker |
+| Frontend | `src/main.ts` | UI, form state, command preview |
+| Styling | `src/styles.css` | layout and visual design |
+| Backend | `src-tauri/src/main.rs` | local file read/write logic |
+| Tauri Config | `src-tauri/tauri.conf.json` | app window, build, bundle |
+| Tauri Dialog Plugin | `@tauri-apps/plugin-dialog` | native file/folder picker |
 
-Die Grundidee: EasyAlias verwaltet nicht die gesamte `~/.zshrc`, sondern erzeugt eine separate Alias-Datei und verbindet diese einmalig mit zsh.
+The core idea: EasyAlias does not manage the entire `~/.zshrc`. It creates a dedicated alias file and connects it to zsh once.
 
 ```mermaid
 flowchart TB
@@ -22,10 +22,10 @@ flowchart TB
   CSS["Styling src/styles.css"]
   Tauri["Tauri Runtime"]
   Rust["Rust Backend src-tauri/src/main.rs"]
-  Dialog["Dialog Plugin Datei/Ordner"]
-  Opener["Opener Plugin GitHub-Link"]
-  Files["~/.easyalias Dateien"]
-  Zshrc["~/.zshrc Setup"]
+  Dialog["Dialog Plugin file/folder picker"]
+  Opener["Opener Plugin GitHub link"]
+  Files["~/.easyalias files"]
+  Zshrc["~/.zshrc setup"]
 
   UI --> CSS
   UI --> Tauri
@@ -36,25 +36,25 @@ flowchart TB
   Rust --> Zshrc
 ```
 
-## Datenfluss
+## Data Flow
 
 ```text
-UI Formular
+UI form
   -> AliasEntry
   -> ~/.easyalias/config.json
   -> ~/.easyalias/aliases.zsh
-  -> source in ~/.zshrc
-  -> neue Terminal-Sessions
+  -> source line in ~/.zshrc
+  -> new terminal sessions
 ```
 
 ```mermaid
 flowchart LR
-  Form["UI Formular"]
+  Form["UI form"]
   Entry["AliasEntry"]
   Config["config.json"]
   Generated["aliases.zsh"]
-  Source["source in ~/.zshrc"]
-  Terminal["Neue Terminal-Session"]
+  Source["source line in ~/.zshrc"]
+  Terminal["New terminal session"]
 
   Form --> Entry
   Entry --> Config
@@ -63,42 +63,42 @@ flowchart LR
   Source --> Terminal
 ```
 
-Im Browser-Dev-Modus ohne Tauri wird der Zustand nur in `localStorage` gespeichert. So kann die UI schnell getestet werden, ohne echte Shell-Dateien zu veraendern.
+In browser preview mode without Tauri, state is stored only in `localStorage`. This makes the UI easy to test without changing real shell files.
 
-Im Tauri-Modus schreibt das Backend echte Dateien auf dem Mac.
+In Tauri mode, the backend writes real files on the Mac.
 
 ```mermaid
 flowchart TD
-  Start["App startet"]
-  Runtime{"Tauri Runtime?"}
-  Browser["Browser Preview"]
-  Native["Native Tauri App"]
+  Start["App starts"]
+  Runtime{"Tauri runtime?"}
+  Browser["Browser preview"]
+  Native["Native Tauri app"]
   LocalStorage["localStorage"]
-  Backend["Rust Commands"]
-  RealFiles["Echte Dateien"]
+  Backend["Rust commands"]
+  RealFiles["Real files"]
 
   Start --> Runtime
-  Runtime -- "nein" --> Browser
+  Runtime -- "no" --> Browser
   Browser --> LocalStorage
-  Runtime -- "ja" --> Native
+  Runtime -- "yes" --> Native
   Native --> Backend
   Backend --> RealFiles
 ```
 
-## Lokale Dateien
+## Local Files
 
-| Datei | Inhalt | Besitzer |
+| File | Content | Owner |
 | --- | --- | --- |
-| `~/.easyalias/config.json` | strukturierte Alias-Daten fuer die UI | EasyAlias |
-| `~/.easyalias/aliases.zsh` | generierte zsh-Aliase | EasyAlias |
-| `~/.zshrc` | enthaelt nur die `source`-Zeile | Nutzer + EasyAlias Setup |
+| `~/.easyalias/config.json` | structured alias data for the UI | EasyAlias |
+| `~/.easyalias/aliases.zsh` | generated zsh aliases | EasyAlias |
+| `~/.zshrc` | contains only the source line and app shortcut | user + EasyAlias setup |
 
-Beim ersten Tauri-Start stellt das Backend sicher:
+On first Tauri startup, the backend ensures:
 
-1. `~/.easyalias/` existiert.
-2. `~/.easyalias/aliases.zsh` existiert.
-3. `~/.zshrc` enthaelt `source ~/.easyalias/aliases.zsh`.
-4. `~/.zshrc` enthaelt `alias easya='open /Applications/EasyAlias.app'`, falls `easya` noch nicht existiert.
+1. `~/.easyalias/` exists.
+2. `~/.easyalias/aliases.zsh` exists.
+3. `~/.zshrc` contains `source ~/.easyalias/aliases.zsh`.
+4. `~/.zshrc` contains `alias easya='open /Applications/EasyAlias.app'` if `easya` does not already exist.
 
 ```mermaid
 sequenceDiagram
@@ -119,22 +119,22 @@ sequenceDiagram
 
 ## Frontend
 
-Das Frontend ist bewusst leichtgewichtig:
+The frontend is intentionally lightweight:
 
-- kein UI-Framework
+- no UI framework
 - TypeScript
 - Vite
-- direkte DOM-Updates
+- direct DOM updates
 
-Wichtige Aufgaben:
+Main responsibilities:
 
-- Formularwerte verwalten
-- Alias-Namen validieren
-- Command-Preview live aktualisieren
-- Aliase anzeigen, auswaehlen und loeschen
-- Tauri Commands aufrufen, wenn die App nativ laeuft
+- manage form values
+- validate alias names
+- update the command preview live
+- display, edit, and delete aliases
+- call Tauri commands when the app runs natively
 
-Die wichtigsten Typen:
+The most important types:
 
 ```ts
 type AliasAction =
@@ -179,25 +179,25 @@ stateDiagram-v2
 
 ## Backend
 
-Das Tauri-Backend stellt aktuell zwei Commands bereit:
+The Tauri backend currently exposes two commands:
 
 ```rust
 load_aliases()
 save_aliases(aliases)
 ```
 
-`load_aliases` erledigt den Start-Setup:
+`load_aliases` handles startup setup:
 
-- App-Ordner erstellen
-- leere `aliases.zsh` anlegen, falls sie fehlt
-- `source`-Zeile in `~/.zshrc` sicherstellen
-- `easya`-Shortcut in `~/.zshrc` sicherstellen
-- `config.json` laden, falls vorhanden
+- create the app directory
+- create an empty `aliases.zsh` if missing
+- ensure the `source` line in `~/.zshrc`
+- ensure the `easya` shortcut in `~/.zshrc`
+- load `config.json` if it exists
 
-`save_aliases` schreibt:
+`save_aliases` writes:
 
-- `config.json` als Datenbasis fuer die UI
-- `aliases.zsh` als generierte Shell-Datei
+- `config.json` as the data source for the UI
+- `aliases.zsh` as the generated shell file
 
 ```mermaid
 sequenceDiagram
@@ -214,9 +214,9 @@ sequenceDiagram
   Rust-->>UI: updated AppState
 ```
 
-## Shell-Generierung
+## Shell Generation
 
-Aus einem Alias-Eintrag wird eine zsh-Zeile:
+An alias entry becomes a zsh line:
 
 ```zsh
 # Generated by EasyAlias.
@@ -225,33 +225,33 @@ Aus einem Alias-Eintrag wird eine zsh-Zeile:
 alias beerv2='cd "$HOME/Desktop/projekte/beerv2_app"'
 ```
 
-Das Backend validiert vor dem Schreiben:
+Before writing, the backend validates:
 
-- Alias-Name ist nicht leer
-- Alias-Name beginnt mit Buchstabe oder `_`
-- Alias-Name enthaelt nur Buchstaben, Zahlen, `_` oder `-`
-- Command-Preview ist nicht leer
+- alias name is not empty
+- alias name starts with a letter or `_`
+- alias name contains only letters, numbers, `_`, or `-`
+- command preview is not empty
 
 ```mermaid
 flowchart TD
   AliasEntry["AliasEntry"]
-  ValidateName{"Name gueltig?"}
-  ValidateCommand{"Command vorhanden?"}
-  Quote["Command single-quote escapen"]
+  ValidateName{"Name valid?"}
+  ValidateCommand{"Command present?"}
+  Quote["Escape command for single quotes"]
   Line["alias name='command'"]
-  Error["Fehler an UI"]
+  Error["Error shown in UI"]
 
   AliasEntry --> ValidateName
-  ValidateName -- "nein" --> Error
-  ValidateName -- "ja" --> ValidateCommand
-  ValidateCommand -- "nein" --> Error
-  ValidateCommand -- "ja" --> Quote
+  ValidateName -- "no" --> Error
+  ValidateName -- "yes" --> ValidateCommand
+  ValidateCommand -- "no" --> Error
+  ValidateCommand -- "yes" --> Quote
   Quote --> Line
 ```
 
-## Sicherheit
+## Safety
 
-EasyAlias veraendert `~/.zshrc` nur minimal:
+EasyAlias changes `~/.zshrc` only minimally:
 
 ```zsh
 # EasyAlias aliases
@@ -261,25 +261,25 @@ source ~/.easyalias/aliases.zsh
 alias easya='open /Applications/EasyAlias.app'
 ```
 
-Bestehende Inhalte bleiben erhalten.
+Existing content is preserved.
 
-Wichtige Grenzen:
+Important boundaries:
 
-- Custom Commands sind echte Shell-Befehle.
-- Die generierte `aliases.zsh` ist Output der App und sollte nicht manuell editiert werden.
-- Standardpfade werden in doppelte Anfuehrungszeichen gesetzt.
-- Bestehende Aliase aus `~/.zshrc` werden aktuell noch nicht importiert.
+- Custom commands are real shell commands.
+- The generated `aliases.zsh` is app output and should not be edited manually.
+- Standard paths are wrapped in double quotes.
+- Existing aliases from `~/.zshrc` are not imported yet.
 
 ## Roadmap
 
-Kurzfristig:
+Short term:
 
-- Import bestehender Aliase
-- Tests fuer Command-Generierung
+- import existing aliases
+- tests for command generation
 
-Spaeter:
+Later:
 
-- Settings-Fenster
-- echtes App-Icon
-- macOS `.app` Bundle
-- optionaler Export/Backup-Mechanismus
+- settings window
+- polished app icon
+- macOS `.app` bundle
+- optional export/backup mechanism

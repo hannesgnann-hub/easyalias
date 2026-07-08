@@ -1,88 +1,88 @@
 # EasyAlias
 
-EasyAlias ist ein kleines Desktop-App-Projekt zum Erstellen, Anzeigen und Verwalten von Terminal-Aliasen ueber eine UI.
+EasyAlias is a small desktop app project for creating, viewing, and managing terminal aliases through a UI.
 
-Die Idee: Statt Aliase per Hand in Shell-Dateien wie `~/.zshrc` oder PowerShell-Profilen zu pflegen, bietet EasyAlias eine einfache Oberflaeche. Man legt einen Command-Namen an, waehlt eine Datei oder einen Ordner aus, entscheidet per Dropdown was passieren soll, und die App erzeugt daraus den passenden Shell-Befehl.
+The idea: instead of manually editing shell files like `~/.zshrc` or PowerShell profiles, EasyAlias gives you a simple interface. You enter a command name, choose a file or folder, select what should happen from a dropdown, and the app generates the matching shell command.
 
-## Was EasyAlias loest
+## What EasyAlias Solves
 
-Viele kleine Terminal-Kommandos entstehen nebenbei:
+Small terminal shortcuts tend to pile up over time:
 
-- Projektordner schnell oeffnen
-- Datei oder Excel-Sheet starten
-- Build-Kommandos merken
-- SSH-Verbindungen abkuerzen
-- wiederkehrende Shell-Befehle als kurze Namen speichern
+- quickly jumping into project folders
+- opening files or spreadsheets
+- remembering build commands
+- shortening SSH connections
+- saving recurring shell commands under short names
 
-Normalerweise landen solche Aliase direkt in `~/.zshrc`, werden dort schnell unuebersichtlich und sind leicht kaputt zu editieren. EasyAlias trennt das sauber:
+Normally, these aliases end up directly in `~/.zshrc`, where they quickly become hard to scan and easy to break. EasyAlias keeps this cleaner:
 
-- Die Shell-Konfiguration bleibt klein.
-- Die Alias-Daten liegen strukturiert in einer eigenen Datei.
-- Die generierte Shell-Datei wird automatisch eingebunden.
-- Die Bearbeitung passiert ueber eine UI.
+- The shell config stays small.
+- Alias data is stored in a structured file.
+- The generated shell file is sourced automatically.
+- Editing happens through a UI.
 
 ```mermaid
 flowchart LR
-  A["Viele manuelle Aliase in ~/.zshrc"] --> B["Unuebersichtlich und fehleranfaellig"]
+  A["Many manual aliases in ~/.zshrc"] --> B["Hard to scan and easy to break"]
   B --> C["EasyAlias UI"]
-  C --> D["Strukturierte Alias-Daten"]
-  D --> E["Generierte Shell-Datei"]
-  E --> F["Terminal nutzt kurze Commands"]
+  C --> D["Structured alias data"]
+  D --> E["Generated shell file"]
+  E --> F["Terminal uses short commands"]
 ```
 
-## Aktueller Stand
+## Current Status
 
-Die macOS-Version funktioniert bereits als Tauri-App.
+The macOS version already works as a Tauri app.
 
-Sie kann:
+It can:
 
-- Aliase erstellen
-- bestehende Aliase bearbeiten
-- Aliase loeschen
-- Dateien und Ordner ueber den nativen macOS-Picker auswaehlen
-- eine Vorschau des generierten Befehls anzeigen
-- `createdAt` und `updatedAt` speichern
-- automatisch `~/.easyalias/aliases.zsh` mit `~/.zshrc` verbinden
-- ueber den Shortcut `easya` aus dem Terminal gestartet werden, wenn die App unter `/Applications/EasyAlias.app` liegt
+- create aliases
+- edit existing aliases
+- delete aliases
+- choose files and folders through the native macOS picker
+- show a preview of the generated command
+- store `createdAt` and `updatedAt`
+- automatically connect `~/.easyalias/aliases.zsh` to `~/.zshrc`
+- start from the terminal through `easya` if the app is installed at `/Applications/EasyAlias.app`
 
-## Ordnerstruktur
+## Folder Structure
 
 ```text
 easyalias/
-  mac_src/          macOS-Quellcode der Tauri-App
-  mac_export/       gebauter macOS-Export, z.B. EasyAlias.zip
+  mac_src/          macOS source code for the Tauri app
+  mac_export/       built macOS export, e.g. EasyAlias.zip
 
-  windows_src/      geplanter Windows-Quellcode
-  windows_erxport/  geplanter Windows-Export
+  windows_src/      planned Windows source code
+  windows_erxport/  planned Windows export
 
-  README.md         diese Gesamtuebersicht
+  README.md         this project overview
 ```
 
 ```mermaid
 flowchart TD
   Root["easyalias/"]
-  Root --> MacSrc["mac_src/ macOS Source"]
-  Root --> MacExport["mac_export/ macOS Export"]
-  Root --> WinSrc["windows_src/ Windows Source Ziel"]
-  Root --> WinExport["windows_erxport/ Windows Export Ziel"]
-  Root --> RootReadme["README.md Gesamtuebersicht"]
+  Root --> MacSrc["mac_src/ macOS source"]
+  Root --> MacExport["mac_export/ macOS export"]
+  Root --> WinSrc["windows_src/ Windows source target"]
+  Root --> WinExport["windows_erxport/ Windows export target"]
+  Root --> RootReadme["README.md project overview"]
 
   MacSrc --> Frontend["src/ UI"]
-  MacSrc --> Backend["src-tauri/ Tauri Backend"]
-  MacSrc --> Docs["docs/ Architektur"]
+  MacSrc --> Backend["src-tauri/ Tauri backend"]
+  MacSrc --> Docs["docs/ architecture"]
 ```
 
-Hinweis: `windows_erxport` ist aktuell nur ein Ordnername und enthaelt noch keinen fertigen Export. Der Name kann spaeter zu `windows_export` korrigiert werden.
+Note: `windows_erxport` is currently only a folder name and does not contain a finished export yet. The name can be corrected to `windows_export` later.
 
 ## macOS
 
-Der macOS-Source liegt in:
+The macOS source lives in:
 
 ```text
 mac_src/
 ```
 
-Typischer Workflow:
+Typical workflow:
 
 ```zsh
 cd mac_src
@@ -103,13 +103,13 @@ cp -R src-tauri/target/release/bundle/macos/EasyAlias.app /Applications/
 ditto -c -k --keepParent src-tauri/target/release/bundle/macos/EasyAlias.app ../mac_export/EasyAlias.zip
 ```
 
-## Windows-Ziel
+## Windows Target
 
-Die Windows-Version soll die gleiche UI und Idee nutzen, aber statt zsh mit PowerShell arbeiten.
+The Windows version should use the same UI and product idea, but integrate with PowerShell instead of zsh.
 
 ```mermaid
 flowchart LR
-  Shared["Gemeinsame Idee und UI"]
+  Shared["Shared idea and UI"]
   Shared --> Mac["macOS"]
   Shared --> Win["Windows"]
 
@@ -122,65 +122,65 @@ flowchart LR
   PsFile --> Profile["dot-source in $PROFILE"]
 ```
 
-macOS nutzt:
+macOS uses:
 
 ```zsh
 ~/.easyalias/aliases.zsh
 source ~/.easyalias/aliases.zsh
 ```
 
-Windows soll nutzen:
+Windows should use:
 
 ```powershell
 $HOME\.easyalias\aliases.ps1
 . "$HOME\.easyalias\aliases.ps1"
 ```
 
-Statt zsh-`alias`-Zeilen sollen PowerShell-Funktionen erzeugt werden, z.B.:
+Instead of zsh `alias` lines, Windows should generate PowerShell functions, for example:
 
 ```powershell
 function beerv2 { Set-Location "$HOME\Desktop\projekte\beerv2_app" }
 ```
 
-## Alias-Aktionen
+## Alias Actions
 
-| Aktion | macOS/zsh | Windows/PowerShell Ziel |
+| Action | macOS/zsh | Windows/PowerShell target |
 | --- | --- | --- |
-| Navigiere zu Ordner | `cd "<pfad>"` | `Set-Location "<pfad>"` |
-| Oeffnen | `open "<pfad>"` | `Start-Process "<pfad>"` |
-| Ausfuehren | `"<pfad>"` | `& "<pfad>"` |
-| Gradle Build | `cd "<pfad>" && ./gradlew build` | `Set-Location "<pfad>"; .\gradlew.bat build` |
-| Maven Build | `cd "<pfad>" && mvn clean package` | `Set-Location "<pfad>"; mvn clean package` |
-| Custom Command | frei | frei |
+| Navigate to folder | `cd "<path>"` | `Set-Location "<path>"` |
+| Open | `open "<path>"` | `Start-Process "<path>"` |
+| Execute | `"<path>"` | `& "<path>"` |
+| Gradle Build | `cd "<path>" && ./gradlew build` | `Set-Location "<path>"; .\gradlew.bat build` |
+| Maven Build | `cd "<path>" && mvn clean package` | `Set-Location "<path>"; mvn clean package` |
+| Custom Command | free-form | free-form |
 
-## Zielbild
+## Target Vision
 
-EasyAlias soll langfristig ein kleines, praktisches Tool fuer wiederkehrende lokale Developer-Kommandos werden:
+EasyAlias should become a small, practical tool for recurring local developer commands:
 
-- simpel genug fuer schnelle Alias-Pflege
-- robust genug, um Shell-Dateien nicht zu zerstoeren
-- plattformnah fuer macOS und Windows
-- exportierbar als normale Desktop-App
+- simple enough for quick alias maintenance
+- robust enough to avoid breaking shell files
+- platform-aware for macOS and Windows
+- exportable as a regular desktop app
 
-Der Fokus liegt nicht auf einem Cloud-Service oder Account-System, sondern auf einem lokalen, schnellen Helfer fuer den eigenen Rechner.
+The focus is not a cloud service or account system, but a local, fast helper for your own machine.
 
 ```mermaid
 mindmap
   root((EasyAlias))
-    Lokal
-      Keine Cloud
-      Eigene Dateien
-      Schneller Zugriff
+    Local
+      No cloud
+      Own files
+      Fast access
     UI
-      Erstellen
-      Bearbeiten
-      Loeschen
-      Datei Picker
+      Create
+      Edit
+      Delete
+      File picker
     Shell
-      zsh auf macOS
-      PowerShell auf Windows
-      Generierte Dateien
+      zsh on macOS
+      PowerShell on Windows
+      Generated files
     Export
-      macOS App
-      Windows Installer
+      macOS app
+      Windows installer
 ```
