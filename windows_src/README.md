@@ -85,6 +85,18 @@ beerv2
 test1
 ```
 
+Verify that Windows can find a generated command:
+
+```cmd
+where test1
+```
+
+Expected output:
+
+```text
+C:\Users\<you>\.easyalias\bin\test1.cmd
+```
+
 They can also be called from PowerShell as external commands, but folder-changing aliases only persist in `cmd.exe`.
 
 EasyAlias also creates this helper command if `easya.cmd` does not already conflict with one of your aliases:
@@ -92,6 +104,56 @@ EasyAlias also creates this helper command if `easya.cmd` does not already confl
 ```cmd
 easya
 ```
+
+## How It Works
+
+EasyAlias does not create PowerShell aliases on Windows. It creates normal command files:
+
+```cmd
+@echo off
+cd /d "%USERPROFILE%\Desktop\projects\beerv2_app"
+```
+
+Because `~\.easyalias\bin` is added to the user `PATH`, Windows can resolve `beerv2` as `beerv2.cmd`.
+
+This means:
+
+- aliases work naturally in `cmd.exe`
+- new aliases are available in new terminal windows
+- the app does not need to edit PowerShell profiles
+- each command can be inspected or debugged with `type`
+
+Example:
+
+```cmd
+type "%USERPROFILE%\.easyalias\bin\beerv2.cmd"
+```
+
+## Troubleshooting
+
+If a command is not found, first open a new `cmd.exe` window. PATH changes only apply to new terminal processes.
+
+Check whether the command folder is in PATH:
+
+```cmd
+echo %PATH%
+```
+
+Check whether the command file exists:
+
+```cmd
+dir "%USERPROFILE%\.easyalias\bin"
+```
+
+Check where Windows resolves a command from:
+
+```cmd
+where test1
+```
+
+If `where test1` finds nothing, start EasyAlias once so it can regenerate `.cmd` files and ensure the PATH entry exists.
+
+If you run a folder-changing alias from PowerShell, the child `cmd.exe` process can change its own directory, but PowerShell's parent location will not change. Use `cmd.exe` for folder-jump aliases.
 
 ## Development
 
@@ -145,6 +207,17 @@ A shortcut is stored like this:
 | Gradle Build | `cd /d "<path>" && call gradlew.bat build` |
 | Maven Build | `cd /d "<path>" && call mvn clean package` |
 | Custom Command | user-provided cmd/batch command |
+
+## Documentation Layout
+
+EasyAlias has three documentation entry points:
+
+| Document | Purpose |
+| --- | --- |
+| `../README.md` | shared project overview for macOS and Windows |
+| `../mac_src/README.md` | macOS-specific usage and zsh behavior |
+| `README.md` | Windows-specific usage and cmd/PATH behavior |
+| `docs/ARCHITECTURE.md` | Windows technical architecture |
 
 ## Roadmap
 

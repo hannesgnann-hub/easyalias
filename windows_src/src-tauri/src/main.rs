@@ -23,8 +23,11 @@ struct AliasEntry {
 struct AppState {
     aliases: Vec<AliasEntry>,
     config_file: String,
+    // Directory containing generated commands such as test1.cmd.
     command_dir: String,
+    // Absolute command_dir value, shown when the user needs to restart Terminal.
     path_entry: String,
+    // True when command_dir is already visible through User PATH or process PATH.
     path_configured: bool,
 }
 
@@ -55,7 +58,8 @@ fn command_file(name: &str) -> Result<PathBuf, String> {
     Ok(command_dir()?.join(format!("{}.cmd", name)))
 }
 
-// First-run setup: create ~/.easyalias and the command bin directory.
+// First-run setup: create ~/.easyalias and the command bin directory. The bin
+// directory is where Windows finds aliases once it is present in User PATH.
 fn ensure_app_files() -> Result<(), String> {
     let directory = app_dir()?;
     fs::create_dir_all(&directory)
@@ -100,6 +104,8 @@ fn normalize_path(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
+// PATH is a semicolon-separated list on Windows. Comparing paths as plain
+// strings is enough here after trimming quotes, trailing slashes, and case.
 fn path_contains_command_dir(path_value: &str) -> Result<bool, String> {
     let bin = command_dir()?;
     let needle = normalize_path(&bin.display().to_string());
@@ -109,6 +115,9 @@ fn path_contains_command_dir(path_value: &str) -> Result<bool, String> {
         .any(|entry| normalize_path(entry) == needle))
 }
 
+// `reg query HKCU\Environment /v Path` returns localized console text around
+// the actual value. The stable part is the line that starts with Path and then
+// includes a registry type such as REG_SZ or REG_EXPAND_SZ.
 fn parse_registry_path(stdout: &str) -> String {
     for line in stdout.lines() {
         let trimmed = line.trim_start();
@@ -130,6 +139,9 @@ fn parse_registry_path(stdout: &str) -> String {
     String::new()
 }
 
+// Read the persisted user PATH, not only the current process PATH. The current
+// process may be stale after setx/reg changes, while HKCU\Environment is what
+// future terminals will inherit.
 fn user_path_value() -> String {
     if !cfg!(windows) {
         return env::var("PATH").unwrap_or_default();
@@ -147,6 +159,8 @@ fn user_path_value() -> String {
         .unwrap_or_default()
 }
 
+// Status for the UI. We accept either persisted User PATH or current process
+// PATH because the app may be launched after PATH is already refreshed.
 fn path_configured() -> bool {
     path_contains_command_dir(&user_path_value()).unwrap_or(false)
         || env::var("PATH")
@@ -194,6 +208,8 @@ fn persist_user_path(next_path: &str) -> Result<(), String> {
     ))
 }
 
+// Append EasyAlias' bin directory to User PATH once. Existing PATH entries stay
+// untouched, and duplicate EasyAlias entries are avoided by path_contains_command_dir.
 fn ensure_path_contains_command_dir() -> Result<(), String> {
     let bin = command_dir()?;
     let bin_value = bin.display().to_string();
@@ -212,10 +228,15 @@ fn ensure_path_contains_command_dir() -> Result<(), String> {
     persist_user_path(&next_path)
 }
 
+// Escaping mirrors the frontend so both preview and generated files agree.
+// Percent signs need special care because `%NAME%` expands env vars in .cmd.
 fn escape_cmd_double_quoted(value: &str) -> String {
     value.replace('%', "%%").replace('"', "\"\"")
 }
 
+// Convert app paths to cmd.exe arguments. This intentionally uses
+// %USERPROFILE% instead of PowerShell's $HOME because the generated files run
+// under cmd.exe.
 fn cmd_path(path: &str) -> String {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -237,6 +258,9 @@ fn cmd_path(path: &str) -> String {
     format!("\"{}\"", escape_cmd_double_quoted(trimmed))
 }
 
+// Rebuild commandPreview from structured fields. This lets older configs from
+// the first PowerShell-based Windows prototype migrate automatically to cmd.exe
+// commands on load/save without asking the user to recreate aliases.
 fn build_command_preview(alias: &AliasEntry) -> String {
     let path = cmd_path(&alias.path);
 
@@ -296,6 +320,8 @@ fn normalize_aliases(aliases: Vec<AliasEntry>) -> Vec<AliasEntry> {
         .collect()
 }
 
+// The generated file is intentionally tiny: @echo off plus the command preview.
+// Keeping the file plain makes it easy to inspect with `type name.cmd`.
 fn render_cmd_script(alias: &AliasEntry) -> Result<String, String> {
     if !validate_alias_name(&alias.name) {
         return Err(format!("Invalid alias name: {}", alias.name));
@@ -308,6 +334,9 @@ fn render_cmd_script(alias: &AliasEntry) -> Result<String, String> {
     Ok(format!("@echo off\r\n{}\r\n", alias.command_preview))
 }
 
+// Convenience command so typing `easya` can reopen the installed app from cmd.
+// The install location can vary, so the script tries common per-user and
+// Program Files paths before falling back to Windows' app resolution.
 fn render_app_shortcut() -> String {
     [
         "@echo off",
@@ -325,6 +354,10 @@ fn render_app_shortcut() -> String {
     .join("\r\n")
 }
 
+// Regenerate the command directory from the structured config:
+// - remove stale .cmd files for aliases that were deleted or renamed
+// - keep easya.cmd unless the user creates an alias named easya
+// - write one fresh .cmd file per alias
 fn write_command_scripts(aliases: &[AliasEntry]) -> Result<(), String> {
     let bin = command_dir()?;
     fs::create_dir_all(&bin)
