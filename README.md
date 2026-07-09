@@ -34,9 +34,9 @@ flowchart LR
 
 ## Current Status
 
-The macOS version works as a Tauri app. The Windows source now exists as a PowerShell-based Tauri variant.
+The macOS version works as a Tauri app. The Windows source now exists as a cmd-based Tauri variant.
 
-It can:
+The macOS version can:
 
 - create aliases
 - edit existing aliases
@@ -49,10 +49,10 @@ It can:
 
 The Windows version can:
 
-- create, edit, and delete PowerShell shortcuts
+- create, edit, and delete Windows command shortcuts
 - choose files and folders through the native Windows picker
-- generate `~/.easyalias/aliases.ps1`
-- connect the generated file to the common PowerShell profile locations
+- generate `.cmd` files under `~/.easyalias/bin`
+- connect the command folder to the user `PATH`
 - build as a Windows installer target through Tauri/NSIS
 
 ## Folder Structure
@@ -138,7 +138,7 @@ Build:
 npm run tauri build
 ```
 
-The Windows version uses the same UI and product idea, but integrates with PowerShell instead of zsh.
+The Windows version uses the same UI and product idea, but integrates with `cmd.exe` instead of zsh.
 
 ```mermaid
 flowchart LR
@@ -150,9 +150,9 @@ flowchart LR
   Zsh --> ZshFile["~/.easyalias/aliases.zsh"]
   ZshFile --> Zshrc["source in ~/.zshrc"]
 
-  Win --> PowerShell["PowerShell"]
-  PowerShell --> PsFile["$HOME/.easyalias/aliases.ps1"]
-  PsFile --> Profile["dot-source in $PROFILE"]
+  Win --> Cmd["cmd.exe"]
+  Cmd --> Bin["$HOME/.easyalias/bin/*.cmd"]
+  Bin --> Path["folder in User PATH"]
 ```
 
 macOS uses:
@@ -164,26 +164,27 @@ source ~/.easyalias/aliases.zsh
 
 Windows uses:
 
-```powershell
-$HOME\.easyalias\aliases.ps1
-. "$HOME\.easyalias\aliases.ps1"
+```cmd
+%USERPROFILE%\.easyalias\bin
+%USERPROFILE%\.easyalias\bin\beerv2.cmd
 ```
 
-Instead of zsh `alias` lines, Windows generates PowerShell functions, for example:
+Instead of zsh `alias` lines, Windows generates `.cmd` files, for example:
 
-```powershell
-function beerv2 { Set-Location "$HOME\Desktop\projekte\beerv2_app" }
+```cmd
+@echo off
+cd /d "%USERPROFILE%\Desktop\projects\beerv2_app"
 ```
 
 ## Alias Actions
 
-| Action | macOS/zsh | Windows/PowerShell target |
+| Action | macOS/zsh | Windows/cmd target |
 | --- | --- | --- |
-| Navigate to folder | `cd "<path>"` | `Set-Location "<path>"` |
-| Open | `open "<path>"` | `Start-Process "<path>"` |
-| Execute | `"<path>"` | `& "<path>"` |
-| Gradle Build | `cd "<path>" && ./gradlew build` | `Set-Location "<path>"; .\gradlew.bat build` |
-| Maven Build | `cd "<path>" && mvn clean package` | `Set-Location "<path>"; mvn clean package` |
+| Navigate to folder | `cd "<path>"` | `cd /d "<path>"` |
+| Open | `open "<path>"` | `start "" "<path>"` |
+| Execute | `"<path>"` | `call "<path>" %*` |
+| Gradle Build | `cd "<path>" && ./gradlew build` | `cd /d "<path>" && call gradlew.bat build` |
+| Maven Build | `cd "<path>" && mvn clean package` | `cd /d "<path>" && call mvn clean package` |
 | Custom Command | free-form | free-form |
 
 ## Target Vision
@@ -211,7 +212,7 @@ mindmap
       File picker
     Shell
       zsh on macOS
-      PowerShell on Windows
+      cmd on Windows
       Generated files
     Export
       macOS app

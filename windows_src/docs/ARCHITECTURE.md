@@ -10,12 +10,12 @@ EasyAlias consists of a small frontend and a Tauri/Rust backend:
 | --- | --- | --- |
 | Frontend | `src/main.ts` | UI, form state, command preview |
 | Styling | `src/styles.css` | layout and visual design |
-| Backend | `src-tauri/src/main.rs` | local file read/write logic |
+| Backend | `src-tauri/src/main.rs` | local file read/write and PATH setup |
 | Tauri Config | `src-tauri/tauri.conf.json` | app window, build, Windows installer |
 | Tauri Dialog Plugin | `@tauri-apps/plugin-dialog` | native file/folder picker |
 | Tauri Opener Plugin | `@tauri-apps/plugin-opener` | open GitHub in the system browser |
 
-The core idea: EasyAlias does not manage the entire PowerShell profile. It creates a dedicated `aliases.ps1` file and dot-sources it from the profile once.
+The core idea: EasyAlias creates one `.cmd` file per alias and places those command files in a dedicated folder that is added to the user's `PATH`.
 
 ```mermaid
 flowchart TB
@@ -26,7 +26,8 @@ flowchart TB
   Dialog["Dialog Plugin file/folder picker"]
   Opener["Opener Plugin GitHub link"]
   Files["~/.easyalias files"]
-  Profile["PowerShell profile setup"]
+  Bin["~/.easyalias/bin/*.cmd"]
+  Path["User PATH setup"]
 
   UI --> CSS
   UI --> Tauri
@@ -34,7 +35,8 @@ flowchart TB
   Tauri --> Dialog
   Tauri --> Opener
   Rust --> Files
-  Rust --> Profile
+  Rust --> Bin
+  Rust --> Path
 ```
 
 ## Data Flow
@@ -43,9 +45,9 @@ flowchart TB
 UI form
   -> AliasEntry
   -> ~/.easyalias/config.json
-  -> ~/.easyalias/aliases.ps1
-  -> dot-source line in the PowerShell profile
-  -> new PowerShell sessions
+  -> ~/.easyalias/bin/name.cmd
+  -> user PATH contains ~/.easyalias/bin
+  -> new cmd.exe sessions
 ```
 
 ```mermaid
@@ -53,15 +55,15 @@ flowchart LR
   Form["UI form"]
   Entry["AliasEntry"]
   Config["config.json"]
-  Generated["aliases.ps1"]
-  Source["dot-source line in PowerShell profile"]
-  Terminal["New PowerShell session"]
+  CmdFile["name.cmd"]
+  Path["User PATH"]
+  Terminal["cmd.exe session"]
 
   Form --> Entry
   Entry --> Config
-  Entry --> Generated
-  Generated --> Source
-  Source --> Terminal
+  Entry --> CmdFile
+  CmdFile --> Path
+  Path --> Terminal
 ```
 
 In browser preview mode without Tauri, state is stored only in `localStorage`. This makes the UI easy to test without changing real shell files.
@@ -91,33 +93,30 @@ flowchart TD
 | File | Content | Owner |
 | --- | --- | --- |
 | `~/.easyalias/config.json` | structured shortcut data for the UI | EasyAlias |
-| `~/.easyalias/aliases.ps1` | generated PowerShell functions | EasyAlias |
-| `~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1` | PowerShell 7+ profile | user + EasyAlias setup |
-| `~/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1` | Windows PowerShell profile | user + EasyAlias setup |
+| `~/.easyalias/bin/*.cmd` | generated command files | EasyAlias |
+| User `PATH` | contains `~/.easyalias/bin` | user + EasyAlias setup |
 
 On first Tauri startup, the backend ensures:
 
 1. `~/.easyalias/` exists.
-2. `~/.easyalias/aliases.ps1` exists.
-3. Both common PowerShell profiles contain `. "$HOME\.easyalias\aliases.ps1"`.
-4. Both profiles contain an `easya` function if `easya` does not already exist.
+2. `~/.easyalias/bin/` exists.
+3. The user `PATH` contains the command folder.
+4. `easya.cmd` exists when it does not conflict with a user alias.
 
 ```mermaid
 sequenceDiagram
   participant UI as Frontend
   participant Rust as Rust Backend
   participant Dir as ~/.easyalias/
-  participant AliasFile as aliases.ps1
-  participant PS7 as PowerShell profile
-  participant WinPS as WindowsPowerShell profile
+  participant Bin as ~/.easyalias/bin/
+  participant Path as User PATH
 
   UI->>Rust: load_aliases()
   Rust->>Dir: create_dir_all()
-  Rust->>AliasFile: create if missing
-  Rust->>PS7: check dot-source line
-  Rust->>WinPS: check dot-source line
-  Rust->>PS7: append EasyAlias lines if missing
-  Rust->>WinPS: append EasyAlias lines if missing
+  Rust->>Bin: create_dir_all()
+  Rust->>Path: check command folder
+  Rust->>Path: append folder if missing
+  Rust->>Bin: write easya.cmd if safe
   Rust-->>UI: AppState + aliases
 ```
 
@@ -134,7 +133,7 @@ Main responsibilities:
 
 - manage form values
 - validate shortcut names
-- update the PowerShell command preview live
+- update the cmd command preview live
 - display, edit, and delete shortcuts
 - call Tauri commands when the app runs natively
 
@@ -193,42 +192,41 @@ save_aliases(aliases)
 `load_aliases` handles startup setup:
 
 - create the app directory
-- create an empty `aliases.ps1` if missing
-- ensure the dot-source line in both common PowerShell profiles
-- ensure the `easya` app shortcut in both profiles
+- create the command directory
+- ensure the command directory is in the user `PATH`
+- write `easya.cmd` when it does not conflict with an alias
 - load `config.json` if it exists
+- regenerate command files from saved aliases
 
 `save_aliases` writes:
 
 - `config.json` as the data source for the UI
-- `aliases.ps1` as the generated PowerShell file
+- one `.cmd` file per alias
+- removes stale `.cmd` files for deleted aliases
 
 ```mermaid
 sequenceDiagram
   participant UI as Frontend
   participant Rust as Rust Backend
   participant Config as config.json
-  participant PS as aliases.ps1
+  participant Bin as ~/.easyalias/bin/
 
   UI->>UI: create/edit/delete AliasEntry
   UI->>Rust: save_aliases(aliases)
   Rust->>Rust: validate shortcut names
   Rust->>Config: write pretty JSON
-  Rust->>PS: write generated PowerShell functions
+  Rust->>Bin: remove stale .cmd files
+  Rust->>Bin: write generated .cmd files
   Rust-->>UI: updated AppState
 ```
 
-## Shell Generation
+## Command Generation
 
-PowerShell aliases cannot directly represent complex commands like `Set-Location ...; mvn clean package`, so EasyAlias generates small functions instead.
+An alias entry becomes a small `.cmd` file:
 
-An alias entry becomes a PowerShell function:
-
-```powershell
-# Generated by EasyAlias.
-# Edit aliases in the app, not by hand.
-
-function beerv2 { Set-Location "$HOME\Desktop\projects\beerv2_app" }
+```cmd
+@echo off
+cd /d "%USERPROFILE%\Desktop\projects\beerv2_app"
 ```
 
 Before writing, the backend validates:
@@ -243,42 +241,38 @@ flowchart TD
   AliasEntry["AliasEntry"]
   ValidateName{"Name valid?"}
   ValidateCommand{"Command present?"}
-  FunctionLine["function name { command }"]
+  CmdFile["name.cmd"]
   Error["Error shown in UI"]
 
   AliasEntry --> ValidateName
   ValidateName -- "no" --> Error
   ValidateName -- "yes" --> ValidateCommand
   ValidateCommand -- "no" --> Error
-  ValidateCommand -- "yes" --> FunctionLine
+  ValidateCommand -- "yes" --> CmdFile
 ```
 
 ## Safety
 
-EasyAlias changes PowerShell profiles only minimally:
+EasyAlias changes the user `PATH` only by appending the command folder when it is missing:
 
-```powershell
-# EasyAlias aliases
-. "$HOME\.easyalias\aliases.ps1"
-
-# EasyAlias app shortcut
-function easya { Start-Process "$env:LOCALAPPDATA\Programs\EasyAlias\EasyAlias.exe" }
+```text
+%USERPROFILE%\.easyalias\bin
 ```
 
-Existing content is preserved.
+Existing PATH entries are preserved.
 
 Important boundaries:
 
-- Custom commands are real PowerShell commands.
-- The generated `aliases.ps1` is app output and should not be edited manually.
+- Custom commands are real `cmd.exe` / batch commands.
+- The generated `.cmd` files are app output and should not be edited manually.
 - Standard paths are wrapped in double quotes.
-- Existing functions from PowerShell profiles are not imported yet.
+- Folder-changing aliases persist in `cmd.exe`; from PowerShell they run as external commands and cannot change the parent PowerShell location.
 
 ## Roadmap
 
 Short term:
 
-- import existing profile functions
+- import existing `.cmd` shortcuts
 - tests for command generation
 
 Later:

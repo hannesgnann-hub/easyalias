@@ -1,6 +1,6 @@
 # EasyAlias Windows
 
-EasyAlias Windows is a Tauri prototype for creating and managing PowerShell shortcuts through a desktop UI.
+EasyAlias Windows is a Tauri prototype for creating and managing Windows command shortcuts through a desktop UI.
 
 The app uses web technology for the interface, but runs as a local Windows desktop app and can manage files on your machine.
 
@@ -8,12 +8,12 @@ The app uses web technology for the interface, but runs as a local Windows deskt
 
 - create, edit, and delete shortcuts through a UI
 - choose an action from a dropdown
-- preview the generated PowerShell command before saving
+- preview the generated `cmd.exe` command before saving
 - choose files and folders through the native Windows picker
 - store `createdAt` and `updatedAt` per shortcut
 - keep shortcut data as structured JSON
-- automatically generate an `aliases.ps1` file for PowerShell
-- connect itself to the PowerShell profile on first Tauri startup
+- automatically generate `.cmd` files for `cmd.exe`
+- connect `~\.easyalias\bin` to the user's `PATH` on first Tauri startup
 
 ## Quickstart
 
@@ -58,42 +58,39 @@ If the C++ build tools are missing, install "Desktop development with C++" throu
 
 ## Files on Windows
 
-EasyAlias intentionally manages its own files and does not directly rewrite your whole PowerShell profile.
+EasyAlias intentionally manages its own files and does not directly rewrite shell startup files.
 
 ```text
 ~\.easyalias\config.json
-~\.easyalias\aliases.ps1
+~\.easyalias\bin\
 ```
 
-On first Tauri startup, EasyAlias appends this line to both common PowerShell profile files if it is missing:
-
-```powershell
-. "$HOME\.easyalias\aliases.ps1"
-```
-
-The app checks these profile files:
+Each alias becomes one command file:
 
 ```text
-~\Documents\PowerShell\Microsoft.PowerShell_profile.ps1
-~\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1
+~\.easyalias\bin\beerv2.cmd
+~\.easyalias\bin\test1.cmd
 ```
 
-It also creates this shortcut if `easya` does not already exist:
+On first Tauri startup, EasyAlias adds the command folder to your user `PATH` if it is missing:
 
-```powershell
-function easya { Start-Process "$env:LOCALAPPDATA\Programs\EasyAlias\EasyAlias.exe" }
+```text
+%USERPROFILE%\.easyalias\bin
 ```
 
-After installing the app with the generated installer, you can open it from PowerShell:
+After the first setup, open a new terminal window. Then commands work in `cmd.exe`:
 
-```powershell
+```cmd
+beerv2
+test1
+```
+
+They can also be called from PowerShell as external commands, but folder-changing aliases only persist in `cmd.exe`.
+
+EasyAlias also creates this helper command if `easya.cmd` does not already conflict with one of your aliases:
+
+```cmd
 easya
-```
-
-New or changed shortcuts are available automatically in new PowerShell windows. In an already open PowerShell session, reload them with:
-
-```powershell
-. $PROFILE
 ```
 
 ## Development
@@ -132,7 +129,7 @@ A shortcut is stored like this:
   "name": "beerv2",
   "path": "~/Desktop/projects/beerv2_app",
   "action": "navigate",
-  "commandPreview": "Set-Location \"$HOME\\Desktop\\projects\\beerv2_app\"",
+  "commandPreview": "cd /d \"%USERPROFILE%\\Desktop\\projects\\beerv2_app\"",
   "createdAt": "2026-07-08T16:35:00.000Z",
   "updatedAt": "2026-07-08T16:35:00.000Z"
 }
@@ -142,16 +139,16 @@ A shortcut is stored like this:
 
 | Action | Generated command |
 | --- | --- |
-| Navigate to folder | `Set-Location "<path>"` |
-| Open | `Start-Process "<path>"` |
-| Execute | `& "<path>"` |
-| Gradle Build | `Set-Location "<path>"; .\gradlew.bat build` |
-| Maven Build | `Set-Location "<path>"; mvn clean package` |
-| Custom Command | user-provided PowerShell command |
+| Navigate to folder | `cd /d "<path>"` |
+| Open | `start "" "<path>"` |
+| Execute | `call "<path>" %*` |
+| Gradle Build | `cd /d "<path>" && call gradlew.bat build` |
+| Maven Build | `cd /d "<path>" && call mvn clean package` |
+| Custom Command | user-provided cmd/batch command |
 
 ## Roadmap
 
-- import existing functions from a PowerShell profile
+- import existing `.cmd` shortcuts from a folder
 - search and filter for large shortcut lists
 - polished Windows app icon
 - Windows installer via `npm run tauri build`

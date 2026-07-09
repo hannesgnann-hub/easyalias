@@ -11,7 +11,7 @@ type AliasAction =
   | "custom";
 
 // This is the canonical alias data shape used by the UI and persisted as JSON.
-// commandPreview is stored too, so the backend can write aliases.ps1 without
+// commandPreview is stored too, so the backend can write .cmd files without
 // needing to duplicate all frontend command-generation rules.
 type AliasEntry = {
   id: string;
@@ -29,9 +29,9 @@ type AliasEntry = {
 type AppState = {
   aliases: AliasEntry[];
   configFile: string;
-  aliasesFile: string;
-  sourceLine: string;
-  shellProfileSourcePresent: boolean;
+  commandDir: string;
+  pathEntry: string;
+  pathConfigured: boolean;
 };
 
 // AliasForm is the temporary state for either the create form or the edit modal.
@@ -68,9 +68,9 @@ const emptyForm: AliasForm = {
 let appState: AppState = {
   aliases: [],
   configFile: "~/.easyalias/config.json",
-  aliasesFile: "~/.easyalias/aliases.ps1",
-  sourceLine: '. "$HOME\\.easyalias\\aliases.ps1"',
-  shellProfileSourcePresent: false
+  commandDir: "~/.easyalias/bin",
+  pathEntry: "~/.easyalias/bin",
+  pathConfigured: false
 };
 
 let form: AliasForm = { ...emptyForm };
@@ -177,42 +177,42 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-// Converts a user-entered path into a safe PowerShell command argument.
-// "~/" is expanded to "$HOME\" so generated aliases keep working reliably.
-function powershellPath(path: string) {
+// Converts a user-entered path into a safe cmd.exe command argument.
+// "~/" is expanded to "%USERPROFILE%\" so generated aliases work in cmd.
+function cmdPath(path: string) {
   const trimmed = path.trim();
   if (!trimmed) return "";
 
-  if (trimmed === "~") return '"$HOME"';
+  if (trimmed === "~") return '"%USERPROFILE%"';
   if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
     const withoutHome = trimmed.slice(2).replace(/\//g, "\\");
-    return `"$HOME\\${escapePowerShellDoubleQuoted(withoutHome)}"`;
+    return `"%USERPROFILE%\\${escapeCmdDoubleQuoted(withoutHome)}"`;
   }
 
-  return `"${escapePowerShellDoubleQuoted(trimmed)}"`;
+  return `"${escapeCmdDoubleQuoted(trimmed)}"`;
 }
 
-// Escape characters that can break a double-quoted PowerShell string.
-function escapePowerShellDoubleQuoted(value: string) {
-  return value.replace(/`/g, "``").replace(/"/g, '`"').replace(/\$/g, "`$");
+// Escape characters that can break a double-quoted batch string.
+function escapeCmdDoubleQuoted(value: string) {
+  return value.replace(/%/g, "%%").replace(/"/g, '""');
 }
 
 // Converts the selected action + path/custom command into the shell command
-// that will later be written into aliases.ps1.
+// that will later be written into a .cmd file.
 function buildCommandPreview(entry: Pick<AliasEntry, "path" | "action" | "customCommand">) {
-  const path = powershellPath(entry.path);
+  const path = cmdPath(entry.path);
 
   switch (entry.action) {
     case "navigate":
-      return path ? `Set-Location ${path}` : "";
+      return path ? `cd /d ${path}` : "";
     case "open":
-      return path ? `Start-Process ${path}` : "";
+      return path ? `start "" ${path}` : "";
     case "execute":
-      return path ? `& ${path}` : "";
+      return path ? `call ${path} %*` : "";
     case "compile_gradle":
-      return path ? `Set-Location ${path}; .\\gradlew.bat build` : "";
+      return path ? `cd /d ${path} && call gradlew.bat build` : "";
     case "compile_maven":
-      return path ? `Set-Location ${path}; mvn clean package` : "";
+      return path ? `cd /d ${path} && call mvn clean package` : "";
     case "custom":
       return entry.customCommand?.trim() ?? "";
   }
@@ -251,7 +251,7 @@ async function loadState() {
 
   const saved = localStorage.getItem("easyalias-state");
   if (saved) {
-    appState = JSON.parse(saved) as AppState;
+    appState = { ...appState, ...(JSON.parse(saved) as Partial<AppState>) };
   }
 
   render();
@@ -266,7 +266,7 @@ async function saveState() {
   if (isTauriRuntime()) {
     try {
       appState = await invokeCommand<AppState>("save_aliases", { aliases });
-      notice = `Gespeichert: ${appState.aliasesFile}`;
+      notice = `Saved: ${appState.commandDir}`;
       render();
       return;
     } catch (saveError) {
@@ -341,7 +341,7 @@ async function upsertAlias(event: SubmitEvent) {
   );
 
   if (duplicate) {
-    error = `Alias "${form.name.trim()}" gibt es schon.`;
+    error = `Alias "${form.name.trim()}" already exists.`;
     render();
     return;
   }
@@ -383,7 +383,7 @@ async function updateAlias(event: SubmitEvent) {
   );
 
   if (duplicate) {
-    editError = `Alias "${editForm.name.trim()}" gibt es schon.`;
+    editError = `Alias "${editForm.name.trim()}" already exists.`;
     render();
     return;
   }
@@ -514,12 +514,12 @@ function render() {
 
       <section class="status-grid">
         <div>
-          <span>Alias File</span>
-          <strong>${appState.aliasesFile}</strong>
+          <span>Command Folder</span>
+          <strong>${appState.commandDir}</strong>
         </div>
         <div>
-          <span>PowerShell Profile</span>
-          <strong>${appState.shellProfileSourcePresent ? "Connected" : "Not connected yet"}</strong>
+          <span>User PATH</span>
+          <strong>${appState.pathConfigured ? "Connected" : "Restart terminal"}</strong>
         </div>
         <div>
           <span>Aliases</span>
@@ -528,11 +528,11 @@ function render() {
       </section>
 
       ${
-        appState.shellProfileSourcePresent
+        appState.pathConfigured
           ? ""
           : `<aside class="source-hint">
-              <span>Automatically added to the PowerShell profile on first Tauri startup:</span>
-              <code>${appState.sourceLine}</code>
+              <span>EasyAlias adds this folder to your User PATH. Open a new terminal after first setup:</span>
+              <code>${appState.pathEntry}</code>
             </aside>`
       }
 
@@ -542,7 +542,7 @@ function render() {
       <section class="workspace">
         <form class="editor" id="alias-form">
           <div class="form-title">
-            <h2>Alias erstellen</h2>
+            <h2>Create Alias</h2>
             <button class="primary-button" type="submit">Add</button>
           </div>
 
@@ -576,7 +576,7 @@ function render() {
             form.action === "custom"
               ? `<label>
                   Custom Command
-                  <textarea name="customCommand" rows="4" placeholder='cd "$HOME/project" && ./run.sh'>${escapeHtml(form.customCommand)}</textarea>
+                  <textarea name="customCommand" rows="4" placeholder='cd /d "%USERPROFILE%\\project" && run.bat'>${escapeHtml(form.customCommand)}</textarea>
                 </label>`
               : ""
           }
@@ -642,7 +642,7 @@ function renderEditModal() {
       <form class="modal-card" id="edit-form" role="dialog" aria-modal="true" aria-labelledby="edit-title">
         <div class="modal-title">
           <div>
-            <p class="eyebrow">Alias bearbeiten</p>
+            <p class="eyebrow">Edit Alias</p>
             <h2 id="edit-title">${escapeHtml(editForm.name || "Alias")}</h2>
           </div>
           <button class="ghost-button modal-close" type="button" data-action="close-edit">Close</button>
@@ -680,7 +680,7 @@ function renderEditModal() {
           editForm.action === "custom"
             ? `<label>
                 Custom Command
-                <textarea name="edit-customCommand" rows="4" placeholder='cd "$HOME/project" && ./run.sh'>${escapeHtml(editForm.customCommand)}</textarea>
+                <textarea name="edit-customCommand" rows="4" placeholder='cd /d "%USERPROFILE%\\project" && run.bat'>${escapeHtml(editForm.customCommand)}</textarea>
               </label>`
             : ""
         }
