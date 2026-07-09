@@ -1,8 +1,8 @@
 # EasyAlias
 
-EasyAlias is a small desktop app project for creating, viewing, and managing terminal aliases through a UI.
+EasyAlias is a small desktop app project for creating, viewing, and managing local terminal shortcuts through a UI.
 
-The idea: instead of manually editing shell files like `~/.zshrc` or PowerShell profiles, EasyAlias gives you a simple interface. You enter a command name, choose a file or folder, select what should happen from a dropdown, and the app generates the matching shell command.
+The idea: instead of manually editing shell files or hand-maintaining command scripts, EasyAlias gives you a simple interface. You enter a command name, choose a file or folder, select what should happen from a dropdown, and the app generates the matching platform-specific command.
 
 ![EasyAlias desktop UI](docs/assets/easyalias-ui.png)
 
@@ -16,19 +16,19 @@ Small terminal shortcuts tend to pile up over time:
 - shortening SSH connections
 - saving recurring shell commands under short names
 
-Normally, these aliases end up directly in `~/.zshrc`, where they quickly become hard to scan and easy to break. EasyAlias keeps this cleaner:
+Normally, these shortcuts end up scattered across shell config files, random `.cmd` folders, notes, and terminal history. EasyAlias keeps this cleaner:
 
-- The shell config stays small.
-- Alias data is stored in a structured file.
-- The generated shell file is sourced automatically.
+- Shell config and PATH setup stay small.
+- Shortcut data is stored in a structured file.
+- Generated command files are owned by the app.
 - Editing happens through a UI.
 
 ```mermaid
 flowchart LR
-  A["Many manual aliases in ~/.zshrc"] --> B["Hard to scan and easy to break"]
+  A["Manual shortcuts in shell files or .cmd folders"] --> B["Hard to scan and easy to break"]
   B --> C["EasyAlias UI"]
-  C --> D["Structured alias data"]
-  D --> E["Generated shell file"]
+  C --> D["Structured shortcut data"]
+  D --> E["Generated platform files"]
   E --> F["Terminal uses short commands"]
 ```
 
@@ -52,7 +52,7 @@ The Windows version can:
 - create, edit, and delete Windows command shortcuts
 - choose files and folders through the native Windows picker
 - generate `.cmd` files under `~/.easyalias/bin`
-- connect the command folder to the user `PATH`
+- connect the command folder to the user `PATH`, so aliases work in `cmd.exe`
 - build as a Windows installer target through Tauri/NSIS
 
 ## Folder Structure
@@ -184,6 +184,12 @@ Instead of zsh `alias` lines, Windows generates `.cmd` files, for example:
 ```cmd
 @echo off
 cd /d "%USERPROFILE%\Desktop\projects\beerv2_app"
+```
+
+After the first Windows app start, open a new `cmd.exe` window so the updated user `PATH` is visible. You can verify command resolution with:
+
+```cmd
+where beerv2
 ```
 
 ## Alias Actions
