@@ -17,6 +17,8 @@ EasyAlias consists of a small frontend and a Tauri/Rust backend:
 
 The core idea: EasyAlias creates one `.cmd` file per alias and places those command files in a dedicated folder that is added to the user's `PATH`.
 
+This matches the classic Windows shortcut pattern: a command name is just an executable file name that Windows can discover through `PATH`.
+
 ```mermaid
 flowchart TB
   UI["Frontend src/main.ts"]
@@ -197,12 +199,14 @@ save_aliases(aliases)
 - write `easya.cmd` when it does not conflict with an alias
 - load `config.json` if it exists
 - regenerate command files from saved aliases
+- migrate older PowerShell-style command previews to cmd-style previews
 
 `save_aliases` writes:
 
 - `config.json` as the data source for the UI
 - one `.cmd` file per alias
 - removes stale `.cmd` files for deleted aliases
+- returns fresh PATH status for the UI
 
 ```mermaid
 sequenceDiagram
@@ -228,6 +232,8 @@ An alias entry becomes a small `.cmd` file:
 @echo off
 cd /d "%USERPROFILE%\Desktop\projects\beerv2_app"
 ```
+
+The frontend and backend both know how to derive this command from structured fields. The backend is authoritative and rewrites `commandPreview` on load/save, so older configs from the first PowerShell-based Windows prototype are automatically normalized.
 
 Before writing, the backend validates:
 
@@ -261,12 +267,33 @@ EasyAlias changes the user `PATH` only by appending the command folder when it i
 
 Existing PATH entries are preserved.
 
+The backend checks the persisted user PATH through `HKCU\Environment`. When it needs to add the command folder, it uses `setx` for normal-sized PATH values and falls back to `reg add` for long values to avoid `setx` truncation.
+
 Important boundaries:
 
 - Custom commands are real `cmd.exe` / batch commands.
 - The generated `.cmd` files are app output and should not be edited manually.
 - Standard paths are wrapped in double quotes.
 - Folder-changing aliases persist in `cmd.exe`; from PowerShell they run as external commands and cannot change the parent PowerShell location.
+
+## Runtime Notes
+
+After EasyAlias updates User PATH, already-open terminals may still have the old environment. The expected user flow is:
+
+1. Start EasyAlias once.
+2. Let it add `~/.easyalias/bin` to User PATH.
+3. Open a new `cmd.exe` window.
+4. Run `where <alias>` to confirm resolution.
+
+```cmd
+where beerv2
+```
+
+The generated command files are intentionally human-readable:
+
+```cmd
+type "%USERPROFILE%\.easyalias\bin\beerv2.cmd"
+```
 
 ## Roadmap
 

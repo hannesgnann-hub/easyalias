@@ -29,8 +29,14 @@ type AliasEntry = {
 type AppState = {
   aliases: AliasEntry[];
   configFile: string;
+  // Folder that contains generated command files such as test1.cmd.
+  // This is the important Windows integration point: cmd.exe discovers aliases
+  // because this folder is added to the user's PATH by the Rust backend.
   commandDir: string;
+  // Absolute PATH entry shown in the UI when the user needs to restart Terminal.
   pathEntry: string;
+  // True when the backend can see commandDir in the persisted User PATH or in
+  // the current process PATH. A freshly updated PATH usually needs a new shell.
   pathConfigured: boolean;
 };
 
@@ -178,7 +184,13 @@ function nowIso() {
 }
 
 // Converts a user-entered path into a safe cmd.exe command argument.
-// "~/" is expanded to "%USERPROFILE%\" so generated aliases work in cmd.
+//
+// Examples:
+//   ~/Desktop/app      -> "%USERPROFILE%\Desktop\app"
+//   C:\Tools\run.bat   -> "C:\Tools\run.bat"
+//
+// The generated command is written into a .cmd file. That means we intentionally
+// use cmd.exe syntax here, not PowerShell syntax.
 function cmdPath(path: string) {
   const trimmed = path.trim();
   if (!trimmed) return "";
@@ -193,6 +205,10 @@ function cmdPath(path: string) {
 }
 
 // Escape characters that can break a double-quoted batch string.
+//
+// Percent signs are special in .cmd files because %NAME% means environment
+// variable expansion. Doubling percent signs keeps literal percent signs intact.
+// Double quotes are doubled so the generated string remains a single argument.
 function escapeCmdDoubleQuoted(value: string) {
   return value.replace(/%/g, "%%").replace(/"/g, '""');
 }
@@ -204,16 +220,22 @@ function buildCommandPreview(entry: Pick<AliasEntry, "path" | "action" | "custom
 
   switch (entry.action) {
     case "navigate":
+      // /d is important: it allows changing drives, e.g. C: -> D:.
       return path ? `cd /d ${path}` : "";
     case "open":
+      // The empty title argument is required by start when the target is quoted.
       return path ? `start "" ${path}` : "";
     case "execute":
+      // call preserves batch behavior and forwards any extra CLI arguments.
       return path ? `call ${path} %*` : "";
     case "compile_gradle":
+      // Run from the selected project folder so gradlew.bat resolves locally.
       return path ? `cd /d ${path} && call gradlew.bat build` : "";
     case "compile_maven":
+      // Maven is expected on PATH; the selected folder becomes the build root.
       return path ? `cd /d ${path} && call mvn clean package` : "";
     case "custom":
+      // Custom commands are passed through deliberately. The user owns them.
       return entry.customCommand?.trim() ?? "";
   }
 }
@@ -251,6 +273,8 @@ async function loadState() {
 
   const saved = localStorage.getItem("easyalias-state");
   if (saved) {
+    // Merge instead of replacing so older browser-preview state from the earlier
+    // PowerShell version does not drop the newer commandDir/path fields.
     appState = { ...appState, ...(JSON.parse(saved) as Partial<AppState>) };
   }
 
@@ -265,6 +289,8 @@ async function saveState() {
 
   if (isTauriRuntime()) {
     try {
+      // The backend is authoritative for files and PATH status. It may also
+      // normalize old commandPreview values into the current cmd.exe format.
       appState = await invokeCommand<AppState>("save_aliases", { aliases });
       notice = `Saved: ${appState.commandDir}`;
       render();

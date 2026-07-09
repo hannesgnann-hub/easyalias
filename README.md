@@ -68,6 +68,16 @@ easyalias/
   README.md         this project overview
 ```
 
+Documentation is split by scope:
+
+| Document | Scope |
+| --- | --- |
+| `README.md` | shared project overview |
+| `mac_src/README.md` | macOS app usage |
+| `mac_src/docs/ARCHITECTURE.md` | macOS technical architecture |
+| `windows_src/README.md` | Windows app usage |
+| `windows_src/docs/ARCHITECTURE.md` | Windows technical architecture |
+
 ```mermaid
 flowchart TD
   Root["easyalias/"]
