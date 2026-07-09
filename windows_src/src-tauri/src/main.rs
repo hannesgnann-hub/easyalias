@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{env, fs, path::PathBuf};
+use std::{collections::HashSet, env, fs, path::PathBuf, process::Command};
 
 // Must match the frontend AliasEntry shape. serde's camelCase conversion keeps
 // Rust idiomatic while still producing JSON fields like customCommand/createdAt.
@@ -23,17 +23,12 @@ struct AliasEntry {
 struct AppState {
     aliases: Vec<AliasEntry>,
     config_file: String,
-    aliases_file: String,
-    source_line: String,
-    shell_profile_source_present: bool,
+    command_dir: String,
+    path_entry: String,
+    path_configured: bool,
 }
 
-// EasyAlias owns ~/.easyalias/aliases.ps1 and only adds a dot-source line to the
-// user's PowerShell profile. This keeps the existing shell config mostly untouched.
-const SOURCE_LINE: &str = ". \"$HOME\\.easyalias\\aliases.ps1\"";
 const APP_ALIAS_NAME: &str = "easya";
-const APP_ALIAS_LINE: &str =
-    "function easya { Start-Process \"$env:LOCALAPPDATA\\Programs\\EasyAlias\\EasyAlias.exe\" }";
 
 // Resolve the user's home directory without pulling in extra dependencies.
 fn home_dir() -> Result<PathBuf, String> {
@@ -52,104 +47,28 @@ fn config_file() -> Result<PathBuf, String> {
     Ok(app_dir()?.join("config.json"))
 }
 
-fn aliases_file() -> Result<PathBuf, String> {
-    Ok(app_dir()?.join("aliases.ps1"))
+fn command_dir() -> Result<PathBuf, String> {
+    Ok(app_dir()?.join("bin"))
 }
 
-// PowerShell has separate profile paths for PowerShell 7+ and Windows PowerShell.
-// We write the EasyAlias source line to both, so the user gets the aliases in
-// either common terminal variant.
-fn powershell_profile_files() -> Result<Vec<PathBuf>, String> {
-    let documents = home_dir()?.join("Documents");
-
-    Ok(vec![
-        documents
-            .join("PowerShell")
-            .join("Microsoft.PowerShell_profile.ps1"),
-        documents
-            .join("WindowsPowerShell")
-            .join("Microsoft.PowerShell_profile.ps1"),
-    ])
+fn command_file(name: &str) -> Result<PathBuf, String> {
+    Ok(command_dir()?.join(format!("{}.cmd", name)))
 }
 
-// Used by the UI to show whether the shell is already wired up.
-fn profile_source_present() -> bool {
-    powershell_profile_files()
-        .ok()
-        .map(|paths| {
-            paths.iter().any(|path| {
-                fs::read_to_string(path)
-                    .map(|content| content.lines().any(|line| line.trim() == SOURCE_LINE))
-                    .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false)
-}
-
-// First-run setup: create ~/.easyalias and an empty generated aliases.ps1.
-// Creating aliases.ps1 early prevents PowerShell from dot-sourcing a missing file.
+// First-run setup: create ~/.easyalias and the command bin directory.
 fn ensure_app_files() -> Result<(), String> {
     let directory = app_dir()?;
     fs::create_dir_all(&directory)
         .map_err(|error| format!("{} could not be created: {}", directory.display(), error))?;
 
-    let aliases_path = aliases_file()?;
-    if !aliases_path.exists() {
-        fs::write(&aliases_path, render_aliases(&[])?).map_err(|error| {
-            format!("{} could not be created: {}", aliases_path.display(), error)
-        })?;
-    }
+    let bin = command_dir()?;
+    fs::create_dir_all(&bin)
+        .map_err(|error| format!("{} could not be created: {}", bin.display(), error))?;
 
     Ok(())
 }
 
-// First-run shell setup. The app appends only the missing EasyAlias lines and
-// avoids overwriting an existing easya function/alias.
-fn ensure_profile_source() -> Result<(), String> {
-    for path in powershell_profile_files()? {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("{} could not be created: {}", parent.display(), error))?;
-        }
-
-        let content = fs::read_to_string(&path).unwrap_or_default();
-
-        let source_present = content.lines().any(|line| line.trim() == SOURCE_LINE);
-        let app_alias_present = content.lines().any(|line| {
-            let normalized = line.trim_start().to_ascii_lowercase();
-            normalized.starts_with(&format!("function {}", APP_ALIAS_NAME))
-                || normalized.starts_with(&format!("set-alias {}", APP_ALIAS_NAME))
-        });
-
-        if source_present && app_alias_present {
-            continue;
-        }
-
-        let mut next_content = content;
-        if !next_content.is_empty() && !next_content.ends_with('\n') {
-            next_content.push('\n');
-        }
-
-        if !source_present {
-            next_content.push_str("\n# EasyAlias aliases\n");
-            next_content.push_str(SOURCE_LINE);
-            next_content.push('\n');
-        }
-
-        if !app_alias_present {
-            next_content.push_str("\n# EasyAlias app shortcut\n");
-            next_content.push_str(APP_ALIAS_LINE);
-            next_content.push('\n');
-        }
-
-        fs::write(&path, next_content)
-            .map_err(|error| format!("{} could not be updated: {}", path.display(), error))?;
-    }
-
-    Ok(())
-}
-
-// Shorten paths below HOME for display, e.g. /Users/name/.easyalias -> ~/.easyalias.
+// Shorten paths below HOME for display, e.g. C:\Users\Name\.easyalias -> ~/.easyalias.
 fn display_home_path(path: PathBuf) -> Result<String, String> {
     let home = home_dir()?;
     if let Ok(stripped) = path.strip_prefix(&home) {
@@ -159,7 +78,7 @@ fn display_home_path(path: PathBuf) -> Result<String, String> {
     Ok(path.display().to_string())
 }
 
-// Alias names become shell identifiers, so the accepted character set is strict.
+// Alias names become command file names, so the accepted character set is strict.
 fn validate_alias_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
@@ -173,31 +92,290 @@ fn validate_alias_name(name: &str) -> bool {
     chars.all(|char| char.is_ascii_alphanumeric() || char == '_' || char == '-')
 }
 
-// Convert the structured alias list into the generated ~/.easyalias/aliases.ps1 file.
-// Validation is repeated here so invalid frontend data cannot produce a broken file.
-fn render_aliases(aliases: &[AliasEntry]) -> Result<String, String> {
-    let mut lines = vec![
-        "# Generated by EasyAlias.".to_string(),
-        "# Edit aliases in the app, not by hand.".to_string(),
-        String::new(),
-    ];
+fn normalize_path(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches('"')
+        .trim_end_matches(['\\', '/'])
+        .to_ascii_lowercase()
+}
 
-    for alias in aliases {
-        if !validate_alias_name(&alias.name) {
-            return Err(format!("Invalid alias name: {}", alias.name));
+fn path_contains_command_dir(path_value: &str) -> Result<bool, String> {
+    let bin = command_dir()?;
+    let needle = normalize_path(&bin.display().to_string());
+
+    Ok(path_value
+        .split(';')
+        .any(|entry| normalize_path(entry) == needle))
+}
+
+fn parse_registry_path(stdout: &str) -> String {
+    for line in stdout.lines() {
+        let trimmed = line.trim_start();
+        if !trimmed.to_ascii_lowercase().starts_with("path") {
+            continue;
         }
 
-        if alias.command_preview.trim().is_empty() {
-            return Err(format!("Alias {} has no command.", alias.name));
-        }
+        let Some(type_index) = trimmed.find("REG_") else {
+            continue;
+        };
+        let value_with_type = &trimmed[type_index..];
+        let Some(value_index) = value_with_type.find(|char: char| char.is_whitespace()) else {
+            continue;
+        };
 
-        lines.push(format!(
-            "function {} {{ {} }}",
-            alias.name, alias.command_preview
-        ));
+        return value_with_type[value_index..].trim().to_string();
     }
 
-    Ok(format!("{}\n", lines.join("\n")))
+    String::new()
+}
+
+fn user_path_value() -> String {
+    if !cfg!(windows) {
+        return env::var("PATH").unwrap_or_default();
+    }
+
+    let output = Command::new("reg")
+        .args(["query", "HKCU\\Environment", "/v", "Path"])
+        .output();
+
+    output
+        .ok()
+        .filter(|result| result.status.success())
+        .map(|result| String::from_utf8_lossy(&result.stdout).to_string())
+        .map(|stdout| parse_registry_path(&stdout))
+        .unwrap_or_default()
+}
+
+fn path_configured() -> bool {
+    path_contains_command_dir(&user_path_value()).unwrap_or(false)
+        || env::var("PATH")
+            .ok()
+            .and_then(|path| path_contains_command_dir(&path).ok())
+            .unwrap_or(false)
+}
+
+fn persist_user_path(next_path: &str) -> Result<(), String> {
+    if !cfg!(windows) {
+        return Ok(());
+    }
+
+    // setx broadcasts the environment update to future processes. It has a
+    // historical length limit, so fall back to the registry for unusually long
+    // user PATH values rather than risking truncation.
+    let result = if next_path.len() <= 1000 {
+        Command::new("setx").args(["Path", next_path]).output()
+    } else {
+        Command::new("reg")
+            .args([
+                "add",
+                "HKCU\\Environment",
+                "/v",
+                "Path",
+                "/t",
+                "REG_EXPAND_SZ",
+                "/d",
+                next_path,
+                "/f",
+            ])
+            .output()
+    };
+
+    let output = result.map_err(|error| format!("User PATH could not be updated: {}", error))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Err(format!(
+        "User PATH could not be updated: {}{}",
+        stdout, stderr
+    ))
+}
+
+fn ensure_path_contains_command_dir() -> Result<(), String> {
+    let bin = command_dir()?;
+    let bin_value = bin.display().to_string();
+    let current_user_path = user_path_value();
+
+    if path_contains_command_dir(&current_user_path)? {
+        return Ok(());
+    }
+
+    let next_path = if current_user_path.trim().is_empty() {
+        bin_value
+    } else {
+        format!("{};{}", current_user_path.trim_end_matches(';'), bin_value)
+    };
+
+    persist_user_path(&next_path)
+}
+
+fn escape_cmd_double_quoted(value: &str) -> String {
+    value.replace('%', "%%").replace('"', "\"\"")
+}
+
+fn cmd_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if trimmed == "~" {
+        return "\"%USERPROFILE%\"".to_string();
+    }
+
+    if trimmed.starts_with("~/") || trimmed.starts_with("~\\") {
+        let without_home = trimmed[2..].replace('/', "\\");
+        return format!(
+            "\"%USERPROFILE%\\{}\"",
+            escape_cmd_double_quoted(&without_home)
+        );
+    }
+
+    format!("\"{}\"", escape_cmd_double_quoted(trimmed))
+}
+
+fn build_command_preview(alias: &AliasEntry) -> String {
+    let path = cmd_path(&alias.path);
+
+    match alias.action.as_str() {
+        "navigate" => {
+            if path.is_empty() {
+                String::new()
+            } else {
+                format!("cd /d {}", path)
+            }
+        }
+        "open" => {
+            if path.is_empty() {
+                String::new()
+            } else {
+                format!("start \"\" {}", path)
+            }
+        }
+        "execute" => {
+            if path.is_empty() {
+                String::new()
+            } else {
+                format!("call {} %*", path)
+            }
+        }
+        "compile_gradle" => {
+            if path.is_empty() {
+                String::new()
+            } else {
+                format!("cd /d {} && call gradlew.bat build", path)
+            }
+        }
+        "compile_maven" => {
+            if path.is_empty() {
+                String::new()
+            } else {
+                format!("cd /d {} && call mvn clean package", path)
+            }
+        }
+        "custom" => alias
+            .custom_command
+            .as_deref()
+            .unwrap_or(&alias.command_preview)
+            .trim()
+            .to_string(),
+        _ => alias.command_preview.trim().to_string(),
+    }
+}
+
+fn normalize_aliases(aliases: Vec<AliasEntry>) -> Vec<AliasEntry> {
+    aliases
+        .into_iter()
+        .map(|mut alias| {
+            alias.command_preview = build_command_preview(&alias);
+            alias
+        })
+        .collect()
+}
+
+fn render_cmd_script(alias: &AliasEntry) -> Result<String, String> {
+    if !validate_alias_name(&alias.name) {
+        return Err(format!("Invalid alias name: {}", alias.name));
+    }
+
+    if alias.command_preview.trim().is_empty() {
+        return Err(format!("Alias {} has no command.", alias.name));
+    }
+
+    Ok(format!("@echo off\r\n{}\r\n", alias.command_preview))
+}
+
+fn render_app_shortcut() -> String {
+    [
+        "@echo off",
+        "if exist \"%LOCALAPPDATA%\\Programs\\EasyAlias\\EasyAlias.exe\" (",
+        "  start \"\" \"%LOCALAPPDATA%\\Programs\\EasyAlias\\EasyAlias.exe\"",
+        "  exit /b",
+        ")",
+        "if exist \"%ProgramFiles%\\EasyAlias\\EasyAlias.exe\" (",
+        "  start \"\" \"%ProgramFiles%\\EasyAlias\\EasyAlias.exe\"",
+        "  exit /b",
+        ")",
+        "start \"\" \"EasyAlias\"",
+        "",
+    ]
+    .join("\r\n")
+}
+
+fn write_command_scripts(aliases: &[AliasEntry]) -> Result<(), String> {
+    let bin = command_dir()?;
+    fs::create_dir_all(&bin)
+        .map_err(|error| format!("{} could not be created: {}", bin.display(), error))?;
+
+    let mut expected_names = HashSet::new();
+    for alias in aliases {
+        expected_names.insert(alias.name.to_ascii_lowercase());
+    }
+
+    if let Ok(entries) = fs::read_dir(&bin) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_cmd = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(|extension| extension.eq_ignore_ascii_case("cmd"))
+                .unwrap_or(false);
+            let stem = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(|stem| stem.to_ascii_lowercase());
+
+            if is_cmd
+                && stem.as_deref() != Some(APP_ALIAS_NAME)
+                && !stem.map_or(false, |name| expected_names.contains(&name))
+            {
+                fs::remove_file(&path).map_err(|error| {
+                    format!("{} could not be removed: {}", path.display(), error)
+                })?;
+            }
+        }
+    }
+
+    for alias in aliases {
+        let script = render_cmd_script(alias)?;
+        let path = command_file(&alias.name)?;
+        fs::write(&path, script)
+            .map_err(|error| format!("{} could not be written: {}", path.display(), error))?;
+    }
+
+    if !expected_names.contains(APP_ALIAS_NAME) {
+        let shortcut = command_file(APP_ALIAS_NAME)?;
+        if !shortcut.exists() {
+            fs::write(&shortcut, render_app_shortcut()).map_err(|error| {
+                format!("{} could not be written: {}", shortcut.display(), error)
+            })?;
+        }
+    }
+
+    Ok(())
 }
 
 // Build a complete AppState after load/save.
@@ -205,22 +383,23 @@ fn app_state(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
     Ok(AppState {
         aliases,
         config_file: display_home_path(config_file()?)?,
-        aliases_file: display_home_path(aliases_file()?)?,
-        source_line: SOURCE_LINE.to_string(),
-        shell_profile_source_present: profile_source_present(),
+        command_dir: display_home_path(command_dir()?)?,
+        path_entry: command_dir()?.display().to_string(),
+        path_configured: path_configured(),
     })
 }
 
 // Called by the frontend when the app starts.
-// Also performs first-run file and PowerShell profile setup.
+// Also performs first-run file and User PATH setup.
 #[tauri::command]
 fn load_aliases() -> Result<AppState, String> {
     ensure_app_files()?;
-    ensure_profile_source()?;
+    ensure_path_contains_command_dir()?;
 
     let path = config_file()?;
 
     if !path.exists() {
+        write_command_scripts(&[])?;
         return app_state(Vec::new());
     }
 
@@ -229,29 +408,32 @@ fn load_aliases() -> Result<AppState, String> {
 
     let aliases = serde_json::from_str::<Vec<AliasEntry>>(&content)
         .map_err(|error| format!("config.json is not valid alias JSON: {}", error))?;
+    let aliases = normalize_aliases(aliases);
 
+    write_command_scripts(&aliases)?;
     app_state(aliases)
 }
 
 // Called whenever aliases are created, edited, or deleted.
-// Writes both config.json for the UI and aliases.ps1 for PowerShell.
+// Writes config.json for the UI and one .cmd command file per alias.
 #[tauri::command]
 fn save_aliases(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
+    let aliases = normalize_aliases(aliases);
     let directory = app_dir()?;
     fs::create_dir_all(&directory)
         .map_err(|error| format!("{} could not be created: {}", directory.display(), error))?;
 
+    ensure_path_contains_command_dir()?;
+
     let config = serde_json::to_string_pretty(&aliases)
         .map_err(|error| format!("Aliases could not be serialized: {}", error))?;
-    let aliases_ps1 = render_aliases(&aliases)?;
 
     let config_path = config_file()?;
-    let aliases_path = aliases_file()?;
 
     fs::write(&config_path, format!("{}\n", config))
         .map_err(|error| format!("{} could not be written: {}", config_path.display(), error))?;
-    fs::write(&aliases_path, aliases_ps1)
-        .map_err(|error| format!("{} could not be written: {}", aliases_path.display(), error))?;
+
+    write_command_scripts(&aliases)?;
 
     app_state(aliases)
 }
