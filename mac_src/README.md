@@ -15,6 +15,16 @@ The app uses web technology for the interface, but runs as a local macOS desktop
 - automatically generate an `aliases.zsh` file for your terminal
 - connect itself to `~/.zshrc` on first Tauri startup
 
+## Install
+
+EasyAlias is available as a Homebrew cask:
+
+```zsh
+brew tap hannesgnann-hub/tap
+brew trust hannesgnann-hub/tap
+brew install --cask easyalias
+```
+
 ## Quickstart
 
 ```zsh

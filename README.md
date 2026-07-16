@@ -6,6 +6,16 @@ The idea: instead of manually editing shell files or hand-maintaining command sc
 
 ![EasyAlias desktop UI](docs/assets/easyalias-ui.png)
 
+## Install on macOS
+
+EasyAlias is available as a Homebrew cask:
+
+```zsh
+brew tap hannesgnann-hub/tap
+brew trust hannesgnann-hub/tap
+brew install --cask easyalias
+```
+
 ## What EasyAlias Solves
 
 Small terminal shortcuts tend to pile up over time:
@@ -103,6 +113,14 @@ The macOS source lives in:
 
 ```text
 mac_src/
+```
+
+Install the released app with Homebrew:
+
+```zsh
+brew tap hannesgnann-hub/tap
+brew trust hannesgnann-hub/tap
+brew install --cask easyalias
 ```
 
 Typical workflow:
