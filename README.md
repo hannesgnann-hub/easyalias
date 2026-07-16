@@ -44,7 +44,7 @@ flowchart LR
 
 ## Current Status
 
-The macOS version works as a Tauri app. The Windows source now exists as a cmd-based Tauri variant.
+EasyAlias now has separate Tauri source projects for macOS, Windows, and Linux. Each version keeps the same UI and data model while using the native terminal integration for its platform.
 
 The macOS version can:
 
@@ -65,6 +65,15 @@ The Windows version can:
 - connect the command folder to the user `PATH`, so aliases work in `cmd.exe`
 - build as a Windows installer target through Tauri/NSIS
 
+The Linux version can:
+
+- create, edit, and delete bash/zsh aliases
+- choose files and folders through the native Linux picker
+- detect bash or zsh from `$SHELL`
+- generate `~/.easyalias/aliases.sh`
+- connect the generated file to `~/.bashrc` or `~/.zshrc`
+- build `.deb`, `.rpm`, and `.AppImage` packages
+
 ## Folder Structure
 
 ```text
@@ -73,7 +82,10 @@ easyalias/
   mac_export/       built macOS export, e.g. EasyAlias.zip
 
   windows_src/      Windows source code for the Tauri app
-  windows_erxport/  planned Windows export
+  windows_export/   built Windows installer exports
+
+  linux_src/        Linux source code for the Tauri app
+  linux_export/     built Linux packages
 
   README.md         this project overview
 ```
@@ -87,6 +99,8 @@ Documentation is split by scope:
 | `mac_src/docs/ARCHITECTURE.md` | macOS technical architecture |
 | `windows_src/README.md` | Windows app usage |
 | `windows_src/docs/ARCHITECTURE.md` | Windows technical architecture |
+| `linux_src/README.md` | Linux app usage and build guide |
+| `linux_src/docs/ARCHITECTURE.md` | Linux technical architecture |
 
 ```mermaid
 flowchart TD
@@ -94,7 +108,9 @@ flowchart TD
   Root --> MacSrc["mac_src/ macOS source"]
   Root --> MacExport["mac_export/ macOS export"]
   Root --> WinSrc["windows_src/ Windows source"]
-  Root --> WinExport["windows_erxport/ Windows export target"]
+  Root --> WinExport["windows_export/ Windows exports"]
+  Root --> LinuxSrc["linux_src/ Linux source"]
+  Root --> LinuxExport["linux_export/ Linux exports"]
   Root --> RootReadme["README.md project overview"]
 
   MacSrc --> MacFrontend["src/ macOS UI"]
@@ -103,9 +119,10 @@ flowchart TD
   WinSrc --> WinFrontend["src/ Windows UI"]
   WinSrc --> WinBackend["src-tauri/ Windows backend"]
   WinSrc --> WinDocs["docs/ Windows architecture"]
+  LinuxSrc --> LinuxFrontend["src/ Linux UI"]
+  LinuxSrc --> LinuxBackend["src-tauri/ Linux backend"]
+  LinuxSrc --> LinuxDocs["docs/ Linux architecture"]
 ```
-
-Note: `windows_erxport` is currently only a folder name and does not contain a finished export yet. The name can be corrected to `windows_export` later.
 
 ## macOS
 
@@ -168,11 +185,36 @@ npm run tauri build
 
 The Windows version uses the same UI and product idea, but integrates with `cmd.exe` instead of zsh.
 
+## Linux
+
+The Linux source lives in:
+
+```text
+linux_src/
+```
+
+Typical workflow on Linux:
+
+```bash
+cd linux_src
+npm install
+npm run tauri dev
+```
+
+Build `.deb`, `.rpm`, and `.AppImage` packages:
+
+```bash
+npm run tauri build
+```
+
+The Linux version detects bash or zsh, creates `~/.easyalias/aliases.sh`, and connects it to the matching shell startup file. Full prerequisites and export commands are documented in `linux_src/README.md`.
+
 ```mermaid
 flowchart LR
   Shared["Shared idea and UI"]
   Shared --> Mac["macOS"]
   Shared --> Win["Windows"]
+  Shared --> Linux["Linux"]
 
   Mac --> Zsh["zsh"]
   Zsh --> ZshFile["~/.easyalias/aliases.zsh"]
@@ -181,6 +223,10 @@ flowchart LR
   Win --> Cmd["cmd.exe"]
   Cmd --> Bin["$HOME/.easyalias/bin/*.cmd"]
   Bin --> Path["folder in User PATH"]
+
+  Linux --> Shell["bash or zsh"]
+  Shell --> ShellFile["~/.easyalias/aliases.sh"]
+  ShellFile --> ShellRc["source in ~/.bashrc or ~/.zshrc"]
 ```
 
 macOS uses:
@@ -210,16 +256,25 @@ After the first Windows app start, open a new `cmd.exe` window so the updated us
 where beerv2
 ```
 
+Linux uses:
+
+```bash
+~/.easyalias/aliases.sh
+source ~/.easyalias/aliases.sh
+```
+
+After the first Linux app start, open a new terminal or reload the detected shell startup file with `source ~/.bashrc` or `source ~/.zshrc`.
+
 ## Alias Actions
 
-| Action | macOS/zsh | Windows/cmd target |
-| --- | --- | --- |
-| Navigate to folder | `cd "<path>"` | `cd /d "<path>"` |
-| Open | `open "<path>"` | `start "" "<path>"` |
-| Execute | `"<path>"` | `call "<path>" %*` |
-| Gradle Build | `cd "<path>" && ./gradlew build` | `cd /d "<path>" && call gradlew.bat build` |
-| Maven Build | `cd "<path>" && mvn clean package` | `cd /d "<path>" && call mvn clean package` |
-| Custom Command | free-form | free-form |
+| Action | macOS/zsh | Windows/cmd | Linux/bash or zsh |
+| --- | --- | --- | --- |
+| Navigate to folder | `cd "<path>"` | `cd /d "<path>"` | `cd "<path>"` |
+| Open | `open "<path>"` | `start "" "<path>"` | `xdg-open "<path>"` |
+| Execute | `"<path>"` | `call "<path>" %*` | `"<path>"` |
+| Gradle Build | `cd "<path>" && ./gradlew build` | `cd /d "<path>" && call gradlew.bat build` | `cd "<path>" && ./gradlew build` |
+| Maven Build | `cd "<path>" && mvn clean package` | `cd /d "<path>" && call mvn clean package` | `cd "<path>" && mvn clean package` |
+| Custom Command | free-form | free-form | free-form |
 
 ## Target Vision
 
@@ -227,7 +282,7 @@ EasyAlias should become a small, practical tool for recurring local developer co
 
 - simple enough for quick alias maintenance
 - robust enough to avoid breaking shell files
-- platform-aware for macOS and Windows
+- platform-aware for macOS, Windows, and Linux
 - exportable as a regular desktop app
 
 The focus is not a cloud service or account system, but a local, fast helper for your own machine.
@@ -247,8 +302,14 @@ mindmap
     Shell
       zsh on macOS
       cmd on Windows
+      bash or zsh on Linux
       Generated files
     Export
       macOS app
       Windows installer
+      Linux packages
 ```
+
+## License
+
+EasyAlias is available under the [MIT License](LICENSE).
