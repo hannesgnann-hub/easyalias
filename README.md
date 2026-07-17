@@ -61,6 +61,7 @@ The macOS version can:
 The Windows version can:
 
 - create, edit, and delete Windows command shortcuts
+- add useful suggested Windows commands with one click
 - choose files and folders through the native Windows picker
 - generate `.cmd` files under `~/.easyalias/bin`
 - connect the command folder to the user `PATH`, so aliases work in `cmd.exe`

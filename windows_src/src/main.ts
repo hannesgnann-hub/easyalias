@@ -50,6 +50,13 @@ type AliasForm = {
   customCommand: string;
 };
 
+// Suggestions share the regular form fields so command generation and direct
+// persistence follow exactly the same path as manually created shortcuts.
+type AliasSuggestion = AliasForm & {
+  id: string;
+  description: string;
+};
+
 type PickerTarget = "create" | "edit";
 type PickerKind = "file" | "folder";
 
@@ -69,6 +76,123 @@ const emptyForm: AliasForm = {
   customCommand: ""
 };
 
+// Windows/cmd.exe starter shortcuts. Commands that wrap another batch file use
+// `call`; generic wrappers such as gw also forward all user arguments with %*.
+const aliasSuggestions: AliasSuggestion[] = [
+  {
+    id: "list-details",
+    name: "ll",
+    path: "",
+    action: "custom",
+    customCommand: "dir /a",
+    description: "Detailed file list"
+  },
+  {
+    id: "clear-terminal",
+    name: "c",
+    path: "",
+    action: "custom",
+    customCommand: "cls",
+    description: "Clear the terminal"
+  },
+  {
+    id: "git-status",
+    name: "gs",
+    path: "",
+    action: "custom",
+    customCommand: "git status --short --branch",
+    description: "Compact Git status"
+  },
+  {
+    id: "gradle-wrapper",
+    name: "gw",
+    path: "",
+    action: "custom",
+    customCommand: "call gradlew.bat %*",
+    description: "Run the Gradle wrapper"
+  },
+  {
+    id: "gradle-wrapper-build",
+    name: "gwb",
+    path: "",
+    action: "custom",
+    customCommand: "call gradlew.bat build",
+    description: "Build with Gradle wrapper"
+  },
+  {
+    id: "gradle-wrapper-test",
+    name: "gwtest",
+    path: "",
+    action: "custom",
+    customCommand: "call gradlew.bat test",
+    description: "Run Gradle tests"
+  },
+  {
+    id: "maven-wrapper",
+    name: "mw",
+    path: "",
+    action: "custom",
+    customCommand: "call mvnw.cmd %*",
+    description: "Run the Maven wrapper"
+  },
+  {
+    id: "git-log-graph",
+    name: "glog",
+    path: "",
+    action: "custom",
+    customCommand: "git log --oneline --graph --decorate --all",
+    description: "Compact Git history graph"
+  },
+  {
+    id: "python-server",
+    name: "serve",
+    path: "",
+    action: "custom",
+    customCommand: "python -m http.server",
+    description: "Serve the current folder"
+  },
+  {
+    id: "docker-compose-up",
+    name: "dcu",
+    path: "",
+    action: "custom",
+    customCommand: "docker compose up -d",
+    description: "Start Docker Compose"
+  },
+  {
+    id: "list-ports",
+    name: "ports",
+    path: "",
+    action: "custom",
+    customCommand: "netstat -ano | findstr LISTENING",
+    description: "Show listening TCP ports"
+  },
+  {
+    id: "downloads-folder",
+    name: "downloads",
+    path: "~/Downloads",
+    action: "navigate",
+    customCommand: "",
+    description: "Jump to Downloads"
+  },
+  {
+    id: "open-home",
+    name: "home",
+    path: "~",
+    action: "open",
+    customCommand: "",
+    description: "Open your home folder"
+  },
+  {
+    id: "network-info",
+    name: "netinfo",
+    path: "",
+    action: "custom",
+    customCommand: "ipconfig",
+    description: "Show network configuration"
+  }
+];
+
 // Global UI state. For this prototype we keep state in module-level variables
 // and re-render the app when larger UI structure changes.
 let appState: AppState = {
@@ -82,6 +206,8 @@ let appState: AppState = {
 let form: AliasForm = { ...emptyForm };
 let editForm: AliasForm | null = null;
 let editingId: string | null = null;
+// Suggestions remain out of the main workflow until the user expands them.
+let suggestionsExpanded = false;
 let notice = "";
 let error = "";
 let editError = "";
@@ -95,6 +221,7 @@ if (!app) {
 
 const appElement = app;
 const repoUrl = "https://github.com/hannesgnann-hub/easyalias";
+const redditUrl = "https://www.reddit.com/r/easyalias/";
 
 // Tauri injects this marker only inside the native desktop runtime.
 // Browser preview mode uses localStorage and skips native-only features.
@@ -150,21 +277,23 @@ async function openPathPicker(target: PickerTarget, kind: PickerKind) {
   }
 }
 
-// Footer links need Tauri's opener plugin in the desktop app.
-// A normal target="_blank" link is fine in browser preview, but not reliable in WebView.
-async function openRepository(event: Event) {
+// Static footer links share the opener plugin so both GitHub and Reddit open in
+// the user's system browser instead of inside the Tauri WebView.
+async function openExternalLink(event: Event) {
   event.preventDefault();
+  const anchor = event.currentTarget as HTMLAnchorElement;
+  const targetUrl = anchor.href;
 
   if (!isTauriRuntime()) {
-    window.open(repoUrl, "_blank", "noopener,noreferrer");
+    window.open(targetUrl, "_blank", "noopener,noreferrer");
     return;
   }
 
   try {
     const { openUrl } = await import("@tauri-apps/plugin-opener");
-    await openUrl(repoUrl);
+    await openUrl(targetUrl);
   } catch (openError) {
-    error = `GitHub could not be opened: ${String(openError)}`;
+    error = `Link could not be opened: ${String(openError)}`;
     render();
   }
 }
@@ -323,6 +452,43 @@ function resetForm() {
   form = { ...emptyForm };
   clearMessages();
   render();
+}
+
+function toggleSuggestions() {
+  suggestionsExpanded = !suggestionsExpanded;
+  render();
+}
+
+// Turn one suggestion into a real AliasEntry immediately. The duplicate guard
+// also protects against a second click that arrives while a save is in flight.
+async function useSuggestion(id: string) {
+  const suggestion = aliasSuggestions.find((item) => item.id === id);
+  if (!suggestion) return;
+
+  if (appState.aliases.some((alias) => alias.name === suggestion.name)) {
+    error = `Alias "${suggestion.name}" already exists.`;
+    render();
+    return;
+  }
+
+  const timestamp = nowIso();
+  const nextAlias: AliasEntry = {
+    id: createId(),
+    name: suggestion.name,
+    path: suggestion.path,
+    action: suggestion.action,
+    customCommand: suggestion.action === "custom" ? suggestion.customCommand : undefined,
+    commandPreview: buildCommandPreview(suggestion),
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+
+  appState = {
+    ...appState,
+    aliases: [...appState.aliases, nextAlias]
+  };
+  clearMessages();
+  await saveState();
 }
 
 // Opens the edit modal by copying the persisted alias into temporary editForm state.
@@ -527,6 +693,10 @@ function clearRenderedEditError() {
 // For a larger app, this would be a good candidate to split into smaller render helpers.
 function render() {
   const aliases = [...appState.aliases].sort((a, b) => a.name.localeCompare(b.name));
+  const existingNames = new Set(aliases.map((alias) => alias.name));
+  const availableSuggestions = aliasSuggestions.filter(
+    (suggestion) => !existingNames.has(suggestion.name)
+  );
 
   appElement.innerHTML = `
     <section class="shell">
@@ -564,6 +734,53 @@ function render() {
 
       ${notice ? `<p class="notice">${notice}</p>` : ""}
       ${error ? `<p class="error">${error}</p>` : ""}
+
+      ${
+        availableSuggestions.length
+          ? `<section class="suggestions" data-expanded="${suggestionsExpanded}" aria-labelledby="suggestions-title">
+              <div class="suggestions-header">
+                <div class="suggestions-heading">
+                  <h2 id="suggestions-title">Suggestions</h2>
+                  <span>${availableSuggestions.length} available</span>
+                </div>
+                <button
+                  class="suggestions-toggle"
+                  type="button"
+                  title="${suggestionsExpanded ? "Hide suggestions" : "Show suggestions"}"
+                  aria-label="${suggestionsExpanded ? "Hide suggestions" : "Show suggestions"}"
+                  aria-expanded="${suggestionsExpanded}"
+                  aria-controls="suggestion-list"
+                  data-action="toggle-suggestions"
+                ><span aria-hidden="true">${suggestionsExpanded ? "⌄" : "›"}</span></button>
+              </div>
+              ${
+                suggestionsExpanded
+                  ? `<div class="suggestion-grid" id="suggestion-list">
+                      ${availableSuggestions
+                        .map(
+                          (suggestion) => `
+                            <article class="suggestion-item">
+                              <div class="suggestion-copy">
+                                <strong>${escapeHtml(suggestion.name)}</strong>
+                                <span>${escapeHtml(suggestion.description)}</span>
+                                <code>${escapeHtml(buildCommandPreview(suggestion))}</code>
+                              </div>
+                              <button
+                                class="suggestion-button"
+                                type="button"
+                                data-action="use-suggestion"
+                                data-suggestion-id="${suggestion.id}"
+                              >Use</button>
+                            </article>
+                          `
+                        )
+                        .join("")}
+                    </div>`
+                  : ""
+              }
+            </section>`
+          : ""
+      }
 
       <section class="workspace">
         <form class="editor" id="alias-form">
@@ -648,8 +865,12 @@ function render() {
       ${renderEditModal()}
 
       <footer class="app-footer">
-        <a href="${repoUrl}" target="_blank" rel="noreferrer" data-action="open-repo">
+        <a href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>
           © Hannes Gnann
+        </a>
+        <span aria-hidden="true">-</span>
+        <a href="${redditUrl}" target="_blank" rel="noreferrer" data-external-link>
+          Reddit
         </a>
       </footer>
     </section>
@@ -730,7 +951,9 @@ function renderEditModal() {
 function bindEvents() {
   document.querySelector<HTMLFormElement>("#alias-form")?.addEventListener("submit", upsertAlias);
   document.querySelector<HTMLFormElement>("#edit-form")?.addEventListener("submit", updateAlias);
-  document.querySelector<HTMLAnchorElement>('[data-action="open-repo"]')?.addEventListener("click", openRepository);
+  document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => {
+    link.addEventListener("click", openExternalLink);
+  });
 
   document.querySelector<HTMLInputElement>('input[name="name"]')?.addEventListener("input", (event) => {
     updateForm("name", (event.target as HTMLInputElement).value);
@@ -772,6 +995,11 @@ function bindEvents() {
       if (action === "reset") resetForm();
       if (action === "edit" && id) openEditModal(id);
       if (action === "close-edit") closeEditModal();
+      if (action === "toggle-suggestions") toggleSuggestions();
+      if (action === "use-suggestion") {
+        const suggestionId = button.dataset.suggestionId;
+        if (suggestionId) void useSuggestion(suggestionId);
+      }
       if (action === "pick-path") {
         const target = button.dataset.target;
         const kind = button.dataset.kind;

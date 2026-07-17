@@ -7,6 +7,7 @@ The app uses web technology for the interface, but runs as a local Windows deskt
 ## Highlights
 
 - create, edit, and delete shortcuts through a UI
+- expand optional Windows suggestions and add them with one click
 - choose an action from a dropdown
 - preview the generated `cmd.exe` command before saving
 - choose files and folders through the native Windows picker
@@ -208,13 +209,26 @@ A shortcut is stored like this:
 | Maven Build | `cd /d "<path>" && call mvn clean package` |
 | Custom Command | user-provided cmd/batch command |
 
+## Suggested Shortcuts
+
+The optional Suggestions section starts collapsed. Clicking `Use` immediately creates the matching `.cmd` shortcut and removes that name from the available suggestions.
+
+Suggestions include common cmd, Git, Gradle Wrapper, Maven Wrapper, Docker, networking, and folder commands. Wrapper suggestions use Windows batch syntax such as:
+
+```cmd
+call gradlew.bat %*
+call mvnw.cmd %*
+```
+
+`%*` forwards additional arguments, so `gw clean` runs `gradlew.bat clean`.
+
 ## Documentation Layout
 
 EasyAlias has three documentation entry points:
 
 | Document | Purpose |
 | --- | --- |
-| `../README.md` | shared project overview for macOS and Windows |
+| `../README.md` | shared project overview for macOS, Windows, and Linux |
 | `../mac_src/README.md` | macOS-specific usage and zsh behavior |
 | `README.md` | Windows-specific usage and cmd/PATH behavior |
 | `docs/ARCHITECTURE.md` | Windows technical architecture |
