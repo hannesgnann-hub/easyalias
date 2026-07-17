@@ -7,6 +7,7 @@ It detects bash or zsh, keeps the alias data in its own directory, and connects 
 ## Highlights
 
 - create, edit, and delete aliases through a UI
+- expand optional Linux suggestions and add them with one click
 - choose files and folders with the native Linux picker
 - preview the generated shell command before saving
 - store `createdAt` and `updatedAt` for every alias
@@ -147,6 +148,14 @@ The Run action expects the selected file to be executable. Make a script executa
 ```bash
 chmod +x /path/to/script.sh
 ```
+
+## Suggested Aliases
+
+The optional Suggestions section starts collapsed. Clicking `Use` immediately saves the alias and removes that name from the available suggestions.
+
+Suggestions include common shell, Git, Gradle Wrapper, Maven Wrapper, Docker, networking, and folder commands. Examples include `ll`, `gs`, `gw`, `mw`, `glog`, `dcu`, `ports`, and `downloads`.
+
+Wrapper aliases still accept additional arguments from bash or zsh. For example, `gw build` expands to `./gradlew build`, while `mw test` expands to `./mvnw test`.
 
 ## Build And Export
 
