@@ -44,6 +44,13 @@ type AliasForm = {
   customCommand: string;
 };
 
+// Suggestions use the same fields as the create form and add display metadata.
+// Keeping them structured means previews and validation use the normal app logic.
+type AliasSuggestion = AliasForm & {
+  id: string;
+  description: string;
+};
+
 type PickerTarget = "create" | "edit";
 type PickerKind = "file" | "folder";
 
@@ -63,6 +70,59 @@ const emptyForm: AliasForm = {
   customCommand: ""
 };
 
+// Conservative macOS defaults that are useful without modifying or deleting data.
+// A suggestion only pre-fills the form; the user still reviews and saves it.
+const aliasSuggestions: AliasSuggestion[] = [
+  {
+    id: "list-details",
+    name: "ll",
+    path: "",
+    action: "custom",
+    customCommand: "ls -lah",
+    description: "Detailed file list"
+  },
+  {
+    id: "git-status",
+    name: "gs",
+    path: "",
+    action: "custom",
+    customCommand: "git status --short --branch",
+    description: "Compact Git status"
+  },
+  {
+    id: "list-ports",
+    name: "ports",
+    path: "",
+    action: "custom",
+    customCommand: "lsof -nP -iTCP -sTCP:LISTEN",
+    description: "Show listening TCP ports"
+  },
+  {
+    id: "downloads-folder",
+    name: "downloads",
+    path: "~/Downloads",
+    action: "navigate",
+    customCommand: "",
+    description: "Jump to Downloads"
+  },
+  {
+    id: "open-finder",
+    name: "finder",
+    path: "~",
+    action: "open",
+    customCommand: "",
+    description: "Open your home folder"
+  },
+  {
+    id: "reload-zsh",
+    name: "reloadzsh",
+    path: "",
+    action: "custom",
+    customCommand: "source ~/.zshrc",
+    description: "Reload zsh configuration"
+  }
+];
+
 // Global UI state. For this prototype we keep state in module-level variables
 // and re-render the app when larger UI structure changes.
 let appState: AppState = {
@@ -76,6 +136,9 @@ let appState: AppState = {
 let form: AliasForm = { ...emptyForm };
 let editForm: AliasForm | null = null;
 let editingId: string | null = null;
+// Suggestions start collapsed so they do not compete with the main workflow.
+// The state remains stable across normal renders until the user toggles it.
+let suggestionsExpanded = false;
 let notice = "";
 let error = "";
 let editError = "";
@@ -298,6 +361,34 @@ function resetForm() {
   render();
 }
 
+function toggleSuggestions() {
+  suggestionsExpanded = !suggestionsExpanded;
+  render();
+}
+
+// Copy a suggestion into the regular create form. Nothing is persisted until
+// the user presses Add, so every suggested name and command remains editable.
+function useSuggestion(id: string) {
+  const suggestion = aliasSuggestions.find((item) => item.id === id);
+  if (!suggestion) return;
+
+  form = {
+    name: suggestion.name,
+    path: suggestion.path,
+    action: suggestion.action,
+    customCommand: suggestion.customCommand
+  };
+  clearMessages();
+  render();
+
+  // Select the proposed name so it is easy to replace without extra clicks.
+  requestAnimationFrame(() => {
+    const nameInput = document.querySelector<HTMLInputElement>('input[name="name"]');
+    nameInput?.focus();
+    nameInput?.select();
+  });
+}
+
 // Opens the edit modal by copying the persisted alias into temporary editForm state.
 // Changes are not saved until the modal form is submitted.
 function openEditModal(id: string) {
@@ -500,6 +591,10 @@ function clearRenderedEditError() {
 // For a larger app, this would be a good candidate to split into smaller render helpers.
 function render() {
   const aliases = [...appState.aliases].sort((a, b) => a.name.localeCompare(b.name));
+  const existingNames = new Set(aliases.map((alias) => alias.name));
+  const availableSuggestions = aliasSuggestions.filter(
+    (suggestion) => !existingNames.has(suggestion.name)
+  );
 
   appElement.innerHTML = `
     <section class="shell">
@@ -537,6 +632,53 @@ function render() {
 
       ${notice ? `<p class="notice">${notice}</p>` : ""}
       ${error ? `<p class="error">${error}</p>` : ""}
+
+      ${
+        availableSuggestions.length
+          ? `<section class="suggestions" data-expanded="${suggestionsExpanded}" aria-labelledby="suggestions-title">
+              <div class="suggestions-header">
+                <div class="suggestions-heading">
+                  <h2 id="suggestions-title">Suggestions</h2>
+                  <span>${availableSuggestions.length} available</span>
+                </div>
+                <button
+                  class="suggestions-toggle"
+                  type="button"
+                  title="${suggestionsExpanded ? "Hide suggestions" : "Show suggestions"}"
+                  aria-label="${suggestionsExpanded ? "Hide suggestions" : "Show suggestions"}"
+                  aria-expanded="${suggestionsExpanded}"
+                  aria-controls="suggestion-list"
+                  data-action="toggle-suggestions"
+                ><span aria-hidden="true">${suggestionsExpanded ? "⌄" : "›"}</span></button>
+              </div>
+              ${
+                suggestionsExpanded
+                  ? `<div class="suggestion-grid" id="suggestion-list">
+                      ${availableSuggestions
+                        .map(
+                          (suggestion) => `
+                            <article class="suggestion-item">
+                              <div class="suggestion-copy">
+                                <strong>${escapeHtml(suggestion.name)}</strong>
+                                <span>${escapeHtml(suggestion.description)}</span>
+                                <code>${escapeHtml(buildCommandPreview(suggestion))}</code>
+                              </div>
+                              <button
+                                class="suggestion-button"
+                                type="button"
+                                data-action="use-suggestion"
+                                data-suggestion-id="${suggestion.id}"
+                              >Use</button>
+                            </article>
+                          `
+                        )
+                        .join("")}
+                    </div>`
+                  : ""
+              }
+            </section>`
+          : ""
+      }
 
       <section class="workspace">
         <form class="editor" id="alias-form">
@@ -745,6 +887,11 @@ function bindEvents() {
       if (action === "reset") resetForm();
       if (action === "edit" && id) openEditModal(id);
       if (action === "close-edit") closeEditModal();
+      if (action === "toggle-suggestions") toggleSuggestions();
+      if (action === "use-suggestion") {
+        const suggestionId = button.dataset.suggestionId;
+        if (suggestionId) useSuggestion(suggestionId);
+      }
       if (action === "pick-path") {
         const target = button.dataset.target;
         const kind = button.dataset.kind;

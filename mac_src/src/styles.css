@@ -69,7 +69,8 @@ h2 {
 .primary-button,
 .icon-button,
 .edit-button,
-.picker-button {
+.picker-button,
+.suggestion-button {
   border: 0;
   border-radius: 8px;
   font-weight: 800;
@@ -239,8 +240,117 @@ textarea:focus {
 
 .picker-button:hover,
 .edit-button:hover,
+.suggestion-button:hover,
 .ghost-button:hover {
   filter: brightness(0.97);
+}
+
+.suggestions {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border-top: 1px solid #b9d9cf;
+  border-bottom: 1px solid #b9d9cf;
+  background: #f4faf7;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.suggestions[data-expanded="false"] {
+  border-color: #9fcfc0;
+  background: #e3f5ee;
+}
+
+.suggestions-heading h2 {
+  color: #17423d;
+}
+
+.suggestions-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.suggestions-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.suggestions-heading span,
+.suggestion-copy span {
+  color: #66736f;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.suggestions[data-expanded="false"] .suggestions-heading span {
+  color: #3f6f64;
+}
+
+.suggestions-toggle {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 8px;
+  color: #20302c;
+  background: #dfe8e4;
+  font-size: 1.35rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.suggestions-toggle:hover {
+  filter: brightness(0.97);
+}
+
+.suggestions-toggle:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.2);
+  outline-offset: 2px;
+}
+
+.suggestion-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.suggestion-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+  min-width: 0;
+  border: 1px solid #d5dfdb;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+}
+
+.suggestion-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.suggestion-copy strong {
+  font-size: 0.92rem;
+}
+
+.suggestion-copy code {
+  color: #29413b;
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.suggestion-button {
+  min-width: 52px;
+  padding: 0 12px;
+  color: #17423d;
+  background: #d9f4ef;
+  font-size: 0.78rem;
 }
 
 .preview {
@@ -405,7 +515,8 @@ textarea:focus {
   }
 
   .status-grid,
-  .workspace {
+  .workspace,
+  .suggestion-grid {
     grid-template-columns: 1fr;
   }
 
