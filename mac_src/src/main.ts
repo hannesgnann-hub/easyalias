@@ -208,6 +208,7 @@ if (!app) {
 
 const appElement = app;
 const repoUrl = "https://github.com/hannesgnann-hub/easyalias";
+const redditUrl = "https://www.reddit.com/r/easyalias/";
 
 // Tauri injects this marker only inside the native desktop runtime.
 // Browser preview mode uses localStorage and skips native-only features.
@@ -263,21 +264,23 @@ async function openPathPicker(target: PickerTarget, kind: PickerKind) {
   }
 }
 
-// Footer links need Tauri's opener plugin in the desktop app.
-// A normal target="_blank" link is fine in browser preview, but not reliable in WebView.
-async function openRepository(event: Event) {
+// Footer links need Tauri's opener plugin in the desktop app. Reading the URL
+// from the clicked static anchor lets GitHub and Reddit share one safe handler.
+async function openExternalLink(event: Event) {
   event.preventDefault();
+  const anchor = event.currentTarget as HTMLAnchorElement;
+  const targetUrl = anchor.href;
 
   if (!isTauriRuntime()) {
-    window.open(repoUrl, "_blank", "noopener,noreferrer");
+    window.open(targetUrl, "_blank", "noopener,noreferrer");
     return;
   }
 
   try {
     const { openUrl } = await import("@tauri-apps/plugin-opener");
-    await openUrl(repoUrl);
+    await openUrl(targetUrl);
   } catch (openError) {
-    error = `GitHub could not be opened: ${String(openError)}`;
+    error = `Link could not be opened: ${String(openError)}`;
     render();
   }
 }
@@ -828,8 +831,12 @@ function render() {
       ${renderEditModal()}
 
       <footer class="app-footer">
-        <a href="${repoUrl}" target="_blank" rel="noreferrer" data-action="open-repo">
+        <a href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>
           © Hannes Gnann
+        </a>
+        <span aria-hidden="true">-</span>
+        <a href="${redditUrl}" target="_blank" rel="noreferrer" data-external-link>
+          Reddit
         </a>
       </footer>
     </section>
@@ -910,7 +917,9 @@ function renderEditModal() {
 function bindEvents() {
   document.querySelector<HTMLFormElement>("#alias-form")?.addEventListener("submit", upsertAlias);
   document.querySelector<HTMLFormElement>("#edit-form")?.addEventListener("submit", updateAlias);
-  document.querySelector<HTMLAnchorElement>('[data-action="open-repo"]')?.addEventListener("click", openRepository);
+  document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => {
+    link.addEventListener("click", openExternalLink);
+  });
 
   document.querySelector<HTMLInputElement>('input[name="name"]')?.addEventListener("input", (event) => {
     updateForm("name", (event.target as HTMLInputElement).value);
