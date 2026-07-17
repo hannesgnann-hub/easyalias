@@ -70,6 +70,7 @@ The Windows version can:
 The Linux version can:
 
 - create, edit, and delete bash/zsh aliases
+- add useful suggested Linux aliases with one click
 - choose files and folders through the native Linux picker
 - detect bash or zsh from `$SHELL`
 - generate `~/.easyalias/aliases.sh`

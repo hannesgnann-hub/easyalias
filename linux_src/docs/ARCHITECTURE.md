@@ -6,12 +6,12 @@ EasyAlias Linux combines a TypeScript/Vite interface with a Tauri 2 Rust backend
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | forms, validation, previews, edit modal, Tauri calls |
+| Frontend | `src/main.ts` | forms, suggestions, validation, previews, edit modal, Tauri calls |
 | Styling | `src/styles.css` | responsive desktop interface |
 | Backend | `src-tauri/src/main.rs` | shell detection, setup, JSON and alias file writes |
 | Bundle config | `src-tauri/tauri.conf.json` | Linux window, permissions, package targets |
 | Dialog plugin | `@tauri-apps/plugin-dialog` | native file/folder picker |
-| Opener plugin | `@tauri-apps/plugin-opener` | repository link in the system browser |
+| Opener plugin | `@tauri-apps/plugin-opener` | GitHub and Reddit links in the system browser |
 
 ```mermaid
 flowchart LR
@@ -75,11 +75,11 @@ Each alias is persisted as structured JSON:
 
 ## Save Flow
 
-Create, edit, and delete operations all end in `save_aliases()`.
+Create, edit, delete, and one-click suggestion operations all end in `save_aliases()`.
 
 ```mermaid
 flowchart TD
-  Change["Create, edit, or delete"] --> Validate["Frontend validation"]
+  Change["Create, edit, delete, or use suggestion"] --> Validate["Frontend validation"]
   Validate --> Preview["Build Linux command preview"]
   Preview --> Invoke["save_aliases entries"]
   Invoke --> BackendValidate["Rust validation"]
@@ -98,6 +98,8 @@ The generated file looks like:
 alias project='cd "$HOME/Desktop/projects/example"'
 alias notes='xdg-open "$HOME/Documents/notes.txt"'
 ```
+
+Suggestions use the same `AliasEntry` model and command-preview generator as manually entered aliases. Already-used names are filtered out in the frontend, and clicking `Use` persists a complete entry immediately.
 
 ## Shell Safety Boundaries
 
