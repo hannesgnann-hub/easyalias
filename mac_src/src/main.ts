@@ -24,6 +24,15 @@ type AliasEntry = {
   updatedAt: string;
 };
 
+// The backend exposes only conservative, single-line aliases as import choices.
+// lineNumber helps users locate a command in ~/.zshrc before confirming it.
+type ZshrcAliasCandidate = {
+  id: string;
+  name: string;
+  command: string;
+  lineNumber: number;
+};
+
 // AppState mirrors what the Rust backend returns to the frontend.
 // The file paths are included so the UI can show where EasyAlias stores data.
 type AppState = {
@@ -32,6 +41,13 @@ type AppState = {
   aliasesFile: string;
   sourceLine: string;
   zshrcSourcePresent: boolean;
+  importCandidates: ZshrcAliasCandidate[];
+};
+
+type ImportResult = {
+  state: AppState;
+  importedCount: number;
+  backupFile: string;
 };
 
 // AliasForm is the temporary state for either the create form or the edit modal.
@@ -186,7 +202,8 @@ let appState: AppState = {
   configFile: "~/.easyalias/config.json",
   aliasesFile: "~/.easyalias/aliases.zsh",
   sourceLine: "source ~/.easyalias/aliases.zsh",
-  zshrcSourcePresent: false
+  zshrcSourcePresent: false,
+  importCandidates: []
 };
 
 let form: AliasForm = { ...emptyForm };
@@ -195,9 +212,14 @@ let editingId: string | null = null;
 // Suggestions start collapsed so they do not compete with the main workflow.
 // The state remains stable across normal renders until the user toggles it.
 let suggestionsExpanded = false;
+// Import candidates are selected by default so the common first-run path is a
+// review followed by one confirmation, while every alias can still be excluded.
+let selectedImportIds = new Set<string>();
+let importBusy = false;
 let notice = "";
 let error = "";
 let editError = "";
+let importError = "";
 
 // Vite mounts the app into <main id="app"> from index.html.
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -363,6 +385,7 @@ async function loadState() {
   if (isTauriRuntime()) {
     try {
       appState = await invokeCommand<AppState>("load_aliases");
+      selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
       render();
       return;
     } catch (loadError) {
@@ -372,7 +395,11 @@ async function loadState() {
 
   const saved = localStorage.getItem("easyalias-state");
   if (saved) {
-    appState = JSON.parse(saved) as AppState;
+    appState = {
+      ...appState,
+      ...(JSON.parse(saved) as Partial<AppState>),
+      importCandidates: []
+    };
   }
 
   render();
@@ -422,6 +449,58 @@ function resetForm() {
 
 function toggleSuggestions() {
   suggestionsExpanded = !suggestionsExpanded;
+  render();
+}
+
+// Skipping writes a small marker in ~/.easyalias so the first-run question is
+// not shown again. It does not remove or change any existing alias line.
+async function dismissZshrcImport() {
+  if (importBusy) return;
+  importBusy = true;
+  importError = "";
+  render();
+
+  try {
+    appState = await invokeCommand<AppState>("dismiss_zshrc_import");
+    selectedImportIds.clear();
+    notice = "Existing aliases were left unchanged in ~/.zshrc.";
+  } catch (dismissError) {
+    importError = String(dismissError);
+  }
+
+  importBusy = false;
+  render();
+}
+
+// The Rust command rescans ~/.zshrc, creates the backup, moves only the selected
+// lines, and writes the matching AliasEntry objects as one coordinated action.
+async function importSelectedZshrcAliases(event: SubmitEvent) {
+  event.preventDefault();
+  if (importBusy) return;
+  importError = "";
+
+  if (selectedImportIds.size === 0) {
+    importError = "Select at least one alias to import.";
+    render();
+    return;
+  }
+
+  importBusy = true;
+  render();
+
+  try {
+    const result = await invokeCommand<ImportResult>("import_zshrc_aliases", {
+      selectedIds: [...selectedImportIds],
+      timestamp: nowIso()
+    });
+    appState = result.state;
+    selectedImportIds.clear();
+    notice = `${result.importedCount} aliases imported. Backup: ${result.backupFile}`;
+  } catch (importFailure) {
+    importError = String(importFailure);
+  }
+
+  importBusy = false;
   render();
 }
 
@@ -828,6 +907,7 @@ function render() {
         </section>
       </section>
 
+      ${renderImportModal()}
       ${renderEditModal()}
 
       <footer class="app-footer">
@@ -843,6 +923,77 @@ function render() {
   `;
 
   bindEvents();
+}
+
+// The migration dialog is shown only when the backend reports candidates from
+// a fresh installation. The modal makes the filesystem change explicit and
+// keeps all candidates individually reviewable.
+function renderImportModal() {
+  const candidates = appState.importCandidates;
+  if (!candidates.length) return "";
+
+  const allSelected = candidates.every((candidate) => selectedImportIds.has(candidate.id));
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <form class="modal-card import-card" id="import-form" role="dialog" aria-modal="true" aria-labelledby="import-title">
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">First Start</p>
+            <h2 id="import-title">Existing aliases found</h2>
+          </div>
+          <span class="import-count">${candidates.length} found</span>
+        </div>
+
+        <p class="import-intro">
+          Select the aliases EasyAlias should manage. Imported entries become Custom Commands and are removed from their original lines only after a backup is created.
+        </p>
+
+        ${importError ? `<p class="modal-error">${escapeHtml(importError)}</p>` : ""}
+
+        <label class="import-select-all">
+          <input type="checkbox" name="import-all" ${allSelected ? "checked" : ""} ${importBusy ? "disabled" : ""} />
+          <span>Select all</span>
+        </label>
+
+        <div class="import-list" aria-label="Aliases available for import">
+          ${candidates
+            .map(
+              (candidate) => `
+                <label class="import-row">
+                  <input
+                    type="checkbox"
+                    name="import-candidate"
+                    value="${escapeHtml(candidate.id)}"
+                    ${selectedImportIds.has(candidate.id) ? "checked" : ""}
+                    ${importBusy ? "disabled" : ""}
+                  />
+                  <span class="import-alias-copy">
+                    <span class="import-alias-meta">
+                      <strong>${escapeHtml(candidate.name)}</strong>
+                      <span>Line ${candidate.lineNumber}</span>
+                    </span>
+                    <code>${escapeHtml(candidate.command)}</code>
+                  </span>
+                </label>
+              `
+            )
+            .join("")}
+        </div>
+
+        <p class="import-safety">
+          EasyAlias will create a timestamped <code>~/.zshrc.easyalias-backup-…</code> before changing the selected lines.
+        </p>
+
+        <div class="modal-actions import-actions">
+          <button class="ghost-button" type="button" data-action="dismiss-import" ${importBusy ? "disabled" : ""}>Skip Import</button>
+          <button class="primary-button" type="submit" ${selectedImportIds.size && !importBusy ? "" : "disabled"}>
+            ${importBusy ? "Working..." : `Import Selected (${selectedImportIds.size})`}
+          </button>
+        </div>
+      </form>
+    </section>
+  `;
 }
 
 // Renders the modal only when editForm/editingId are set.
@@ -917,6 +1068,7 @@ function renderEditModal() {
 function bindEvents() {
   document.querySelector<HTMLFormElement>("#alias-form")?.addEventListener("submit", upsertAlias);
   document.querySelector<HTMLFormElement>("#edit-form")?.addEventListener("submit", updateAlias);
+  document.querySelector<HTMLFormElement>("#import-form")?.addEventListener("submit", importSelectedZshrcAliases);
   document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => {
     link.addEventListener("click", openExternalLink);
   });
@@ -953,12 +1105,32 @@ function bindEvents() {
     updateEditForm("customCommand", (event.target as HTMLTextAreaElement).value);
   });
 
+  document.querySelector<HTMLInputElement>('input[name="import-all"]')?.addEventListener("change", (event) => {
+    const checked = (event.target as HTMLInputElement).checked;
+    selectedImportIds = checked
+      ? new Set(appState.importCandidates.map((candidate) => candidate.id))
+      : new Set();
+    render();
+  });
+
+  document.querySelectorAll<HTMLInputElement>('input[name="import-candidate"]').forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        selectedImportIds.add(checkbox.value);
+      } else {
+        selectedImportIds.delete(checkbox.value);
+      }
+      render();
+    });
+  });
+
   document.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const action = button.dataset.action;
       const id = button.dataset.id;
 
       if (action === "reset") resetForm();
+      if (action === "dismiss-import") void dismissZshrcImport();
       if (action === "edit" && id) openEditModal(id);
       if (action === "close-edit") closeEditModal();
       if (action === "toggle-suggestions") toggleSuggestions();
