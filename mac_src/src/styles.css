@@ -486,6 +486,7 @@ textarea:focus {
 .app-footer {
   display: flex;
   justify-content: center;
+  gap: 5px;
   margin-top: 28px;
   color: #66736f;
   font-size: 0.78rem;
