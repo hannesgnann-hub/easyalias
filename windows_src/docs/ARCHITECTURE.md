@@ -13,7 +13,7 @@ EasyAlias consists of a small frontend and a Tauri/Rust backend:
 | Backend | `src-tauri/src/main.rs` | local file read/write and PATH setup |
 | Tauri Config | `src-tauri/tauri.conf.json` | app window, build, Windows installer |
 | Tauri Dialog Plugin | `@tauri-apps/plugin-dialog` | native file/folder picker |
-| Tauri Opener Plugin | `@tauri-apps/plugin-opener` | open GitHub in the system browser |
+| Tauri Opener Plugin | `@tauri-apps/plugin-opener` | open GitHub and Reddit in the system browser |
 
 The core idea: EasyAlias creates one `.cmd` file per alias and places those command files in a dedicated folder that is added to the user's `PATH`.
 
@@ -136,6 +136,7 @@ Main responsibilities:
 - manage form values
 - validate shortcut names
 - update the cmd command preview live
+- persist optional Windows shortcut suggestions with one click
 - display, edit, and delete shortcuts
 - call Tauri commands when the app runs natively
 
