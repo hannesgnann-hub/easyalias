@@ -45,7 +45,7 @@ type AliasForm = {
 };
 
 // Suggestions use the same fields as the create form and add display metadata.
-// Keeping them structured means previews and validation use the normal app logic.
+// Keeping them structured means direct saves and previews use the normal app logic.
 type AliasSuggestion = AliasForm & {
   id: string;
   description: string;
@@ -71,7 +71,7 @@ const emptyForm: AliasForm = {
 };
 
 // Conservative macOS defaults that are useful without modifying or deleting data.
-// A suggestion only pre-fills the form; the user still reviews and saves it.
+// Clicking Use turns one of these templates directly into a persisted AliasEntry.
 const aliasSuggestions: AliasSuggestion[] = [
   {
     id: "list-details",
@@ -88,6 +88,62 @@ const aliasSuggestions: AliasSuggestion[] = [
     action: "custom",
     customCommand: "git status --short --branch",
     description: "Compact Git status"
+  },
+  {
+    id: "gradle-wrapper",
+    name: "gw",
+    path: "",
+    action: "custom",
+    customCommand: "./gradlew",
+    description: "Run the Gradle wrapper"
+  },
+  {
+    id: "gradle-wrapper-build",
+    name: "gwb",
+    path: "",
+    action: "custom",
+    customCommand: "./gradlew build",
+    description: "Build with Gradle wrapper"
+  },
+  {
+    id: "gradle-wrapper-test",
+    name: "gwtest",
+    path: "",
+    action: "custom",
+    customCommand: "./gradlew test",
+    description: "Run Gradle tests"
+  },
+  {
+    id: "maven-wrapper",
+    name: "mvnw",
+    path: "",
+    action: "custom",
+    customCommand: "./mvnw",
+    description: "Run the Maven wrapper"
+  },
+  {
+    id: "git-log-graph",
+    name: "glog",
+    path: "",
+    action: "custom",
+    customCommand: "git log --oneline --graph --decorate --all",
+    description: "Compact Git history graph"
+  },
+  {
+    id: "python-server",
+    name: "serve",
+    path: "",
+    action: "custom",
+    customCommand: "python3 -m http.server",
+    description: "Serve the current folder"
+  },
+  {
+    id: "docker-compose-up",
+    name: "dcu",
+    path: "",
+    action: "custom",
+    customCommand: "docker compose up -d",
+    description: "Start Docker Compose"
   },
   {
     id: "list-ports",
@@ -366,27 +422,36 @@ function toggleSuggestions() {
   render();
 }
 
-// Copy a suggestion into the regular create form. Nothing is persisted until
-// the user presses Add, so every suggested name and command remains editable.
-function useSuggestion(id: string) {
+// Save a suggestion immediately. Suggestions with an existing alias name are
+// hidden in the UI, while the duplicate check also protects against stale clicks.
+async function useSuggestion(id: string) {
   const suggestion = aliasSuggestions.find((item) => item.id === id);
   if (!suggestion) return;
 
-  form = {
+  if (appState.aliases.some((alias) => alias.name === suggestion.name)) {
+    error = `Alias "${suggestion.name}" already exists.`;
+    render();
+    return;
+  }
+
+  const timestamp = nowIso();
+  const nextAlias: AliasEntry = {
+    id: createId(),
     name: suggestion.name,
     path: suggestion.path,
     action: suggestion.action,
-    customCommand: suggestion.customCommand
+    customCommand: suggestion.action === "custom" ? suggestion.customCommand : undefined,
+    commandPreview: buildCommandPreview(suggestion),
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+
+  appState = {
+    ...appState,
+    aliases: [...appState.aliases, nextAlias]
   };
   clearMessages();
-  render();
-
-  // Select the proposed name so it is easy to replace without extra clicks.
-  requestAnimationFrame(() => {
-    const nameInput = document.querySelector<HTMLInputElement>('input[name="name"]');
-    nameInput?.focus();
-    nameInput?.select();
-  });
+  await saveState();
 }
 
 // Opens the edit modal by copying the persisted alias into temporary editForm state.
@@ -890,7 +955,7 @@ function bindEvents() {
       if (action === "toggle-suggestions") toggleSuggestions();
       if (action === "use-suggestion") {
         const suggestionId = button.dataset.suggestionId;
-        if (suggestionId) useSuggestion(suggestionId);
+        if (suggestionId) void useSuggestion(suggestionId);
       }
       if (action === "pick-path") {
         const target = button.dataset.target;

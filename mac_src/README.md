@@ -7,7 +7,7 @@ The app uses web technology for the interface, but runs as a local macOS desktop
 ## Highlights
 
 - create, edit, and delete aliases through a UI
-- expand optional macOS alias suggestions and pre-fill them before saving
+- expand optional macOS alias suggestions and add them with one click
 - choose an action from a dropdown
 - preview the generated shell command before saving
 - choose files and folders through the native macOS picker
