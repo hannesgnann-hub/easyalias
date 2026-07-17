@@ -8,9 +8,9 @@ EasyAlias consists of a small frontend and a Tauri/Rust backend:
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | UI, form state, command preview |
+| Frontend | `src/main.ts` | UI, form state, first-run import dialog, command preview |
 | Styling | `src/styles.css` | layout and visual design |
-| Backend | `src-tauri/src/main.rs` | local file read/write logic |
+| Backend | `src-tauri/src/main.rs` | `.zshrc` detection, backup, migration, and local file writes |
 | Tauri Config | `src-tauri/tauri.conf.json` | app window, build, bundle |
 | Tauri Dialog Plugin | `@tauri-apps/plugin-dialog` | native file/folder picker |
 
@@ -91,14 +91,17 @@ flowchart TD
 | --- | --- | --- |
 | `~/.easyalias/config.json` | structured alias data for the UI | EasyAlias |
 | `~/.easyalias/aliases.zsh` | generated zsh aliases | EasyAlias |
-| `~/.zshrc` | contains only the source line and app shortcut | user + EasyAlias setup |
+| `~/.easyalias/.zshrc-import-v1` | records that the first-run import prompt was handled | EasyAlias |
+| `~/.zshrc.easyalias-backup-*` | timestamped copy created before an import | user backup |
+| `~/.zshrc` | user configuration plus EasyAlias source/shortcut lines and confirmed import markers | user + EasyAlias setup |
 
 On first Tauri startup, the backend ensures:
 
 1. `~/.easyalias/` exists.
-2. `~/.easyalias/aliases.zsh` exists.
-3. `~/.zshrc` contains `source ~/.easyalias/aliases.zsh`.
-4. `~/.zshrc` contains `alias easya='open /Applications/EasyAlias.app'` if `easya` does not already exist.
+2. Existing safe one-line aliases are detected before EasyAlias appends its own lines.
+3. `~/.easyalias/aliases.zsh` exists.
+4. `~/.zshrc` contains `source ~/.easyalias/aliases.zsh`.
+5. `~/.zshrc` contains `alias easya='open /Applications/EasyAlias.app'` if `easya` does not already exist.
 
 ```mermaid
 sequenceDiagram
@@ -110,6 +113,7 @@ sequenceDiagram
 
   UI->>Rust: load_aliases()
   Rust->>Dir: create_dir_all()
+  Rust->>Zshrc: scan simple alias lines as text
   Rust->>AliasFile: create if missing
   Rust->>Zshrc: check source line
   Rust->>Zshrc: append source if missing
@@ -132,6 +136,7 @@ Main responsibilities:
 - validate alias names
 - update the command preview live
 - persist safe macOS suggestions directly with one click
+- review and select first-run `.zshrc` import candidates
 - display, edit, and delete aliases
 - call Tauri commands when the app runs natively
 
@@ -180,11 +185,13 @@ stateDiagram-v2
 
 ## Backend
 
-The Tauri backend currently exposes two commands:
+The Tauri backend exposes four commands:
 
 ```rust
 load_aliases()
 save_aliases(aliases)
+dismiss_zshrc_import()
+import_zshrc_aliases(selected_ids, timestamp)
 ```
 
 `load_aliases` handles startup setup:
@@ -199,6 +206,8 @@ save_aliases(aliases)
 
 - `config.json` as the data source for the UI
 - `aliases.zsh` as the generated shell file
+
+`import_zshrc_aliases` rescans the file, verifies the selected line ids, creates a timestamped backup, writes imported Custom Commands, and replaces only confirmed source lines with zsh no-op markers. The scanner never sources or executes `~/.zshrc`.
 
 ```mermaid
 sequenceDiagram
@@ -269,13 +278,14 @@ Important boundaries:
 - Custom commands are real shell commands.
 - The generated `aliases.zsh` is app output and should not be edited manually.
 - Standard paths are wrapped in double quotes.
-- Existing aliases from `~/.zshrc` are not imported yet.
+- First-run import handles only unindented, one-line aliases with one assignment.
+- Alias options, nested declarations, repeated names, malformed lines, and multiple assignments are skipped.
+- A backup is written before any selected source line is changed.
 
 ## Roadmap
 
 Short term:
 
-- import existing aliases
 - tests for command generation
 
 Later:

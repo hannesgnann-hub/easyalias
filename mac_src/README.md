@@ -7,6 +7,7 @@ The app uses web technology for the interface, but runs as a local macOS desktop
 ## Highlights
 
 - create, edit, and delete aliases through a UI
+- detect existing simple aliases in `~/.zshrc` and import selected entries on first start
 - expand optional macOS alias suggestions and add them with one click
 - choose an action from a dropdown
 - preview the generated shell command before saving
@@ -78,6 +79,7 @@ EasyAlias intentionally manages its own files and does not directly rewrite your
 ```text
 ~/.easyalias/config.json
 ~/.easyalias/aliases.zsh
+~/.easyalias/.zshrc-import-v1
 ```
 
 On first Tauri startup, EasyAlias appends this line to `~/.zshrc` if it is missing:
@@ -104,6 +106,34 @@ New or changed aliases are available automatically in new terminal windows. In a
 source ~/.zshrc
 ```
 
+## First-Start Import
+
+On a fresh installation, EasyAlias scans `~/.zshrc` for conservative one-line declarations such as:
+
+```zsh
+alias ll='ls -lah'
+alias project="cd \"$HOME/Desktop/My Project\""
+```
+
+The file is parsed as text and is never executed during detection. When matches are found, a one-time dialog lets you select which aliases EasyAlias should manage. Selected aliases are imported as Custom Commands so their command text remains intact.
+
+Before changing selected lines, EasyAlias creates a timestamped backup:
+
+```text
+~/.zshrc.easyalias-backup-<timestamp>
+```
+
+Imported source lines are replaced with harmless `:` markers, while unselected aliases and all other shell configuration remain unchanged. Choosing **Skip Import** leaves every existing alias untouched and records that the one-time prompt was handled.
+
+For safety, the automatic scanner skips:
+
+- indented aliases that may belong to conditions or functions
+- zsh alias options such as `alias -g`
+- multiple aliases declared on one line
+- alias names declared more than once
+- malformed or multiline declarations
+- the `easya` application shortcut
+
 ## Development
 
 | Command | Effect |
@@ -122,7 +152,7 @@ easyalias/
     styles.css         styling
 
   src-tauri/
-    src/main.rs        Tauri commands for loading/saving
+    src/main.rs        Tauri commands for loading, importing, and saving
     tauri.conf.json    Tauri app configuration
     icons/icon.png     placeholder app icon
 
@@ -159,7 +189,6 @@ An alias is stored like this:
 
 ## Roadmap
 
-- import existing aliases from `~/.zshrc`
 - search and filter for large alias lists
 - polished macOS app icon
 - macOS bundle via `npm run tauri build`

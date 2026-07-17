@@ -53,6 +53,7 @@ The macOS version can:
 - delete aliases
 - choose files and folders through the native macOS picker
 - show a preview of the generated command
+- detect and safely import selected existing `.zshrc` aliases on first start
 - add useful suggested macOS aliases with one click
 - store `createdAt` and `updatedAt`
 - automatically connect `~/.easyalias/aliases.zsh` to `~/.zshrc`
