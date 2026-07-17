@@ -131,6 +131,7 @@ Main responsibilities:
 - manage form values
 - validate alias names
 - update the command preview live
+- offer safe macOS suggestions through the normal create form
 - display, edit, and delete aliases
 - call Tauri commands when the app runs natively
 

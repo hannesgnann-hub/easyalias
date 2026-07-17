@@ -53,6 +53,7 @@ The macOS version can:
 - delete aliases
 - choose files and folders through the native macOS picker
 - show a preview of the generated command
+- suggest useful macOS aliases that can be reviewed before saving
 - store `createdAt` and `updatedAt`
 - automatically connect `~/.easyalias/aliases.zsh` to `~/.zshrc`
 - start from the terminal through `easya` if the app is installed at `/Applications/EasyAlias.app`
