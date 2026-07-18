@@ -24,6 +24,13 @@ type AliasEntry = {
   updatedAt: string;
 };
 
+type CommandFileCandidate = {
+  id: string;
+  name: string;
+  command: string;
+  sourceFile: string;
+};
+
 // AppState mirrors what the Rust backend returns to the frontend.
 // The file paths are included so the UI can show where EasyAlias stores data.
 type AppState = {
@@ -38,6 +45,14 @@ type AppState = {
   // True when the backend can see commandDir in the persisted User PATH or in
   // the current process PATH. A freshly updated PATH usually needs a new shell.
   pathConfigured: boolean;
+  importCandidates: CommandFileCandidate[];
+};
+
+type ImportResult = {
+  state: AppState;
+  importedCount: number;
+  backupDir: string;
+  warning?: string;
 };
 
 // AliasForm is the temporary state for either the create form or the edit modal.
@@ -200,7 +215,8 @@ let appState: AppState = {
   configFile: "~/.easyalias/config.json",
   commandDir: "~/.easyalias/bin",
   pathEntry: "~/.easyalias/bin",
-  pathConfigured: false
+  pathConfigured: false,
+  importCandidates: []
 };
 
 let form: AliasForm = { ...emptyForm };
@@ -208,9 +224,12 @@ let editForm: AliasForm | null = null;
 let editingId: string | null = null;
 // Suggestions remain out of the main workflow until the user expands them.
 let suggestionsExpanded = false;
+let selectedImportIds = new Set<string>();
+let importBusy = false;
 let notice = "";
 let error = "";
 let editError = "";
+let importError = "";
 
 // Vite mounts the app into <main id="app"> from index.html.
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -393,6 +412,7 @@ async function loadState() {
   if (isTauriRuntime()) {
     try {
       appState = await invokeCommand<AppState>("load_aliases");
+      selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
       render();
       return;
     } catch (loadError) {
@@ -404,7 +424,11 @@ async function loadState() {
   if (saved) {
     // Merge instead of replacing so older browser-preview state from the earlier
     // PowerShell version does not drop the newer commandDir/path fields.
-    appState = { ...appState, ...(JSON.parse(saved) as Partial<AppState>) };
+    appState = {
+      ...appState,
+      ...(JSON.parse(saved) as Partial<AppState>),
+      importCandidates: []
+    };
   }
 
   render();
@@ -456,6 +480,55 @@ function resetForm() {
 
 function toggleSuggestions() {
   suggestionsExpanded = !suggestionsExpanded;
+  render();
+}
+
+async function dismissCommandFileImport() {
+  if (importBusy) return;
+  importBusy = true;
+  importError = "";
+  render();
+
+  try {
+    appState = await invokeCommand<AppState>("dismiss_command_file_import");
+    selectedImportIds.clear();
+    notice = "Existing command files were left unchanged.";
+  } catch (dismissError) {
+    importError = String(dismissError);
+  }
+
+  importBusy = false;
+  render();
+}
+
+async function importSelectedCommandFiles(event: SubmitEvent) {
+  event.preventDefault();
+  if (importBusy) return;
+  importError = "";
+
+  if (selectedImportIds.size === 0) {
+    importError = "Select at least one command file to import.";
+    render();
+    return;
+  }
+
+  importBusy = true;
+  render();
+
+  try {
+    const result = await invokeCommand<ImportResult>("import_command_files", {
+      selectedIds: [...selectedImportIds],
+      timestamp: nowIso()
+    });
+    appState = result.state;
+    selectedImportIds.clear();
+    notice = `${result.importedCount} command files imported. Backup: ${result.backupDir}`;
+    if (result.warning) error = result.warning;
+  } catch (importFailure) {
+    importError = String(importFailure);
+  }
+
+  importBusy = false;
   render();
 }
 
@@ -862,6 +935,7 @@ function render() {
         </section>
       </section>
 
+      ${renderImportModal()}
       ${renderEditModal()}
 
       <footer class="app-footer">
@@ -877,6 +951,74 @@ function render() {
   `;
 
   bindEvents();
+}
+
+function renderImportModal() {
+  const candidates = appState.importCandidates;
+  if (!candidates.length) return "";
+
+  const allSelected = candidates.every((candidate) => selectedImportIds.has(candidate.id));
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <form class="modal-card import-card" id="import-form" role="dialog" aria-modal="true" aria-labelledby="import-title">
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">First Start</p>
+            <h2 id="import-title">Existing command files found</h2>
+          </div>
+          <span class="import-count">${candidates.length} found</span>
+        </div>
+
+        <p class="import-intro">
+          EasyAlias found simple .cmd or .bat aliases in user-owned PATH folders. Selected files become Custom Commands and move only after a backup is created.
+        </p>
+
+        ${importError ? `<p class="modal-error">${escapeHtml(importError)}</p>` : ""}
+
+        <label class="import-select-all">
+          <input type="checkbox" name="import-all" ${allSelected ? "checked" : ""} ${importBusy ? "disabled" : ""} />
+          <span>Select all</span>
+        </label>
+
+        <div class="import-list" aria-label="Command files available for import">
+          ${candidates
+            .map(
+              (candidate) => `
+                <label class="import-row">
+                  <input
+                    type="checkbox"
+                    name="import-candidate"
+                    value="${escapeHtml(candidate.id)}"
+                    ${selectedImportIds.has(candidate.id) ? "checked" : ""}
+                    ${importBusy ? "disabled" : ""}
+                  />
+                  <span class="import-alias-copy">
+                    <span class="import-alias-meta">
+                      <strong>${escapeHtml(candidate.name)}</strong>
+                      <span>${escapeHtml(candidate.sourceFile)}</span>
+                    </span>
+                    <code>${escapeHtml(candidate.command)}</code>
+                  </span>
+                </label>
+              `
+            )
+            .join("")}
+        </div>
+
+        <p class="import-safety">
+          Original files are copied to a timestamped <code>~/.easyalias/import-backup-*</code> folder before they are removed from the old PATH folder.
+        </p>
+
+        <div class="modal-actions import-actions">
+          <button class="ghost-button" type="button" data-action="dismiss-import" ${importBusy ? "disabled" : ""}>Skip Import</button>
+          <button class="primary-button" type="submit" ${selectedImportIds.size && !importBusy ? "" : "disabled"}>
+            ${importBusy ? "Working..." : `Import Selected (${selectedImportIds.size})`}
+          </button>
+        </div>
+      </form>
+    </section>
+  `;
 }
 
 // Renders the modal only when editForm/editingId are set.
@@ -951,6 +1093,7 @@ function renderEditModal() {
 function bindEvents() {
   document.querySelector<HTMLFormElement>("#alias-form")?.addEventListener("submit", upsertAlias);
   document.querySelector<HTMLFormElement>("#edit-form")?.addEventListener("submit", updateAlias);
+  document.querySelector<HTMLFormElement>("#import-form")?.addEventListener("submit", importSelectedCommandFiles);
   document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => {
     link.addEventListener("click", openExternalLink);
   });
@@ -987,12 +1130,28 @@ function bindEvents() {
     updateEditForm("customCommand", (event.target as HTMLTextAreaElement).value);
   });
 
+  document.querySelector<HTMLInputElement>('input[name="import-all"]')?.addEventListener("change", (event) => {
+    selectedImportIds = (event.target as HTMLInputElement).checked
+      ? new Set(appState.importCandidates.map((candidate) => candidate.id))
+      : new Set();
+    render();
+  });
+
+  document.querySelectorAll<HTMLInputElement>('input[name="import-candidate"]').forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedImportIds.add(checkbox.value);
+      else selectedImportIds.delete(checkbox.value);
+      render();
+    });
+  });
+
   document.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const action = button.dataset.action;
       const id = button.dataset.id;
 
       if (action === "reset") resetForm();
+      if (action === "dismiss-import") void dismissCommandFileImport();
       if (action === "edit" && id) openEditModal(id);
       if (action === "close-edit") closeEditModal();
       if (action === "toggle-suggestions") toggleSuggestions();

@@ -62,6 +62,7 @@ The macOS version can:
 The Windows version can:
 
 - create, edit, and delete Windows command shortcuts
+- detect and safely import selected simple `.cmd`/`.bat` aliases from user-owned `PATH` folders
 - add useful suggested Windows commands with one click
 - choose files and folders through the native Windows picker
 - generate `.cmd` files under `~/.easyalias/bin`
@@ -71,6 +72,7 @@ The Windows version can:
 The Linux version can:
 
 - create, edit, and delete bash/zsh aliases
+- detect and safely import selected existing aliases from `.bashrc` or `.zshrc`
 - add useful suggested Linux aliases with one click
 - choose files and folders through the native Linux picker
 - detect bash or zsh from `$SHELL`
@@ -268,6 +270,18 @@ source ~/.easyalias/aliases.sh
 ```
 
 After the first Linux app start, open a new terminal or reload the detected shell startup file with `source ~/.bashrc` or `source ~/.zshrc`.
+
+## First-Start Import
+
+Fresh installations can detect existing aliases and offer a one-time selection dialog. EasyAlias never imports silently and creates a backup before confirmed source data is changed.
+
+| Platform | Detection source | Backup |
+| --- | --- | --- |
+| macOS | safe, single-line aliases in `~/.zshrc` | `~/.zshrc.easyalias-backup-*` |
+| Linux | safe, single-line aliases in the detected `~/.bashrc` or `~/.zshrc` | matching `.bashrc.easyalias-backup-*` or `.zshrc.easyalias-backup-*` |
+| Windows | simple `.cmd`/`.bat` alias files in user-owned `PATH` folders | `~/.easyalias/import-backup-*` |
+
+Complex, nested, repeated, multiline, malformed, or location-dependent definitions are skipped rather than guessed. Selecting **Skip Import** leaves existing aliases unchanged and closes the one-time migration flow.
 
 ## Alias Actions
 

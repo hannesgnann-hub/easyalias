@@ -7,6 +7,7 @@ It detects bash or zsh, keeps the alias data in its own directory, and connects 
 ## Highlights
 
 - create, edit, and delete aliases through a UI
+- detect existing aliases in the active shell startup file and import selected entries on first start
 - expand optional Linux suggestions and add them with one click
 - choose files and folders with the native Linux picker
 - preview the generated shell command before saving
@@ -108,6 +109,7 @@ The app manages these files:
 ```text
 ~/.easyalias/config.json
 ~/.easyalias/aliases.sh
+~/.easyalias/.shell-import-v1
 ```
 
 On first native startup it appends the missing lines to the detected startup file:
@@ -121,6 +123,21 @@ alias easya='setsid -f easyalias >/dev/null 2>&1'
 ```
 
 Existing shell configuration is preserved. EasyAlias only appends lines that are not already present.
+
+## First-Start Import
+
+On a fresh installation, EasyAlias scans the detected `~/.bashrc` or `~/.zshrc` as text. It never executes the startup file during detection. A one-time dialog lists safe, unindented, single-line aliases and lets you choose which ones EasyAlias should manage.
+
+Before selected lines are changed, EasyAlias creates a timestamped backup next to the startup file, for example:
+
+```text
+~/.bashrc.easyalias-backup-<timestamp>
+~/.zshrc.easyalias-backup-<timestamp>
+```
+
+Imported entries become Custom Commands. Their original lines are replaced with harmless `:` markers; unselected aliases and all other configuration remain unchanged. Choosing **Skip Import** leaves the detected aliases untouched.
+
+For safety, alias options, indented or multiline declarations, repeated names, malformed aliases, multiple assignments on one line, and the `easya` shortcut are skipped.
 
 After the first start or after adding an alias, open a new terminal. To refresh the current terminal immediately, use one of these commands:
 
@@ -253,7 +270,7 @@ linux_src/
     styles.css         shared responsive styling
 
   src-tauri/
-    src/main.rs        shell detection, setup, and local file persistence
+    src/main.rs        shell detection, first-run import, setup, and persistence
     tauri.conf.json    Linux window and bundle targets
     icons/icon.png     application icon
 

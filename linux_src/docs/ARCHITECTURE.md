@@ -6,9 +6,9 @@ EasyAlias Linux combines a TypeScript/Vite interface with a Tauri 2 Rust backend
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | forms, suggestions, validation, previews, edit modal, Tauri calls |
+| Frontend | `src/main.ts` | forms, suggestions, first-run import, validation, previews, Tauri calls |
 | Styling | `src/styles.css` | responsive desktop interface |
-| Backend | `src-tauri/src/main.rs` | shell detection, setup, JSON and alias file writes |
+| Backend | `src-tauri/src/main.rs` | shell detection, startup-file import, backup, and persistence |
 | Bundle config | `src-tauri/tauri.conf.json` | Linux window, permissions, package targets |
 | Dialog plugin | `@tauri-apps/plugin-dialog` | native file/folder picker |
 | Opener plugin | `@tauri-apps/plugin-opener` | GitHub and Reddit links in the system browser |
@@ -75,7 +75,7 @@ Each alias is persisted as structured JSON:
 
 ## Save Flow
 
-Create, edit, delete, and one-click suggestion operations all end in `save_aliases()`.
+Create, edit, delete, and one-click suggestion operations all end in `save_aliases()`. First-run migration uses `import_shell_aliases()` so backup, managed files, and selected startup-file changes stay coordinated.
 
 ```mermaid
 flowchart TD
@@ -104,11 +104,14 @@ Suggestions use the same `AliasEntry` model and command-preview generator as man
 ## Shell Safety Boundaries
 
 - EasyAlias owns only `~/.easyalias/config.json` and `~/.easyalias/aliases.sh`.
+- `~/.easyalias/.shell-import-v1` records that the one-time migration prompt was handled.
+- A timestamped startup-file backup is created before confirmed alias lines are changed.
 - The active startup file receives only a source line and the detached `easya` shortcut.
 - Existing startup content is preserved.
 - Alias names are limited to letters, numbers, `_`, and `-`, and must begin with a letter or `_`.
 - Paths are double-quoted and shell-sensitive characters are escaped.
 - Custom commands remain intentionally unrestricted because their purpose is to run user-provided shell code.
+- Import detection parses text without sourcing the startup file and skips nested, repeated, multiline, or option-based aliases.
 - The generated aliases file should be edited through the app, not manually.
 
 ## Browser Preview
