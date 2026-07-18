@@ -7,6 +7,7 @@ The app uses web technology for the interface, but runs as a local Windows deskt
 ## Highlights
 
 - create, edit, and delete shortcuts through a UI
+- detect simple existing `.cmd`/`.bat` aliases in user-owned `PATH` folders and import selected files
 - expand optional Windows suggestions and add them with one click
 - choose an action from a dropdown
 - preview the generated `cmd.exe` command before saving
@@ -64,6 +65,8 @@ EasyAlias intentionally manages its own files and does not directly rewrite shel
 ```text
 ~\.easyalias\config.json
 ~\.easyalias\bin\
+~\.easyalias\.cmd-import-v1
+~\.easyalias\import-backup-*\
 ```
 
 Each alias becomes one command file:
@@ -105,6 +108,20 @@ EasyAlias also creates this helper command if `easya.cmd` does not already confl
 ```cmd
 easya
 ```
+
+## First-Start Import
+
+On a fresh installation, EasyAlias checks `.cmd` and `.bat` files in `PATH` directories located inside `%USERPROFILE%`. System directories and EasyAlias' own command directory are never scanned.
+
+Only simple alias files with one executable command are offered. Standard `@echo off`, blank lines, and comments are ignored. Multiline batch logic, labels, duplicate names, and location-dependent commands using `%~dp0`, `%~f0`, or `%0` are skipped.
+
+The one-time dialog lets you select which files EasyAlias should manage. Before originals are removed, every selected file is copied to:
+
+```text
+~\.easyalias\import-backup-<timestamp>\
+```
+
+Imported entries become Custom Commands and are regenerated as `.cmd` files under `~\.easyalias\bin`. Choosing **Skip Import** leaves all existing files untouched.
 
 ## How It Works
 
@@ -174,7 +191,7 @@ windows_src/
     styles.css         styling
 
   src-tauri/
-    src/main.rs        Tauri commands for loading/saving
+    src/main.rs        PATH setup, first-run command import, and persistence
     tauri.conf.json    Tauri app configuration
     icons/icon.png     placeholder app icon
 
@@ -235,7 +252,6 @@ EasyAlias has three documentation entry points:
 
 ## Roadmap
 
-- import existing `.cmd` shortcuts from a folder
 - search and filter for large shortcut lists
 - polished Windows app icon
 - Windows installer via `npm run tauri build`

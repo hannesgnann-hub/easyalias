@@ -24,6 +24,13 @@ type AliasEntry = {
   updatedAt: string;
 };
 
+type ShellAliasCandidate = {
+  id: string;
+  name: string;
+  command: string;
+  lineNumber: number;
+};
+
 // AppState mirrors what the Rust backend returns to the frontend.
 // The file paths are included so the UI can show where EasyAlias stores data.
 type AppState = {
@@ -34,6 +41,13 @@ type AppState = {
   shellName: string;
   shellConfigFile: string;
   shellSourcePresent: boolean;
+  importCandidates: ShellAliasCandidate[];
+};
+
+type ImportResult = {
+  state: AppState;
+  importedCount: number;
+  backupFile: string;
 };
 
 // AliasForm is the temporary state for either the create form or the edit modal.
@@ -198,7 +212,8 @@ let appState: AppState = {
   sourceLine: "source ~/.easyalias/aliases.sh",
   shellName: "bash",
   shellConfigFile: "~/.bashrc",
-  shellSourcePresent: false
+  shellSourcePresent: false,
+  importCandidates: []
 };
 
 let form: AliasForm = { ...emptyForm };
@@ -206,9 +221,12 @@ let editForm: AliasForm | null = null;
 let editingId: string | null = null;
 // Suggestions start collapsed and stay in the selected state across renders.
 let suggestionsExpanded = false;
+let selectedImportIds = new Set<string>();
+let importBusy = false;
 let notice = "";
 let error = "";
 let editError = "";
+let importError = "";
 
 // Vite mounts the app into <main id="app"> from index.html.
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -374,6 +392,7 @@ async function loadState() {
   if (isTauriRuntime()) {
     try {
       appState = await invokeCommand<AppState>("load_aliases");
+      selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
       render();
       return;
     } catch (loadError) {
@@ -385,7 +404,11 @@ async function loadState() {
   if (saved) {
     // Merge browser data with Linux defaults so previews created by an older
     // platform version cannot leave new shell status fields undefined.
-    appState = { ...appState, ...(JSON.parse(saved) as Partial<AppState>) };
+    appState = {
+      ...appState,
+      ...(JSON.parse(saved) as Partial<AppState>),
+      importCandidates: []
+    };
   }
 
   render();
@@ -437,6 +460,54 @@ function resetForm() {
 // aliases. Its state is intentionally UI-only and does not need persistence.
 function toggleSuggestions() {
   suggestionsExpanded = !suggestionsExpanded;
+  render();
+}
+
+async function dismissShellImport() {
+  if (importBusy) return;
+  importBusy = true;
+  importError = "";
+  render();
+
+  try {
+    appState = await invokeCommand<AppState>("dismiss_shell_import");
+    selectedImportIds.clear();
+    notice = `Existing aliases were left unchanged in ${appState.shellConfigFile}.`;
+  } catch (dismissError) {
+    importError = String(dismissError);
+  }
+
+  importBusy = false;
+  render();
+}
+
+async function importSelectedShellAliases(event: SubmitEvent) {
+  event.preventDefault();
+  if (importBusy) return;
+  importError = "";
+
+  if (selectedImportIds.size === 0) {
+    importError = "Select at least one alias to import.";
+    render();
+    return;
+  }
+
+  importBusy = true;
+  render();
+
+  try {
+    const result = await invokeCommand<ImportResult>("import_shell_aliases", {
+      selectedIds: [...selectedImportIds],
+      timestamp: nowIso()
+    });
+    appState = result.state;
+    selectedImportIds.clear();
+    notice = `${result.importedCount} aliases imported. Backup: ${result.backupFile}`;
+  } catch (importFailure) {
+    importError = String(importFailure);
+  }
+
+  importBusy = false;
   render();
 }
 
@@ -843,6 +914,7 @@ function render() {
         </section>
       </section>
 
+      ${renderImportModal()}
       ${renderEditModal()}
 
       <footer class="app-footer">
@@ -858,6 +930,74 @@ function render() {
   `;
 
   bindEvents();
+}
+
+function renderImportModal() {
+  const candidates = appState.importCandidates;
+  if (!candidates.length) return "";
+
+  const allSelected = candidates.every((candidate) => selectedImportIds.has(candidate.id));
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <form class="modal-card import-card" id="import-form" role="dialog" aria-modal="true" aria-labelledby="import-title">
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">First Start</p>
+            <h2 id="import-title">Existing aliases found</h2>
+          </div>
+          <span class="import-count">${candidates.length} found</span>
+        </div>
+
+        <p class="import-intro">
+          Select the aliases EasyAlias should manage from ${escapeHtml(appState.shellConfigFile)}. Imported entries become Custom Commands and move only after a backup is created.
+        </p>
+
+        ${importError ? `<p class="modal-error">${escapeHtml(importError)}</p>` : ""}
+
+        <label class="import-select-all">
+          <input type="checkbox" name="import-all" ${allSelected ? "checked" : ""} ${importBusy ? "disabled" : ""} />
+          <span>Select all</span>
+        </label>
+
+        <div class="import-list" aria-label="Aliases available for import">
+          ${candidates
+            .map(
+              (candidate) => `
+                <label class="import-row">
+                  <input
+                    type="checkbox"
+                    name="import-candidate"
+                    value="${escapeHtml(candidate.id)}"
+                    ${selectedImportIds.has(candidate.id) ? "checked" : ""}
+                    ${importBusy ? "disabled" : ""}
+                  />
+                  <span class="import-alias-copy">
+                    <span class="import-alias-meta">
+                      <strong>${escapeHtml(candidate.name)}</strong>
+                      <span>Line ${candidate.lineNumber}</span>
+                    </span>
+                    <code>${escapeHtml(candidate.command)}</code>
+                  </span>
+                </label>
+              `
+            )
+            .join("")}
+        </div>
+
+        <p class="import-safety">
+          EasyAlias creates a timestamped backup next to ${escapeHtml(appState.shellConfigFile)} before changing selected lines.
+        </p>
+
+        <div class="modal-actions import-actions">
+          <button class="ghost-button" type="button" data-action="dismiss-import" ${importBusy ? "disabled" : ""}>Skip Import</button>
+          <button class="primary-button" type="submit" ${selectedImportIds.size && !importBusy ? "" : "disabled"}>
+            ${importBusy ? "Working..." : `Import Selected (${selectedImportIds.size})`}
+          </button>
+        </div>
+      </form>
+    </section>
+  `;
 }
 
 // Renders the modal only when editForm/editingId are set.
@@ -932,6 +1072,7 @@ function renderEditModal() {
 function bindEvents() {
   document.querySelector<HTMLFormElement>("#alias-form")?.addEventListener("submit", upsertAlias);
   document.querySelector<HTMLFormElement>("#edit-form")?.addEventListener("submit", updateAlias);
+  document.querySelector<HTMLFormElement>("#import-form")?.addEventListener("submit", importSelectedShellAliases);
   document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => {
     link.addEventListener("click", openExternalLink);
   });
@@ -968,12 +1109,28 @@ function bindEvents() {
     updateEditForm("customCommand", (event.target as HTMLTextAreaElement).value);
   });
 
+  document.querySelector<HTMLInputElement>('input[name="import-all"]')?.addEventListener("change", (event) => {
+    selectedImportIds = (event.target as HTMLInputElement).checked
+      ? new Set(appState.importCandidates.map((candidate) => candidate.id))
+      : new Set();
+    render();
+  });
+
+  document.querySelectorAll<HTMLInputElement>('input[name="import-candidate"]').forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedImportIds.add(checkbox.value);
+      else selectedImportIds.delete(checkbox.value);
+      render();
+    });
+  });
+
   document.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const action = button.dataset.action;
       const id = button.dataset.id;
 
       if (action === "reset") resetForm();
+      if (action === "dismiss-import") void dismissShellImport();
       if (action === "toggle-suggestions") toggleSuggestions();
       if (action === "use-suggestion") {
         const suggestionId = button.dataset.suggestionId;

@@ -8,9 +8,9 @@ EasyAlias consists of a small frontend and a Tauri/Rust backend:
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | UI, form state, command preview |
+| Frontend | `src/main.ts` | UI, form state, first-run import dialog, command preview |
 | Styling | `src/styles.css` | layout and visual design |
-| Backend | `src-tauri/src/main.rs` | local file read/write and PATH setup |
+| Backend | `src-tauri/src/main.rs` | PATH setup, legacy command discovery, backup, and persistence |
 | Tauri Config | `src-tauri/tauri.conf.json` | app window, build, Windows installer |
 | Tauri Dialog Plugin | `@tauri-apps/plugin-dialog` | native file/folder picker |
 | Tauri Opener Plugin | `@tauri-apps/plugin-opener` | open GitHub and Reddit in the system browser |
@@ -96,14 +96,17 @@ flowchart TD
 | --- | --- | --- |
 | `~/.easyalias/config.json` | structured shortcut data for the UI | EasyAlias |
 | `~/.easyalias/bin/*.cmd` | generated command files | EasyAlias |
+| `~/.easyalias/.cmd-import-v1` | records that the first-run import prompt was handled | EasyAlias |
+| `~/.easyalias/import-backup-*` | copies of imported legacy command files | user backup |
 | User `PATH` | contains `~/.easyalias/bin` | user + EasyAlias setup |
 
 On first Tauri startup, the backend ensures:
 
 1. `~/.easyalias/` exists.
 2. `~/.easyalias/bin/` exists.
-3. The user `PATH` contains the command folder.
-4. `easya.cmd` exists when it does not conflict with a user alias.
+3. Simple legacy command files are detected in user-owned `PATH` folders.
+4. The user `PATH` contains the command folder.
+5. `easya.cmd` exists when it does not conflict with a user alias.
 
 ```mermaid
 sequenceDiagram
@@ -137,6 +140,7 @@ Main responsibilities:
 - validate shortcut names
 - update the cmd command preview live
 - persist optional Windows shortcut suggestions with one click
+- review and select safe legacy `.cmd`/`.bat` import candidates
 - display, edit, and delete shortcuts
 - call Tauri commands when the app runs natively
 
@@ -185,11 +189,13 @@ stateDiagram-v2
 
 ## Backend
 
-The Tauri backend currently exposes two commands:
+The Tauri backend exposes four commands:
 
 ```rust
 load_aliases()
 save_aliases(aliases)
+dismiss_command_file_import()
+import_command_files(selected_ids, timestamp)
 ```
 
 `load_aliases` handles startup setup:
@@ -208,6 +214,8 @@ save_aliases(aliases)
 - one `.cmd` file per alias
 - removes stale `.cmd` files for deleted aliases
 - returns fresh PATH status for the UI
+
+`import_command_files` rescans selected ids, copies every source file into a timestamped backup directory, writes managed Custom Commands, and then removes the old files. Removal failures are returned as warnings without hiding a successful backup/import.
 
 ```mermaid
 sequenceDiagram
@@ -275,6 +283,9 @@ Important boundaries:
 - Custom commands are real `cmd.exe` / batch commands.
 - The generated `.cmd` files are app output and should not be edited manually.
 - Standard paths are wrapped in double quotes.
+- Import scanning is limited to directories below the user profile and never scans system PATH folders.
+- Only one-command scripts are imported; labels, multiline logic, duplicate names, and location-dependent `%~dp0`/`%0` scripts are skipped.
+- Selected originals are backed up before managed files are written or old files are removed.
 - Folder-changing aliases persist in `cmd.exe`; from PowerShell they run as external commands and cannot change the parent PowerShell location.
 
 ## Runtime Notes
@@ -300,7 +311,6 @@ type "%USERPROFILE%\.easyalias\bin\beerv2.cmd"
 
 Short term:
 
-- import existing `.cmd` shortcuts
 - tests for command generation
 
 Later:
