@@ -16,6 +16,16 @@ brew trust hannesgnann-hub/tap
 brew install --cask easyalias
 ```
 
+## Install on Linux
+
+The current Homebrew formula supports ARM64 Linux systems:
+
+```bash
+brew tap hannesgnann-hub/tap
+brew trust hannesgnann-hub/tap
+brew install easyalias
+```
+
 ## What EasyAlias Solves
 
 Small terminal shortcuts tend to pile up over time:

@@ -19,6 +19,18 @@ It detects bash or zsh, keeps the alias data in its own directory, and connects 
 - build `.deb`, `.rpm`, and `.AppImage` packages
 - link to the GitHub repository and EasyAlias subreddit from the footer
 
+## Install with Homebrew
+
+The current Homebrew formula supports ARM64 Linux systems:
+
+```bash
+brew tap hannesgnann-hub/tap
+brew trust hannesgnann-hub/tap
+brew install easyalias
+```
+
+Then launch the app with `easyalias` or through the desktop application menu.
+
 ## Requirements
 
 VS Code is enough as the editor. Building the desktop app also needs Node.js, Rust, Cargo, and Tauri's Linux system libraries.
