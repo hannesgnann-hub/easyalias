@@ -1,13 +1,13 @@
 # EasyAlias Windows
 
-EasyAlias Windows is a Tauri prototype for creating and managing Windows command shortcuts through a desktop UI.
+EasyAlias Windows is a Tauri desktop app for creating and managing Windows command shortcuts through a desktop UI.
 
 The app uses web technology for the interface, but runs as a local Windows desktop app and can manage files on your machine.
 
 ## Highlights
 
 - create, edit, and delete shortcuts through a UI
-- detect simple existing `.cmd`/`.bat` aliases in user-owned `PATH` folders and import selected files
+- detect simple existing `.cmd`/`.bat` aliases in user-owned `PATH` folders on first start and rescan them later from the header import button
 - expand optional Windows suggestions and add them with one click
 - choose an action from a dropdown
 - preview the generated `cmd.exe` command before saving
@@ -16,6 +16,7 @@ The app uses web technology for the interface, but runs as a local Windows deskt
 - keep shortcut data as structured JSON
 - automatically generate `.cmd` files for `cmd.exe`
 - connect `~\.easyalias\bin` to the user's `PATH` on first Tauri startup
+- link to the GitHub repository and EasyAlias subreddit from the footer
 
 ## Quickstart
 
@@ -109,19 +110,19 @@ EasyAlias also creates this helper command if `easya.cmd` does not already confl
 easya
 ```
 
-## First-Start Import
+## Import Existing Command Files
 
-On a fresh installation, EasyAlias checks `.cmd` and `.bat` files in `PATH` directories located inside `%USERPROFILE%`. System directories and EasyAlias' own command directory are never scanned.
+On a fresh installation, EasyAlias automatically checks `.cmd` and `.bat` files in `PATH` directories located inside `%USERPROFILE%`. The import icon in the top-right corner repeats this scan at any time. System directories and EasyAlias' own command directory are never scanned.
 
 Only simple alias files with one executable command are offered. Standard `@echo off`, blank lines, and comments are ignored. Multiline batch logic, labels, duplicate names, and location-dependent commands using `%~dp0`, `%~f0`, or `%0` are skipped.
 
-The one-time dialog lets you select which files EasyAlias should manage. Before originals are removed, every selected file is copied to:
+The first-start or manually opened dialog lets you select which files EasyAlias should manage. Before originals are removed, every selected file is copied to:
 
 ```text
 ~\.easyalias\import-backup-<timestamp>\
 ```
 
-Imported entries become Custom Commands and are regenerated as `.cmd` files under `~\.easyalias\bin`. Choosing **Skip Import** leaves all existing files untouched.
+Imported entries become Custom Commands and are regenerated as `.cmd` files under `~\.easyalias\bin`. Choosing **Skip Import** leaves all existing files untouched and closes only the automatic first-start prompt. The manual import icon remains available, and command names already managed by EasyAlias are excluded from later rescans.
 
 ## How It Works
 
@@ -182,6 +183,18 @@ If you run a folder-changing alias from PowerShell, the child `cmd.exe` process 
 | `npm run tauri dev` | starts the real Tauri app |
 | `npm run tauri build` | builds the Windows installer |
 
+The configured NSIS build writes its installer below:
+
+```text
+src-tauri\target\release\bundle\nsis\
+```
+
+Copy the finished installer into the repository export folder from PowerShell:
+
+```powershell
+Copy-Item .\src-tauri\target\release\bundle\nsis\*.exe ..\windows_export\
+```
+
 ## Project Structure
 
 ```text
@@ -191,9 +204,9 @@ windows_src/
     styles.css         styling
 
   src-tauri/
-    src/main.rs        PATH setup, first-run command import, and persistence
+    src/main.rs        PATH setup, first-start/manual command import, and persistence
     tauri.conf.json    Tauri app configuration
-    icons/icon.png     placeholder app icon
+    icons/              PNG and Windows ICO application icons
 
   docs/
     ARCHITECTURE.md    technical architecture
@@ -241,17 +254,24 @@ call mvnw.cmd %*
 
 ## Documentation Layout
 
-EasyAlias has three documentation entry points:
+EasyAlias keeps a shared project overview plus platform-specific usage and architecture documents:
 
 | Document | Purpose |
 | --- | --- |
 | `../README.md` | shared project overview for macOS, Windows, and Linux |
 | `../mac_src/README.md` | macOS-specific usage and zsh behavior |
+| `../mac_src/docs/ARCHITECTURE.md` | macOS technical architecture |
 | `README.md` | Windows-specific usage and cmd/PATH behavior |
 | `docs/ARCHITECTURE.md` | Windows technical architecture |
+| `../linux_src/README.md` | Linux-specific usage and shell behavior |
+| `../linux_src/docs/ARCHITECTURE.md` | Linux technical architecture |
 
 ## Roadmap
 
 - search and filter for large shortcut lists
-- polished Windows app icon
-- Windows installer via `npm run tauri build`
+- signed Windows release automation
+- optional structured config export and restore
+
+## License
+
+EasyAlias is licensed under the MIT License. See `../LICENSE`.

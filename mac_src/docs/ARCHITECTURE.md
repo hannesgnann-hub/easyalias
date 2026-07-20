@@ -8,11 +8,12 @@ EasyAlias consists of a small frontend and a Tauri/Rust backend:
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | UI, form state, first-run import dialog, command preview |
+| Frontend | `src/main.ts` | UI, form state, suggestions, first-start/manual import dialog, command preview |
 | Styling | `src/styles.css` | layout and visual design |
 | Backend | `src-tauri/src/main.rs` | `.zshrc` detection, backup, migration, and local file writes |
 | Tauri Config | `src-tauri/tauri.conf.json` | app window, build, bundle |
 | Tauri Dialog Plugin | `@tauri-apps/plugin-dialog` | native file/folder picker |
+| Tauri Opener Plugin | `@tauri-apps/plugin-opener` | open GitHub and Reddit in the system browser |
 
 The core idea: EasyAlias does not manage the entire `~/.zshrc`. It creates a dedicated alias file and connects it to zsh once.
 
@@ -23,7 +24,7 @@ flowchart TB
   Tauri["Tauri Runtime"]
   Rust["Rust Backend src-tauri/src/main.rs"]
   Dialog["Dialog Plugin file/folder picker"]
-  Opener["Opener Plugin GitHub link"]
+  Opener["Opener Plugin GitHub and Reddit links"]
   Files["~/.easyalias files"]
   Zshrc["~/.zshrc setup"]
 
@@ -91,7 +92,7 @@ flowchart TD
 | --- | --- | --- |
 | `~/.easyalias/config.json` | structured alias data for the UI | EasyAlias |
 | `~/.easyalias/aliases.zsh` | generated zsh aliases | EasyAlias |
-| `~/.easyalias/.zshrc-import-v1` | records that the first-run import prompt was handled | EasyAlias |
+| `~/.easyalias/.zshrc-import-v1` | records that the automatic first-start import prompt was handled | EasyAlias |
 | `~/.zshrc.easyalias-backup-*` | timestamped copy created before an import | user backup |
 | `~/.zshrc` | user configuration plus EasyAlias source/shortcut lines and confirmed import markers | user + EasyAlias setup |
 
@@ -136,7 +137,7 @@ Main responsibilities:
 - validate alias names
 - update the command preview live
 - persist safe macOS suggestions directly with one click
-- review and select first-run `.zshrc` import candidates
+- open the import scanner from the header and review `.zshrc` candidates
 - display, edit, and delete aliases
 - call Tauri commands when the app runs natively
 
@@ -185,11 +186,12 @@ stateDiagram-v2
 
 ## Backend
 
-The Tauri backend exposes four commands:
+The Tauri backend exposes five commands:
 
 ```rust
 load_aliases()
 save_aliases(aliases)
+scan_zshrc_import()
 dismiss_zshrc_import()
 import_zshrc_aliases(selected_ids, timestamp)
 ```
@@ -207,7 +209,29 @@ import_zshrc_aliases(selected_ids, timestamp)
 - `config.json` as the data source for the UI
 - `aliases.zsh` as the generated shell file
 
+`scan_zshrc_import` ignores the first-start marker, scans `~/.zshrc` again, filters names already managed by EasyAlias, and returns the remaining candidates for the header import dialog. It does not modify alias lines.
+
 `import_zshrc_aliases` rescans the file, verifies the selected line ids, creates a timestamped backup, writes imported Custom Commands, and replaces only confirmed source lines with zsh no-op markers. The scanner never sources or executes `~/.zshrc`.
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant UI as Frontend
+  participant Rust as Rust Backend
+  participant Zshrc as ~/.zshrc
+  participant Managed as ~/.easyalias files
+
+  User->>UI: click import icon
+  UI->>Rust: scan_zshrc_import()
+  Rust->>Zshrc: parse safe aliases as text
+  Rust-->>UI: unmanaged candidates
+  User->>UI: confirm selected aliases
+  UI->>Rust: import_zshrc_aliases(ids, timestamp)
+  Rust->>Zshrc: create timestamped backup
+  Rust->>Managed: write config.json and aliases.zsh
+  Rust->>Zshrc: replace confirmed source lines
+  Rust-->>UI: updated AppState
+```
 
 ```mermaid
 sequenceDiagram
@@ -278,7 +302,7 @@ Important boundaries:
 - Custom commands are real shell commands.
 - The generated `aliases.zsh` is app output and should not be edited manually.
 - Standard paths are wrapped in double quotes.
-- First-run import handles only unindented, one-line aliases with one assignment.
+- Import scanning handles only unindented, one-line aliases with one assignment.
 - Alias options, nested declarations, repeated names, malformed lines, and multiple assignments are skipped.
 - A backup is written before any selected source line is changed.
 
@@ -291,6 +315,5 @@ Short term:
 Later:
 
 - settings window
-- polished app icon
-- macOS `.app` bundle
 - optional export/backup mechanism
+- signed and notarized release automation

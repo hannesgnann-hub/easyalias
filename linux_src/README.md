@@ -7,7 +7,7 @@ It detects bash or zsh, keeps the alias data in its own directory, and connects 
 ## Highlights
 
 - create, edit, and delete aliases through a UI
-- detect existing aliases in the active shell startup file and import selected entries on first start
+- detect existing aliases in the active shell startup file on first start and rescan them later from the header import button
 - expand optional Linux suggestions and add them with one click
 - choose files and folders with the native Linux picker
 - preview the generated shell command before saving
@@ -17,6 +17,7 @@ It detects bash or zsh, keeps the alias data in its own directory, and connects 
 - connect the generated file to `~/.bashrc` or `~/.zshrc`
 - add the `easya` shortcut for opening the installed application
 - build `.deb`, `.rpm`, and `.AppImage` packages
+- link to the GitHub repository and EasyAlias subreddit from the footer
 
 ## Requirements
 
@@ -124,9 +125,9 @@ alias easya='setsid -f easyalias >/dev/null 2>&1'
 
 Existing shell configuration is preserved. EasyAlias only appends lines that are not already present.
 
-## First-Start Import
+## Import Existing Aliases
 
-On a fresh installation, EasyAlias scans the detected `~/.bashrc` or `~/.zshrc` as text. It never executes the startup file during detection. A one-time dialog lists safe, unindented, single-line aliases and lets you choose which ones EasyAlias should manage.
+On a fresh installation, EasyAlias automatically scans the detected `~/.bashrc` or `~/.zshrc` as text. It never executes the startup file during detection. The first-start dialog lists safe, unindented, single-line aliases and lets you choose which ones EasyAlias should manage. The import icon in the top-right corner repeats the scan at any time.
 
 Before selected lines are changed, EasyAlias creates a timestamped backup next to the startup file, for example:
 
@@ -135,7 +136,7 @@ Before selected lines are changed, EasyAlias creates a timestamped backup next t
 ~/.zshrc.easyalias-backup-<timestamp>
 ```
 
-Imported entries become Custom Commands. Their original lines are replaced with harmless `:` markers; unselected aliases and all other configuration remain unchanged. Choosing **Skip Import** leaves the detected aliases untouched.
+Imported entries become Custom Commands. Their original lines are replaced with harmless `:` markers; unselected aliases and all other configuration remain unchanged. Choosing **Skip Import** leaves the detected aliases untouched and closes only the automatic first-start prompt. The manual import icon remains available, and aliases already managed by EasyAlias are excluded from later rescans.
 
 For safety, alias options, indented or multiline declarations, repeated names, malformed aliases, multiple assignments on one line, and the `easya` shortcut are skipped.
 
@@ -270,7 +271,7 @@ linux_src/
     styles.css         shared responsive styling
 
   src-tauri/
-    src/main.rs        shell detection, first-run import, setup, and persistence
+    src/main.rs        shell detection, first-start/manual import, setup, and persistence
     tauri.conf.json    Linux window and bundle targets
     icons/icon.png     application icon
 
@@ -280,4 +281,4 @@ linux_src/
 
 ## License
 
-EasyAlias is licensed under the MIT License. See `LICENSE`.
+EasyAlias is licensed under the MIT License. See `../LICENSE`.
