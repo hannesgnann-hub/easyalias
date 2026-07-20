@@ -53,7 +53,7 @@ The macOS version can:
 - delete aliases
 - choose files and folders through the native macOS picker
 - show a preview of the generated command
-- detect and safely import selected existing `.zshrc` aliases on first start
+- detect and safely import selected existing `.zshrc` aliases on first start or from the header import button
 - add useful suggested macOS aliases with one click
 - store `createdAt` and `updatedAt`
 - automatically connect `~/.easyalias/aliases.zsh` to `~/.zshrc`
@@ -62,7 +62,7 @@ The macOS version can:
 The Windows version can:
 
 - create, edit, and delete Windows command shortcuts
-- detect and safely import selected simple `.cmd`/`.bat` aliases from user-owned `PATH` folders
+- detect and safely import selected simple `.cmd`/`.bat` aliases from user-owned `PATH` folders on first start or on demand
 - add useful suggested Windows commands with one click
 - choose files and folders through the native Windows picker
 - generate `.cmd` files under `~/.easyalias/bin`
@@ -72,7 +72,7 @@ The Windows version can:
 The Linux version can:
 
 - create, edit, and delete bash/zsh aliases
-- detect and safely import selected existing aliases from `.bashrc` or `.zshrc`
+- detect and safely import selected existing aliases from `.bashrc` or `.zshrc` on first start or on demand
 - add useful suggested Linux aliases with one click
 - choose files and folders through the native Linux picker
 - detect bash or zsh from `$SHELL`
@@ -215,6 +215,18 @@ npm run tauri build
 
 The Linux version detects bash or zsh, creates `~/.easyalias/aliases.sh`, and connects it to the matching shell startup file. Full prerequisites and export commands are documented in `linux_src/README.md`.
 
+## Cross-Platform Builds
+
+Development can be coordinated from a Mac, but release packages should be produced on the operating system they target:
+
+| Source project | Recommended build host | Configured output |
+| --- | --- | --- |
+| `mac_src` | macOS | `.app` bundle |
+| `windows_src` | Windows | NSIS `.exe` installer |
+| `linux_src` | Linux | `.deb`, `.rpm`, and `.AppImage` packages |
+
+A Windows or Linux VM works for occasional builds. For repeatable releases, use separate macOS, Windows, and Linux jobs in a CI matrix and upload their artifacts to one release. Tauri documents this pattern in its [GitHub Actions guide](https://v2.tauri.app/distribute/pipelines/github/). Windows MSI output requires Windows, while the configured NSIS target can also be cross-compiled with additional tooling; see the [Windows installer guide](https://v2.tauri.app/distribute/windows-installer/). Linux packages should be built on Linux because their native libraries and compatibility baseline matter.
+
 ```mermaid
 flowchart LR
   Shared["Shared idea and UI"]
@@ -271,9 +283,9 @@ source ~/.easyalias/aliases.sh
 
 After the first Linux app start, open a new terminal or reload the detected shell startup file with `source ~/.bashrc` or `source ~/.zshrc`.
 
-## First-Start Import
+## Import Existing Aliases
 
-Fresh installations can detect existing aliases and offer a one-time selection dialog. EasyAlias never imports silently and creates a backup before confirmed source data is changed.
+Fresh installations automatically detect existing aliases and offer a one-time selection dialog. After that prompt has been handled, the import icon in the top-right corner can rescan the same platform-specific source at any time. EasyAlias never imports silently and creates a backup before confirmed source data is changed.
 
 | Platform | Detection source | Backup |
 | --- | --- | --- |
@@ -281,7 +293,21 @@ Fresh installations can detect existing aliases and offer a one-time selection d
 | Linux | safe, single-line aliases in the detected `~/.bashrc` or `~/.zshrc` | matching `.bashrc.easyalias-backup-*` or `.zshrc.easyalias-backup-*` |
 | Windows | simple `.cmd`/`.bat` alias files in user-owned `PATH` folders | `~/.easyalias/import-backup-*` |
 
-Complex, nested, repeated, multiline, malformed, or location-dependent definitions are skipped rather than guessed. Selecting **Skip Import** leaves existing aliases unchanged and closes the one-time migration flow.
+Complex, nested, repeated, multiline, malformed, or location-dependent definitions are skipped rather than guessed. Aliases already managed by EasyAlias are excluded from later rescans. Selecting **Skip Import** leaves existing aliases unchanged and closes only the automatic first-start prompt; the import icon remains available.
+
+```mermaid
+flowchart TD
+  Start["Open EasyAlias"] --> Trigger{"First start with candidates?"}
+  Trigger -- "yes" --> Review["Review detected aliases"]
+  Trigger -- "no" --> Main["Alias manager"]
+  Main -->|"click import icon"| Rescan["Rescan platform source"]
+  Rescan --> Found{"New safe aliases found?"}
+  Found -- "no" --> Message["Show no-new-aliases message"]
+  Found -- "yes" --> Review
+  Review --> Select["Select entries"]
+  Select --> Backup["Create backup"]
+  Backup --> Import["Store managed aliases"]
+```
 
 ## Alias Actions
 

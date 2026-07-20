@@ -1,13 +1,13 @@
 # EasyAlias macOS
 
-EasyAlias macOS is a Tauri prototype for creating and managing zsh aliases through a desktop UI.
+EasyAlias macOS is a Tauri desktop app for creating and managing zsh aliases through a desktop UI.
 
 The app uses web technology for the interface, but runs as a local macOS desktop app and can manage files on your machine.
 
 ## Highlights
 
 - create, edit, and delete aliases through a UI
-- detect existing simple aliases in `~/.zshrc` and import selected entries on first start
+- detect existing simple aliases in `~/.zshrc` on first start and rescan them later from the header import button
 - expand optional macOS alias suggestions and add them with one click
 - choose an action from a dropdown
 - preview the generated shell command before saving
@@ -16,6 +16,7 @@ The app uses web technology for the interface, but runs as a local macOS desktop
 - keep alias data as structured JSON
 - automatically generate an `aliases.zsh` file for your terminal
 - connect itself to `~/.zshrc` on first Tauri startup
+- link to the GitHub repository and EasyAlias subreddit from the footer
 
 ## Install
 
@@ -106,16 +107,16 @@ New or changed aliases are available automatically in new terminal windows. In a
 source ~/.zshrc
 ```
 
-## First-Start Import
+## Import Existing Aliases
 
-On a fresh installation, EasyAlias scans `~/.zshrc` for conservative one-line declarations such as:
+On a fresh installation, EasyAlias automatically scans `~/.zshrc` for conservative one-line declarations such as:
 
 ```zsh
 alias ll='ls -lah'
 alias project="cd \"$HOME/Desktop/My Project\""
 ```
 
-The file is parsed as text and is never executed during detection. When matches are found, a one-time dialog lets you select which aliases EasyAlias should manage. Selected aliases are imported as Custom Commands so their command text remains intact.
+The file is parsed as text and is never executed during detection. When matches are found, the first-start dialog lets you select which aliases EasyAlias should manage. The import icon in the top-right corner runs the same safe scan again at any time, including after the first-start prompt was skipped. Selected aliases are imported as Custom Commands so their command text remains intact.
 
 Before changing selected lines, EasyAlias creates a timestamped backup:
 
@@ -123,7 +124,7 @@ Before changing selected lines, EasyAlias creates a timestamped backup:
 ~/.zshrc.easyalias-backup-<timestamp>
 ```
 
-Imported source lines are replaced with harmless `:` markers, while unselected aliases and all other shell configuration remain unchanged. Choosing **Skip Import** leaves every existing alias untouched and records that the one-time prompt was handled.
+Imported source lines are replaced with harmless `:` markers, while unselected aliases and all other shell configuration remain unchanged. Choosing **Skip Import** leaves every existing alias untouched and records that the automatic first-start prompt was handled. It does not disable the manual import button. Aliases already managed by EasyAlias are excluded from later rescans.
 
 For safety, the automatic scanner skips:
 
@@ -134,6 +135,12 @@ For safety, the automatic scanner skips:
 - malformed or multiline declarations
 - the `easya` application shortcut
 
+## Suggested Aliases
+
+The optional Suggestions section starts collapsed. Clicking `Use` immediately saves the selected suggestion as a real alias; no second click on `Add` is required. Suggestions whose names are already managed disappear from the available list.
+
+The built-in set includes common shell, Git, Gradle Wrapper, Maven Wrapper, Docker, networking, and folder shortcuts such as `ll`, `gs`, `gw`, `gwb`, and `reloadzsh`.
+
 ## Development
 
 | Command | Effect |
@@ -143,18 +150,31 @@ For safety, the automatic scanner skips:
 | `npm run tauri dev` | starts the real Tauri app |
 | `npm run tauri build` | builds the macOS app bundle |
 
+The configured build produces:
+
+```text
+src-tauri/target/release/bundle/macos/EasyAlias.app
+```
+
+Install the local build and create the repository export archive with:
+
+```zsh
+cp -R src-tauri/target/release/bundle/macos/EasyAlias.app /Applications/
+ditto -c -k --keepParent src-tauri/target/release/bundle/macos/EasyAlias.app ../mac_export/EasyAlias.zip
+```
+
 ## Project Structure
 
 ```text
-easyalias/
+mac_src/
   src/
     main.ts            UI logic, data model, command preview
     styles.css         styling
 
   src-tauri/
-    src/main.rs        Tauri commands for loading, importing, and saving
+    src/main.rs        Tauri commands for loading, rescanning, importing, and saving
     tauri.conf.json    Tauri app configuration
-    icons/icon.png     placeholder app icon
+    icons/              PNG and macOS ICNS application icons
 
   docs/
     ARCHITECTURE.md    technical architecture
@@ -190,5 +210,17 @@ An alias is stored like this:
 ## Roadmap
 
 - search and filter for large alias lists
-- polished macOS app icon
-- macOS bundle via `npm run tauri build`
+- signed and notarized release automation
+- optional structured config export and restore
+
+## Documentation Layout
+
+| Document | Purpose |
+| --- | --- |
+| `../README.md` | shared project overview for all platforms |
+| `README.md` | macOS usage, installation, and zsh behavior |
+| `docs/ARCHITECTURE.md` | macOS technical architecture |
+
+## License
+
+EasyAlias is licensed under the MIT License. See `../LICENSE`.

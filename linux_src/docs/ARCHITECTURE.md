@@ -6,7 +6,7 @@ EasyAlias Linux combines a TypeScript/Vite interface with a Tauri 2 Rust backend
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | forms, suggestions, first-run import, validation, previews, Tauri calls |
+| Frontend | `src/main.ts` | forms, suggestions, first-start/manual import, validation, previews, Tauri calls |
 | Styling | `src/styles.css` | responsive desktop interface |
 | Backend | `src-tauri/src/main.rs` | shell detection, startup-file import, backup, and persistence |
 | Bundle config | `src-tauri/tauri.conf.json` | Linux window, permissions, package targets |
@@ -75,7 +75,7 @@ Each alias is persisted as structured JSON:
 
 ## Save Flow
 
-Create, edit, delete, and one-click suggestion operations all end in `save_aliases()`. First-run migration uses `import_shell_aliases()` so backup, managed files, and selected startup-file changes stay coordinated.
+Create, edit, delete, and one-click suggestion operations all end in `save_aliases()`. First-start and manually requested migrations use `import_shell_aliases()` so backup, managed files, and selected startup-file changes stay coordinated.
 
 ```mermaid
 flowchart TD
@@ -101,10 +101,44 @@ alias notes='xdg-open "$HOME/Documents/notes.txt"'
 
 Suggestions use the same `AliasEntry` model and command-preview generator as manually entered aliases. Already-used names are filtered out in the frontend, and clicking `Use` persists a complete entry immediately.
 
+## Import Flow
+
+The backend exposes five commands to the frontend:
+
+```rust
+load_aliases()
+save_aliases(aliases)
+scan_shell_import()
+dismiss_shell_import()
+import_shell_aliases(selected_ids, timestamp)
+```
+
+`load_aliases` performs the automatic first-start detection. `scan_shell_import` ignores the handled marker when the header import button is clicked, rescans the startup file selected from `$SHELL`, and filters aliases already managed by EasyAlias. The scan only returns candidates; `import_shell_aliases` owns backup creation and source changes.
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant UI as Frontend
+  participant Rust as Rust Backend
+  participant RC as ~/.bashrc or ~/.zshrc
+  participant Managed as ~/.easyalias files
+
+  User->>UI: click import icon
+  UI->>Rust: scan_shell_import()
+  Rust->>RC: parse safe aliases as text
+  Rust-->>UI: unmanaged candidates
+  User->>UI: confirm selected aliases
+  UI->>Rust: import_shell_aliases(ids, timestamp)
+  Rust->>RC: create timestamped backup
+  Rust->>Managed: write config.json and aliases.sh
+  Rust->>RC: replace confirmed source lines
+  Rust-->>UI: updated AppState
+```
+
 ## Shell Safety Boundaries
 
 - EasyAlias owns only `~/.easyalias/config.json` and `~/.easyalias/aliases.sh`.
-- `~/.easyalias/.shell-import-v1` records that the one-time migration prompt was handled.
+- `~/.easyalias/.shell-import-v1` records that the automatic first-start migration prompt was handled; it does not disable manual rescans.
 - A timestamped startup-file backup is created before confirmed alias lines are changed.
 - The active startup file receives only a source line and the detached `easya` shortcut.
 - Existing startup content is preserved.

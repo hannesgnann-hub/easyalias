@@ -8,7 +8,7 @@ EasyAlias consists of a small frontend and a Tauri/Rust backend:
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | UI, form state, first-run import dialog, command preview |
+| Frontend | `src/main.ts` | UI, form state, suggestions, first-start/manual import dialog, command preview |
 | Styling | `src/styles.css` | layout and visual design |
 | Backend | `src-tauri/src/main.rs` | PATH setup, legacy command discovery, backup, and persistence |
 | Tauri Config | `src-tauri/tauri.conf.json` | app window, build, Windows installer |
@@ -26,7 +26,7 @@ flowchart TB
   Tauri["Tauri Runtime"]
   Rust["Rust Backend src-tauri/src/main.rs"]
   Dialog["Dialog Plugin file/folder picker"]
-  Opener["Opener Plugin GitHub link"]
+  Opener["Opener Plugin GitHub and Reddit links"]
   Files["~/.easyalias files"]
   Bin["~/.easyalias/bin/*.cmd"]
   Path["User PATH setup"]
@@ -96,7 +96,7 @@ flowchart TD
 | --- | --- | --- |
 | `~/.easyalias/config.json` | structured shortcut data for the UI | EasyAlias |
 | `~/.easyalias/bin/*.cmd` | generated command files | EasyAlias |
-| `~/.easyalias/.cmd-import-v1` | records that the first-run import prompt was handled | EasyAlias |
+| `~/.easyalias/.cmd-import-v1` | records that the automatic first-start import prompt was handled | EasyAlias |
 | `~/.easyalias/import-backup-*` | copies of imported legacy command files | user backup |
 | User `PATH` | contains `~/.easyalias/bin` | user + EasyAlias setup |
 
@@ -140,7 +140,7 @@ Main responsibilities:
 - validate shortcut names
 - update the cmd command preview live
 - persist optional Windows shortcut suggestions with one click
-- review and select safe legacy `.cmd`/`.bat` import candidates
+- open the import scanner from the header and review safe legacy `.cmd`/`.bat` candidates
 - display, edit, and delete shortcuts
 - call Tauri commands when the app runs natively
 
@@ -189,11 +189,12 @@ stateDiagram-v2
 
 ## Backend
 
-The Tauri backend exposes four commands:
+The Tauri backend exposes five commands:
 
 ```rust
 load_aliases()
 save_aliases(aliases)
+scan_command_file_import()
 dismiss_command_file_import()
 import_command_files(selected_ids, timestamp)
 ```
@@ -215,7 +216,29 @@ import_command_files(selected_ids, timestamp)
 - removes stale `.cmd` files for deleted aliases
 - returns fresh PATH status for the UI
 
+`scan_command_file_import` ignores the first-start marker, rescans user-owned `PATH` folders, filters case-insensitive command names already managed by EasyAlias, and returns the remaining candidates. It never scans system directories or EasyAlias' own command folder.
+
 `import_command_files` rescans selected ids, copies every source file into a timestamped backup directory, writes managed Custom Commands, and then removes the old files. Removal failures are returned as warnings without hiding a successful backup/import.
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant UI as Frontend
+  participant Rust as Rust Backend
+  participant Legacy as User PATH folders
+  participant Managed as ~/.easyalias
+
+  User->>UI: click import icon
+  UI->>Rust: scan_command_file_import()
+  Rust->>Legacy: inspect safe .cmd and .bat files
+  Rust-->>UI: unmanaged candidates
+  User->>UI: confirm selected files
+  UI->>Rust: import_command_files(ids, timestamp)
+  Rust->>Managed: copy originals to backup folder
+  Rust->>Managed: write config and managed .cmd files
+  Rust->>Legacy: remove imported originals
+  Rust-->>UI: updated AppState and optional warning
+```
 
 ```mermaid
 sequenceDiagram
@@ -316,6 +339,5 @@ Short term:
 Later:
 
 - settings window
-- polished app icon
-- Windows installer
 - optional export/backup mechanism
+- signed Windows release automation
