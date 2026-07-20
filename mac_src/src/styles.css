@@ -47,6 +47,12 @@ button:disabled {
   margin-bottom: 20px;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .eyebrow {
   margin: 0 0 4px;
   color: #60706b;
@@ -79,6 +85,30 @@ h2 {
   border: 0;
   border-radius: 8px;
   font-weight: 800;
+}
+
+.header-icon-button {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #c9d6d1;
+  border-radius: 8px;
+  color: #17423d;
+  background: #f8fbfa;
+  font-size: 1.45rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.header-icon-button:hover {
+  border-color: #8fb8ad;
+  background: #e8f5f1;
+}
+
+.header-icon-button:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.24);
+  outline-offset: 2px;
 }
 
 .ghost-button {
@@ -617,6 +647,16 @@ textarea:focus {
   .form-title {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .topbar-actions {
+    align-self: flex-end;
+    width: auto;
+  }
+
+  .topbar-actions .header-icon-button {
+    flex: 0 0 42px;
+    width: 42px;
   }
 
   .status-grid,

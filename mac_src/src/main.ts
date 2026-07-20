@@ -216,6 +216,9 @@ let suggestionsExpanded = false;
 // review followed by one confirmation, while every alias can still be excluded.
 let selectedImportIds = new Set<string>();
 let importBusy = false;
+// A manual import can be closed without changing the first-start marker.
+// This also lets the shared modal adjust its heading and secondary action.
+let manualImportOpen = false;
 let notice = "";
 let error = "";
 let editError = "";
@@ -441,14 +444,43 @@ function clearRenderedMessages() {
   document.querySelector(".error")?.remove();
 }
 
-function resetForm() {
-  form = { ...emptyForm };
-  clearMessages();
+function toggleSuggestions() {
+  suggestionsExpanded = !suggestionsExpanded;
   render();
 }
 
-function toggleSuggestions() {
-  suggestionsExpanded = !suggestionsExpanded;
+// The header import button requests a fresh backend scan even after the
+// first-start prompt was handled. Candidates already managed by EasyAlias are
+// filtered by Rust before this shared import modal is opened.
+async function openZshrcImport() {
+  if (importBusy) return;
+  clearMessages();
+  importError = "";
+  importBusy = true;
+  render();
+
+  try {
+    appState = await invokeCommand<AppState>("scan_zshrc_import");
+    selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
+    manualImportOpen = appState.importCandidates.length > 0;
+
+    if (!manualImportOpen) {
+      notice = "No new aliases found in ~/.zshrc.";
+    }
+  } catch (scanError) {
+    error = String(scanError);
+  }
+
+  importBusy = false;
+  render();
+}
+
+function closeManualImport() {
+  if (importBusy) return;
+  appState = { ...appState, importCandidates: [] };
+  selectedImportIds.clear();
+  importError = "";
+  manualImportOpen = false;
   render();
 }
 
@@ -463,6 +495,7 @@ async function dismissZshrcImport() {
   try {
     appState = await invokeCommand<AppState>("dismiss_zshrc_import");
     selectedImportIds.clear();
+    manualImportOpen = false;
     notice = "Existing aliases were left unchanged in ~/.zshrc.";
   } catch (dismissError) {
     importError = String(dismissError);
@@ -495,6 +528,7 @@ async function importSelectedZshrcAliases(event: SubmitEvent) {
     });
     appState = result.state;
     selectedImportIds.clear();
+    manualImportOpen = false;
     notice = `${result.importedCount} aliases imported. Backup: ${result.backupFile}`;
   } catch (importFailure) {
     importError = String(importFailure);
@@ -750,7 +784,16 @@ function render() {
           <p class="eyebrow">macOS Alias Manager</p>
           <h1>EasyAlias</h1>
         </div>
-        <button class="ghost-button" data-action="reset">New</button>
+        <div class="topbar-actions">
+          <button
+            class="header-icon-button"
+            type="button"
+            title="Import aliases from ~/.zshrc"
+            aria-label="Import aliases from ~/.zshrc"
+            data-action="open-import"
+            ${importBusy ? "disabled" : ""}
+          ><span aria-hidden="true">&#8681;</span></button>
+        </div>
       </header>
 
       <section class="status-grid">
@@ -925,9 +968,8 @@ function render() {
   bindEvents();
 }
 
-// The migration dialog is shown only when the backend reports candidates from
-// a fresh installation. The modal makes the filesystem change explicit and
-// keeps all candidates individually reviewable.
+// The same migration dialog handles both first-start discovery and a manual
+// rescan from the header. The mode only changes labels and close behavior.
 function renderImportModal() {
   const candidates = appState.importCandidates;
   if (!candidates.length) return "";
@@ -939,7 +981,7 @@ function renderImportModal() {
       <form class="modal-card import-card" id="import-form" role="dialog" aria-modal="true" aria-labelledby="import-title">
         <div class="modal-title">
           <div>
-            <p class="eyebrow">First Start</p>
+            <p class="eyebrow">${manualImportOpen ? "Import Aliases" : "First Start"}</p>
             <h2 id="import-title">Existing aliases found</h2>
           </div>
           <span class="import-count">${candidates.length} found</span>
@@ -986,7 +1028,7 @@ function renderImportModal() {
         </p>
 
         <div class="modal-actions import-actions">
-          <button class="ghost-button" type="button" data-action="dismiss-import" ${importBusy ? "disabled" : ""}>Skip Import</button>
+          <button class="ghost-button" type="button" data-action="${manualImportOpen ? "close-import" : "dismiss-import"}" ${importBusy ? "disabled" : ""}>${manualImportOpen ? "Close" : "Skip Import"}</button>
           <button class="primary-button" type="submit" ${selectedImportIds.size && !importBusy ? "" : "disabled"}>
             ${importBusy ? "Working..." : `Import Selected (${selectedImportIds.size})`}
           </button>
@@ -1129,7 +1171,8 @@ function bindEvents() {
       const action = button.dataset.action;
       const id = button.dataset.id;
 
-      if (action === "reset") resetForm();
+      if (action === "open-import") void openZshrcImport();
+      if (action === "close-import") closeManualImport();
       if (action === "dismiss-import") void dismissZshrcImport();
       if (action === "edit" && id) openEditModal(id);
       if (action === "close-edit") closeEditModal();
