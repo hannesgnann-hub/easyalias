@@ -483,6 +483,25 @@ fn save_aliases(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
     app_state(aliases, &setup, Vec::new())
 }
 
+// Manually rescan the detected shell startup file when Import is opened from
+// the header. This ignores the first-start marker so aliases added later remain
+// importable, while already managed names are excluded from the selection.
+#[tauri::command]
+fn scan_shell_import() -> Result<AppState, String> {
+    let setup = shell_setup()?;
+    ensure_app_files()?;
+    ensure_shell_source(&setup)?;
+
+    let aliases = load_config_aliases()?;
+    let existing_names: HashSet<&str> = aliases.iter().map(|alias| alias.name.as_str()).collect();
+    let import_candidates = scan_shell_aliases(&setup)?
+        .into_iter()
+        .filter(|candidate| !existing_names.contains(candidate.name.as_str()))
+        .collect();
+
+    app_state(aliases, &setup, import_candidates)
+}
+
 #[tauri::command]
 fn dismiss_shell_import() -> Result<AppState, String> {
     let setup = shell_setup()?;
@@ -578,6 +597,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_aliases,
             save_aliases,
+            scan_shell_import,
             dismiss_shell_import,
             import_shell_aliases
         ])
