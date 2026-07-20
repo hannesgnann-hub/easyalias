@@ -223,6 +223,9 @@ let editingId: string | null = null;
 let suggestionsExpanded = false;
 let selectedImportIds = new Set<string>();
 let importBusy = false;
+// Manual imports share the first-start modal but can close without writing the
+// one-time import marker.
+let manualImportOpen = false;
 let notice = "";
 let error = "";
 let editError = "";
@@ -450,16 +453,44 @@ function clearRenderedMessages() {
   document.querySelector(".error")?.remove();
 }
 
-function resetForm() {
-  form = { ...emptyForm };
-  clearMessages();
-  render();
-}
-
 // The suggestion area starts compact and can be expanded without changing any
 // aliases. Its state is intentionally UI-only and does not need persistence.
 function toggleSuggestions() {
   suggestionsExpanded = !suggestionsExpanded;
+  render();
+}
+
+// Rescan the startup file for the shell detected by Rust, even after the
+// first-start prompt was handled. Existing managed aliases are filtered there.
+async function openShellImport() {
+  if (importBusy) return;
+  clearMessages();
+  importError = "";
+  importBusy = true;
+  render();
+
+  try {
+    appState = await invokeCommand<AppState>("scan_shell_import");
+    selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
+    manualImportOpen = appState.importCandidates.length > 0;
+
+    if (!manualImportOpen) {
+      notice = `No new aliases found in ${appState.shellConfigFile}.`;
+    }
+  } catch (scanError) {
+    error = String(scanError);
+  }
+
+  importBusy = false;
+  render();
+}
+
+function closeManualImport() {
+  if (importBusy) return;
+  appState = { ...appState, importCandidates: [] };
+  selectedImportIds.clear();
+  importError = "";
+  manualImportOpen = false;
   render();
 }
 
@@ -472,6 +503,7 @@ async function dismissShellImport() {
   try {
     appState = await invokeCommand<AppState>("dismiss_shell_import");
     selectedImportIds.clear();
+    manualImportOpen = false;
     notice = `Existing aliases were left unchanged in ${appState.shellConfigFile}.`;
   } catch (dismissError) {
     importError = String(dismissError);
@@ -502,6 +534,7 @@ async function importSelectedShellAliases(event: SubmitEvent) {
     });
     appState = result.state;
     selectedImportIds.clear();
+    manualImportOpen = false;
     notice = `${result.importedCount} aliases imported. Backup: ${result.backupFile}`;
   } catch (importFailure) {
     importError = String(importFailure);
@@ -757,7 +790,16 @@ function render() {
           <p class="eyebrow">Linux Alias Manager</p>
           <h1>EasyAlias</h1>
         </div>
-        <button class="ghost-button" data-action="reset">New</button>
+        <div class="topbar-actions">
+          <button
+            class="header-icon-button"
+            type="button"
+            title="Import aliases from ${escapeHtml(appState.shellConfigFile)}"
+            aria-label="Import aliases from ${escapeHtml(appState.shellConfigFile)}"
+            data-action="open-import"
+            ${importBusy ? "disabled" : ""}
+          ><span aria-hidden="true">&#8681;</span></button>
+        </div>
       </header>
 
       <section class="status-grid">
@@ -943,7 +985,7 @@ function renderImportModal() {
       <form class="modal-card import-card" id="import-form" role="dialog" aria-modal="true" aria-labelledby="import-title">
         <div class="modal-title">
           <div>
-            <p class="eyebrow">First Start</p>
+            <p class="eyebrow">${manualImportOpen ? "Import Aliases" : "First Start"}</p>
             <h2 id="import-title">Existing aliases found</h2>
           </div>
           <span class="import-count">${candidates.length} found</span>
@@ -990,7 +1032,7 @@ function renderImportModal() {
         </p>
 
         <div class="modal-actions import-actions">
-          <button class="ghost-button" type="button" data-action="dismiss-import" ${importBusy ? "disabled" : ""}>Skip Import</button>
+          <button class="ghost-button" type="button" data-action="${manualImportOpen ? "close-import" : "dismiss-import"}" ${importBusy ? "disabled" : ""}>${manualImportOpen ? "Close" : "Skip Import"}</button>
           <button class="primary-button" type="submit" ${selectedImportIds.size && !importBusy ? "" : "disabled"}>
             ${importBusy ? "Working..." : `Import Selected (${selectedImportIds.size})`}
           </button>
@@ -1129,7 +1171,8 @@ function bindEvents() {
       const action = button.dataset.action;
       const id = button.dataset.id;
 
-      if (action === "reset") resetForm();
+      if (action === "open-import") void openShellImport();
+      if (action === "close-import") closeManualImport();
       if (action === "dismiss-import") void dismissShellImport();
       if (action === "toggle-suggestions") toggleSuggestions();
       if (action === "use-suggestion") {
