@@ -460,6 +460,25 @@ fn save_aliases(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
     app_state(aliases, Vec::new())
 }
 
+// Manually rescan ~/.zshrc when the user opens Import from the header. Unlike
+// the first-start prompt, this deliberately ignores the handled marker so more
+// aliases added later can still be moved into EasyAlias. Already managed names
+// are excluded to keep the selection importable as a group.
+#[tauri::command]
+fn scan_zshrc_import() -> Result<AppState, String> {
+    ensure_app_files()?;
+    ensure_zshrc_source()?;
+
+    let aliases = load_config_aliases()?;
+    let existing_names: HashSet<&str> = aliases.iter().map(|alias| alias.name.as_str()).collect();
+    let import_candidates = scan_zshrc_aliases()?
+        .into_iter()
+        .filter(|candidate| !existing_names.contains(candidate.name.as_str()))
+        .collect();
+
+    app_state(aliases, import_candidates)
+}
+
 // Records that the one-time prompt was declined. No alias lines are changed.
 #[tauri::command]
 fn dismiss_zshrc_import() -> Result<AppState, String> {
@@ -556,6 +575,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_aliases,
             save_aliases,
+            scan_zshrc_import,
             dismiss_zshrc_import,
             import_zshrc_aliases
         ])
