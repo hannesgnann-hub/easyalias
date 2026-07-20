@@ -718,6 +718,28 @@ fn save_aliases(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
     app_state(aliases, Vec::new())
 }
 
+// Manually scan user-owned PATH folders when Import is opened from the header.
+// This intentionally ignores the first-start marker so command files created
+// later remain importable. Windows command names are case-insensitive, so names
+// already managed by EasyAlias are filtered with lowercase comparisons.
+#[tauri::command]
+fn scan_command_file_import() -> Result<AppState, String> {
+    ensure_app_files()?;
+    ensure_path_contains_command_dir()?;
+
+    let aliases = load_config_aliases()?;
+    let existing_names: HashSet<String> = aliases
+        .iter()
+        .map(|alias| alias.name.to_ascii_lowercase())
+        .collect();
+    let import_candidates = scan_legacy_command_files()?
+        .into_iter()
+        .filter(|candidate| !existing_names.contains(&candidate.name.to_ascii_lowercase()))
+        .collect();
+
+    app_state(aliases, import_candidates)
+}
+
 #[tauri::command]
 fn dismiss_command_file_import() -> Result<AppState, String> {
     ensure_app_files()?;
@@ -829,6 +851,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_aliases,
             save_aliases,
+            scan_command_file_import,
             dismiss_command_file_import,
             import_command_files
         ])
