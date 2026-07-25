@@ -4,6 +4,8 @@ EasyAlias Linux is a Tauri desktop app for creating and managing terminal aliase
 
 It detects bash or zsh, keeps the alias data in its own directory, and connects one generated shell file to the matching startup file.
 
+Project website: [easyalias.org](https://easyalias.org)
+
 ## Highlights
 
 - create, edit, and delete aliases through a UI

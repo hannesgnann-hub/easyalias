@@ -4,6 +4,8 @@ EasyAlias Windows is a Tauri desktop app for creating and managing Windows comma
 
 The app uses web technology for the interface, but runs as a local Windows desktop app and can manage files on your machine.
 
+Project website: [easyalias.org](https://easyalias.org)
+
 ## Highlights
 
 - create, edit, and delete shortcuts through a UI

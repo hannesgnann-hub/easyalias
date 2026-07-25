@@ -4,6 +4,8 @@ EasyAlias macOS is a Tauri desktop app for creating and managing zsh aliases thr
 
 The app uses web technology for the interface, but runs as a local macOS desktop app and can manage files on your machine.
 
+Project website: [easyalias.org](https://easyalias.org)
+
 ## Highlights
 
 - create, edit, and delete aliases through a UI

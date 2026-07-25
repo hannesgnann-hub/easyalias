@@ -4,6 +4,8 @@ EasyAlias is a small desktop app project for creating, viewing, and managing loc
 
 The idea: instead of manually editing shell files or hand-maintaining command scripts, EasyAlias gives you a simple interface. You enter a command name, choose a file or folder, select what should happen from a dropdown, and the app generates the matching platform-specific command.
 
+[Website](https://easyalias.org) | [GitHub](https://github.com/hannesgnann-hub/easyalias) | [Reddit](https://www.reddit.com/r/easyalias/)
+
 ![EasyAlias desktop UI](docs/assets/easyalias-ui.png)
 
 ## Install on macOS
