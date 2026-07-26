@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "category": "DeveloperTool",
+    "macOS": {
+      "bundleVersion": "1",
+      "entitlements": "./Entitlements.plist",
+      "files": {
+        "embedded.provisionprofile": "./EasyAlias_AppStore.provisionprofile"
+      }
+    }
+  }
+}
