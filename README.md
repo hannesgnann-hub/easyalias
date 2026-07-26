@@ -6,6 +6,16 @@ The idea: instead of manually editing shell files or hand-maintaining command sc
 
 [Website](https://easyalias.org) | [GitHub](https://github.com/hannesgnann-hub/easyalias) | [Reddit](https://www.reddit.com/r/easyalias/)
 
+## ❤️ Support EasyAlias
+
+Hi, I'm Hannes, the creator of EasyAlias and a Software Engineering student.
+
+If EasyAlias saves you time, consider supporting its development.
+
+Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias free and open source.
+
+[Become a GitHub Sponsor](https://github.com/sponsors/hannesgnann-hub)
+
 ![EasyAlias desktop UI](docs/assets/easyalias-ui.png)
 
 ## Install on macOS

@@ -6,6 +6,16 @@ The app uses web technology for the interface, but runs as a local macOS desktop
 
 Project website: [easyalias.org](https://easyalias.org)
 
+## ❤️ Support EasyAlias
+
+Hi, I'm Hannes, the creator of EasyAlias and a Software Engineering student.
+
+If EasyAlias saves you time, consider supporting its development.
+
+Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias free and open source.
+
+[Become a GitHub Sponsor](https://github.com/sponsors/hannesgnann-hub)
+
 ## Highlights
 
 - create, edit, and delete aliases through a UI
