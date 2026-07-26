@@ -6,6 +6,16 @@ It detects bash or zsh, keeps the alias data in its own directory, and connects 
 
 Project website: [easyalias.org](https://easyalias.org)
 
+## ❤️ Support EasyAlias
+
+Hi, I'm Hannes, the creator of EasyAlias and a Software Engineering student.
+
+If EasyAlias saves you time, consider supporting its development.
+
+Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias free and open source.
+
+[Become a GitHub Sponsor](https://github.com/sponsors/hannesgnann-hub)
+
 ## Highlights
 
 - create, edit, and delete aliases through a UI
