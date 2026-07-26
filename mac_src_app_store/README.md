@@ -103,7 +103,7 @@ Bundle ID: dev.hannesgnann.easyalias
 Team ID:   ZAYL5AN372
 Category:  DeveloperTool
 Version:   1.0.0
-Build:     1
+Build:     2
 ```
 
 The Bundle ID in Apple Developer and App Store Connect must match exactly.
@@ -201,6 +201,7 @@ The output must include at least:
 
 ```text
 com.apple.security.app-sandbox
+com.apple.security.network.client
 com.apple.security.files.user-selected.read-write
 com.apple.security.files.bookmarks.app-scope
 ```
@@ -224,12 +225,20 @@ Set the exact installer identity shown by Keychain:
 export INSTALLER_IDENTITY="3rd Party Mac Developer Installer: Hannes Gnann (ZAYL5AN372)"
 ```
 
+Remove Finder metadata and other extended attributes from the signed app bundle before packaging. This prevents App Store validation error `90303`:
+
+```zsh
+APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/EasyAlias.app"
+xattr -cr "$APP"
+codesign --verify --deep --strict --verbose=2 "$APP"
+```
+
 Create the App Store package:
 
 ```zsh
 xcrun productbuild \
   --sign "$INSTALLER_IDENTITY" \
-  --component src-tauri/target/universal-apple-darwin/release/bundle/macos/EasyAlias.app \
+  --component "$APP" \
   /Applications \
   EasyAlias.pkg
 ```

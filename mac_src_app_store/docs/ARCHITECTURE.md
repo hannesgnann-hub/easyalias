@@ -201,13 +201,14 @@ No Apple certificate, private key, API key, or provisioning profile belongs in t
 | Entitlement | Reason |
 | --- | --- |
 | `com.apple.security.app-sandbox` | required for Mac App Store distribution |
+| `com.apple.security.network.client` | allows Tauri's sandboxed WebKit helper processes to load the bundled frontend |
 | `com.apple.application-identifier` | binds the app to Team ID and Bundle ID |
 | `com.apple.developer.team-identifier` | identifies the Apple Developer team |
 | `com.apple.security.files.user-selected.read-write` | permits `.zshrc` selected through `NSOpenPanel` |
 | `com.apple.security.files.user-selected.executable` | permits writing shell script content without command-line quarantine problems |
 | `com.apple.security.files.bookmarks.app-scope` | persists selected-file access between launches |
 
-No broad home-directory entitlement, temporary exception, network entitlement, shell execution plugin, or child process is used.
+No broad home-directory entitlement, temporary exception, network server entitlement, shell execution plugin, or child process is used.
 
 ## Import Safety
 
