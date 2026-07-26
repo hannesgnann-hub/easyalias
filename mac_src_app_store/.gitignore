@@ -1,0 +1,10 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+.DS_Store
+.env
+.env.local
+npm-debug.log*
+src-tauri/EasyAlias_AppStore.provisionprofile
+*.pkg

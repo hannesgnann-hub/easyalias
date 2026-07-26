@@ -66,7 +66,7 @@ flowchart LR
 
 ## Current Status
 
-EasyAlias now has separate Tauri source projects for macOS, Windows, and Linux. Each version keeps the same UI and data model while using the native terminal integration for its platform.
+EasyAlias has separate Tauri source projects for direct macOS distribution, the Mac App Store, Windows, and Linux. Each version keeps the same UI and data model while using the native terminal integration and security model for its platform.
 
 The macOS version can:
 
@@ -80,6 +80,16 @@ The macOS version can:
 - store `createdAt` and `updatedAt`
 - automatically connect `~/.easyalias/aliases.zsh` to `~/.zshrc`
 - start from the terminal through `easya` if the app is installed at `/Applications/EasyAlias.app`
+
+The Mac App Store version can:
+
+- run inside Apple's App Sandbox
+- store structured data and backups in its app container
+- connect only to a `.zshrc` explicitly selected through the native file picker
+- persist that permission with a security-scoped bookmark
+- manage one clearly marked alias block directly in the selected `.zshrc`
+- import existing aliases only after the file has been connected
+- build a universal signed `.app` and installer-signed `.pkg` for App Store Connect
 
 The Windows version can:
 
@@ -108,6 +118,7 @@ The Linux version can:
 easyalias/
   mac_src/          macOS source code for the Tauri app
   mac_export/       built macOS export, e.g. EasyAlias.zip
+  mac_src_app_store/ sandboxed macOS source for Mac App Store distribution
 
   windows_src/      Windows source code for the Tauri app
   windows_export/   built Windows installer exports
@@ -125,6 +136,8 @@ Documentation is split by scope:
 | `README.md` | shared project overview |
 | `mac_src/README.md` | macOS app usage |
 | `mac_src/docs/ARCHITECTURE.md` | macOS technical architecture |
+| `mac_src_app_store/README.md` | Mac App Store setup, signing, and upload guide |
+| `mac_src_app_store/docs/ARCHITECTURE.md` | App Sandbox and bookmark architecture |
 | `windows_src/README.md` | Windows app usage |
 | `windows_src/docs/ARCHITECTURE.md` | Windows technical architecture |
 | `linux_src/README.md` | Linux app usage and build guide |
@@ -135,6 +148,7 @@ flowchart TD
   Root["easyalias/"]
   Root --> MacSrc["mac_src/ macOS source"]
   Root --> MacExport["mac_export/ macOS export"]
+  Root --> MacStore["mac_src_app_store/ sandboxed macOS source"]
   Root --> WinSrc["windows_src/ Windows source"]
   Root --> WinExport["windows_export/ Windows exports"]
   Root --> LinuxSrc["linux_src/ Linux source"]
@@ -144,6 +158,9 @@ flowchart TD
   MacSrc --> MacFrontend["src/ macOS UI"]
   MacSrc --> MacBackend["src-tauri/ macOS backend"]
   MacSrc --> MacDocs["docs/ macOS architecture"]
+  MacStore --> StoreFrontend["src/ Store UI"]
+  MacStore --> StoreBackend["src-tauri/ sandbox backend"]
+  MacStore --> StoreDocs["docs/ Store architecture"]
   WinSrc --> WinFrontend["src/ Windows UI"]
   WinSrc --> WinBackend["src-tauri/ Windows backend"]
   WinSrc --> WinDocs["docs/ Windows architecture"]
@@ -188,6 +205,27 @@ Export:
 cp -R src-tauri/target/release/bundle/macos/EasyAlias.app /Applications/
 ditto -c -k --keepParent src-tauri/target/release/bundle/macos/EasyAlias.app ../mac_export/EasyAlias.zip
 ```
+
+### Mac App Store
+
+The sandboxed Store source lives in:
+
+```text
+mac_src_app_store/
+```
+
+It is intentionally separate from `mac_src/`. Before it can manage aliases, the user selects `.zshrc` once and macOS grants persistent access through a security-scoped bookmark.
+
+Run the source checks:
+
+```zsh
+cd mac_src_app_store
+npm install
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+The final App Store build additionally requires Apple Distribution and Mac Installer Distribution certificates plus a Mac App Store Connect provisioning profile. See [`mac_src_app_store/README.md`](mac_src_app_store/README.md) for the exact registration, signing, `.pkg`, and upload steps.
 
 ## Windows
 
@@ -244,6 +282,7 @@ Development can be coordinated from a Mac, but release packages should be produc
 | Source project | Recommended build host | Configured output |
 | --- | --- | --- |
 | `mac_src` | macOS | `.app` bundle |
+| `mac_src_app_store` | macOS with Apple signing assets | universal sandboxed `.app` and signed `.pkg` |
 | `windows_src` | Windows | NSIS `.exe` installer |
 | `linux_src` | Linux | `.deb`, `.rpm`, and `.AppImage` packages |
 
@@ -253,12 +292,16 @@ A Windows or Linux VM works for occasional builds. For repeatable releases, use 
 flowchart LR
   Shared["Shared idea and UI"]
   Shared --> Mac["macOS"]
+  Shared --> MacStore["Mac App Store"]
   Shared --> Win["Windows"]
   Shared --> Linux["Linux"]
 
   Mac --> Zsh["zsh"]
   Zsh --> ZshFile["~/.easyalias/aliases.zsh"]
   ZshFile --> Zshrc["source in ~/.zshrc"]
+
+  MacStore --> Bookmark["User-selected .zshrc bookmark"]
+  Bookmark --> ManagedBlock["Managed alias block in .zshrc"]
 
   Win --> Cmd["cmd.exe"]
   Cmd --> Bin["$HOME/.easyalias/bin/*.cmd"]
@@ -307,11 +350,12 @@ After the first Linux app start, open a new terminal or reload the detected shel
 
 ## Import Existing Aliases
 
-Fresh installations automatically detect existing aliases and offer a one-time selection dialog. After that prompt has been handled, the import icon in the top-right corner can rescan the same platform-specific source at any time. EasyAlias never imports silently and creates a backup before confirmed source data is changed.
+Fresh direct-install editions automatically detect existing aliases and offer a one-time selection dialog. The Mac App Store edition performs that scan only after the user explicitly connects a `.zshrc`. After the prompt has been handled, the import icon in the top-right corner can rescan the same platform-specific source at any time. EasyAlias never imports silently and creates a backup before confirmed source data is changed.
 
 | Platform | Detection source | Backup |
 | --- | --- | --- |
 | macOS | safe, single-line aliases in `~/.zshrc` | `~/.zshrc.easyalias-backup-*` |
+| Mac App Store | safe, single-line aliases in the user-selected `.zshrc` | App Sandbox container `backups/` |
 | Linux | safe, single-line aliases in the detected `~/.bashrc` or `~/.zshrc` | matching `.bashrc.easyalias-backup-*` or `.zshrc.easyalias-backup-*` |
 | Windows | simple `.cmd`/`.bat` alias files in user-owned `PATH` folders | `~/.easyalias/import-backup-*` |
 
