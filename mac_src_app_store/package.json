@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "store:build:sandbox": "APPLE_SIGNING_IDENTITY=- tauri build --bundles app --config src-tauri/tauri.sandbox.conf.json",
-    "store:build": "tauri build --bundles app --target universal-apple-darwin --config src-tauri/tauri.appstore.conf.json"
+    "store:build": "CARGO_TARGET_DIR=/private/tmp/easyalias-appstore-target tauri build --bundles app --target universal-apple-darwin --config src-tauri/tauri.appstore.conf.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
