@@ -66,7 +66,7 @@ flowchart LR
 
 ## Current Status
 
-EasyAlias has separate Tauri source projects for direct macOS distribution, the Mac App Store, Windows, and Linux. Each version keeps the same UI and data model while using the native terminal integration and security model for its platform.
+EasyAlias has separate Tauri source projects for direct macOS distribution, the Mac App Store, direct Windows distribution, the Microsoft Store, and Linux. Each version keeps the same UI and data model while using the native terminal integration and security model for its platform.
 
 The macOS version can:
 
@@ -101,6 +101,13 @@ The Windows version can:
 - connect the command folder to the user `PATH`, so aliases work in `cmd.exe`
 - build as a Windows installer target through Tauri/NSIS
 
+The Microsoft Store version keeps the same unrestricted Win32 behavior and:
+
+- builds a separate offline NSIS installer for the Store's EXE/MSI workflow
+- embeds the WebView2 offline installer required for Store certification
+- supports unattended installation through the `/S` argument
+- keeps Store signing and release instructions separate from direct Windows builds
+
 The Linux version can:
 
 - create, edit, and delete bash/zsh aliases
@@ -121,6 +128,7 @@ easyalias/
   mac_src_app_store/ sandboxed macOS source for Mac App Store distribution
 
   windows_src/      Windows source code for the Tauri app
+  windows_src_store/ Microsoft Store Win32 source and release configuration
   windows_export/   built Windows installer exports
 
   linux_src/        Linux source code for the Tauri app
@@ -140,6 +148,8 @@ Documentation is split by scope:
 | `mac_src_app_store/docs/ARCHITECTURE.md` | App Sandbox and bookmark architecture |
 | `windows_src/README.md` | Windows app usage |
 | `windows_src/docs/ARCHITECTURE.md` | Windows technical architecture |
+| `windows_src_store/README.md` | Microsoft Store Windows variant |
+| `windows_src_store/docs/MICROSOFT_STORE.md` | Store build, signing, and submission guide |
 | `linux_src/README.md` | Linux app usage and build guide |
 | `linux_src/docs/ARCHITECTURE.md` | Linux technical architecture |
 
@@ -150,6 +160,7 @@ flowchart TD
   Root --> MacExport["mac_export/ macOS export"]
   Root --> MacStore["mac_src_app_store/ sandboxed macOS source"]
   Root --> WinSrc["windows_src/ Windows source"]
+  Root --> WinStore["windows_src_store/ Microsoft Store source"]
   Root --> WinExport["windows_export/ Windows exports"]
   Root --> LinuxSrc["linux_src/ Linux source"]
   Root --> LinuxExport["linux_export/ Linux exports"]
@@ -164,6 +175,9 @@ flowchart TD
   WinSrc --> WinFrontend["src/ Windows UI"]
   WinSrc --> WinBackend["src-tauri/ Windows backend"]
   WinSrc --> WinDocs["docs/ Windows architecture"]
+  WinStore --> WinStoreFrontend["src/ Store Windows UI"]
+  WinStore --> WinStoreBackend["src-tauri/ Win32 backend"]
+  WinStore --> WinStoreDocs["docs/ Store release guide"]
   LinuxSrc --> LinuxFrontend["src/ Linux UI"]
   LinuxSrc --> LinuxBackend["src-tauri/ Linux backend"]
   LinuxSrc --> LinuxDocs["docs/ Linux architecture"]
@@ -251,6 +265,25 @@ npm run tauri build
 
 The Windows version uses the same UI and product idea, but integrates with `cmd.exe` instead of zsh.
 
+The Microsoft Store source lives in:
+
+```text
+windows_src_store/
+```
+
+Build its offline NSIS installer on Windows:
+
+```powershell
+cd windows_src_store
+npm ci
+npm run store:build
+```
+
+The installer is submitted through the Partner Center **EXE or MSI app**
+workflow. See
+[`windows_src_store/docs/MICROSOFT_STORE.md`](windows_src_store/docs/MICROSOFT_STORE.md)
+for signing, silent installation, hosting, and submission details.
+
 ## Linux
 
 The Linux source lives in:
@@ -284,6 +317,7 @@ Development can be coordinated from a Mac, but release packages should be produc
 | `mac_src` | macOS | `.app` bundle |
 | `mac_src_app_store` | macOS with Apple signing assets | universal sandboxed `.app` and signed `.pkg` |
 | `windows_src` | Windows | NSIS `.exe` installer |
+| `windows_src_store` | Windows with signing assets | offline Microsoft Store NSIS `.exe` |
 | `linux_src` | Linux | `.deb`, `.rpm`, and `.AppImage` packages |
 
 A Windows or Linux VM works for occasional builds. For repeatable releases, use separate macOS, Windows, and Linux jobs in a CI matrix and upload their artifacts to one release. Tauri documents this pattern in its [GitHub Actions guide](https://v2.tauri.app/distribute/pipelines/github/). Windows MSI output requires Windows, while the configured NSIS target can also be cross-compiled with additional tooling; see the [Windows installer guide](https://v2.tauri.app/distribute/windows-installer/). Linux packages should be built on Linux because their native libraries and compatibility baseline matter.
