@@ -182,8 +182,10 @@ npm run store:build
 The app bundle is generated at:
 
 ```text
-src-tauri/target/universal-apple-darwin/release/bundle/macos/EasyAlias.app
+/private/tmp/easyalias-appstore-target/universal-apple-darwin/release/bundle/macos/EasyAlias.app
 ```
+
+The final Store build deliberately uses a target directory outside Desktop and other File Provider locations. Otherwise macOS can attach `com.apple.FinderInfo` while Tauri is still assembling the bundle, causing code-signing error `resource fork, Finder information, or similar detritus not allowed`.
 
 ## Verify the Sandbox
 
@@ -191,10 +193,10 @@ Inspect the signature and embedded entitlements:
 
 ```zsh
 codesign --verify --deep --strict --verbose=2 \
-  src-tauri/target/universal-apple-darwin/release/bundle/macos/EasyAlias.app
+  /private/tmp/easyalias-appstore-target/universal-apple-darwin/release/bundle/macos/EasyAlias.app
 
 codesign -d --entitlements - \
-  src-tauri/target/universal-apple-darwin/release/bundle/macos/EasyAlias.app
+  /private/tmp/easyalias-appstore-target/universal-apple-darwin/release/bundle/macos/EasyAlias.app
 ```
 
 The output must include at least:
@@ -228,7 +230,7 @@ export INSTALLER_IDENTITY="3rd Party Mac Developer Installer: Hannes Gnann (ZAYL
 Remove Finder metadata and other extended attributes from the signed app bundle before packaging. This prevents App Store validation error `90303`:
 
 ```zsh
-APP="src-tauri/target/universal-apple-darwin/release/bundle/macos/EasyAlias.app"
+APP="/private/tmp/easyalias-appstore-target/universal-apple-darwin/release/bundle/macos/EasyAlias.app"
 xattr -cr "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 ```
