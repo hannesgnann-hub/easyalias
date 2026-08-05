@@ -115,6 +115,22 @@ In Partner Center, submit EasyAlias as an **EXE or MSI app** and enter:
 Complete the listing, age rating, privacy/support URLs, screenshots, and
 certification notes before publishing.
 
+## Store Icons
+
+Do not use a generated placeholder or the Partner Center default icon. Upload
+the EasyAlias artwork from `store_assets` in the Store listing:
+
+| Partner Center asset | File |
+| --- | --- |
+| 1:1 app tile icon | `EasyAlias-AppTile-300x300.png` |
+| 1:1 box art | `EasyAlias-BoxArt-1080x1080.png` |
+
+When Partner Center offers a choice between package images and uploaded Store
+images, select the uploaded EasyAlias images. The Windows executable itself
+uses the multi-resolution `src-tauri/icons/icon.ico`; the additional
+`Square*Logo.png` and `StoreLogo.png` files provide matching Windows tile
+assets for future package-based builds.
+
 ## Release Checklist
 
 - [ ] `npm ci` succeeds on Windows
@@ -126,4 +142,6 @@ certification notes before publishing.
 - [ ] a new `cmd.exe` resolves generated aliases
 - [ ] `/S` uninstalls without an uninstaller UI
 - [ ] signed installer is hosted at an immutable HTTPS URL
+- [ ] EasyAlias 1:1 app tile icon and box art are uploaded
+- [ ] no Partner Center default icon is selected
 - [ ] Partner Center listing and certification information are complete
