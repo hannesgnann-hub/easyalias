@@ -3,7 +3,7 @@
   "bundle": {
     "category": "DeveloperTool",
     "macOS": {
-      "bundleVersion": "2",
+      "bundleVersion": "3",
       "entitlements": "./Entitlements.plist",
       "files": {
         "embedded.provisionprofile": "./EasyAlias_AppStore.provisionprofile"
