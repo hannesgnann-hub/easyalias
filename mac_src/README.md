@@ -4,7 +4,7 @@ EasyAlias macOS is a Tauri desktop app for creating and managing zsh aliases thr
 
 The app uses web technology for the interface, but runs as a local macOS desktop app and can manage files on your machine.
 
-Project website: [easyalias.org](https://easyalias.org)
+Project website: [easyalias.org](https://easyalias.org) | [Mac App Store](https://apps.apple.com/de/app/easyalias/id6794944241?mt=12)
 
 ## ❤️ Support EasyAlias
 
@@ -32,7 +32,7 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 
 ## Install
 
-EasyAlias is available as a Homebrew cask:
+Install the sandboxed edition from the [Mac App Store](https://apps.apple.com/de/app/easyalias/id6794944241?mt=12), or install this direct desktop edition as a Homebrew cask:
 
 ```zsh
 brew tap hannesgnann-hub/tap

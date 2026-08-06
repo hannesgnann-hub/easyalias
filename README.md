@@ -4,7 +4,7 @@ EasyAlias is a small desktop app project for creating, viewing, and managing loc
 
 The idea: instead of manually editing shell files or hand-maintaining command scripts, EasyAlias gives you a simple interface. You enter a command name, choose a file or folder, select what should happen from a dropdown, and the app generates the matching platform-specific command.
 
-[Website](https://easyalias.org) | [GitHub](https://github.com/hannesgnann-hub/easyalias) | [Reddit](https://www.reddit.com/r/easyalias/)
+[Website](https://easyalias.org) | [Mac App Store](https://apps.apple.com/de/app/easyalias/id6794944241?mt=12) | [GitHub](https://github.com/hannesgnann-hub/easyalias) | [Reddit](https://www.reddit.com/r/easyalias/)
 
 ## ❤️ Support EasyAlias
 
@@ -20,7 +20,7 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 
 ## Install on macOS
 
-EasyAlias is available as a Homebrew cask:
+Install the sandboxed edition from the [Mac App Store](https://apps.apple.com/de/app/easyalias/id6794944241?mt=12), or install the direct desktop edition as a Homebrew cask:
 
 ```zsh
 brew tap hannesgnann-hub/tap
@@ -221,6 +221,8 @@ ditto -c -k --keepParent src-tauri/target/release/bundle/macos/EasyAlias.app ../
 ```
 
 ### Mac App Store
+
+The sandboxed edition is available on the [Mac App Store](https://apps.apple.com/de/app/easyalias/id6794944241?mt=12).
 
 The sandboxed Store source lives in:
 
