@@ -4,7 +4,9 @@ This folder contains the sandboxed EasyAlias edition intended for distribution t
 
 It is separate from `mac_src/`, so the existing Homebrew/GitHub version keeps its automatic home-directory integration while the Store edition follows Apple's App Sandbox rules.
 
-[Website](https://easyalias.org) | [GitHub](https://github.com/hannesgnann-hub/easyalias) | [Reddit](https://www.reddit.com/r/easyalias/)
+[Website](https://easyalias.org) | [Mac App Store](https://apps.apple.com/de/app/easyalias/id6794944241?mt=12) | [GitHub](https://github.com/hannesgnann-hub/easyalias) | [Reddit](https://www.reddit.com/r/easyalias/)
+
+Download the sandboxed release from the [Mac App Store](https://apps.apple.com/de/app/easyalias/id6794944241?mt=12).
 
 ## ❤️ Support EasyAlias
 
