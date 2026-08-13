@@ -56,12 +56,43 @@ struct ImportResult {
     backup_file: String,
 }
 
+// Portable backups are deliberately wrapped in a versioned envelope instead
+// of exposing config.json directly. This gives future releases room to evolve
+// the format while rejecting unrelated or malformed JSON files today.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AliasBackup {
+    format: String,
+    version: u32,
+    exported_at: String,
+    aliases: Vec<AliasEntry>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupExportResult {
+    file: String,
+    exported_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupImportResult {
+    state: AppState,
+    imported_count: usize,
+    replaced_count: usize,
+}
+
 // EasyAlias owns ~/.easyalias/aliases.zsh and only adds a source line to ~/.zshrc.
 // This keeps the user's existing shell config mostly untouched.
 const SOURCE_LINE: &str = "source ~/.easyalias/aliases.zsh";
 const APP_ALIAS_NAME: &str = "easya";
 const APP_ALIAS_LINE: &str = "alias easya='open /Applications/EasyAlias.app'";
 const IMPORT_MARKER_CONTENT: &str = "zshrc import prompt handled\n";
+const BACKUP_FORMAT: &str = "easyalias-backup";
+const BACKUP_VERSION: u32 = 1;
+const MAX_BACKUP_BYTES: u64 = 5 * 1024 * 1024;
+const MAX_BACKUP_ALIASES: usize = 5000;
 
 // Resolve the user's home directory without pulling in extra dependencies.
 fn home_dir() -> Result<PathBuf, String> {
@@ -339,6 +370,84 @@ fn validate_alias_name(name: &str) -> bool {
     chars.all(|char| char.is_ascii_alphanumeric() || char == '_' || char == '-')
 }
 
+fn validate_alias_entry(alias: &AliasEntry) -> Result<(), String> {
+    if alias.id.trim().is_empty() {
+        return Err(format!("Alias \"{}\" has no id.", alias.name));
+    }
+    if !validate_alias_name(&alias.name) {
+        return Err(format!("Invalid alias name: {}", alias.name));
+    }
+    if !matches!(
+        alias.action.as_str(),
+        "navigate" | "open" | "execute" | "compile_gradle" | "compile_maven" | "custom"
+    ) {
+        return Err(format!(
+            "Alias \"{}\" has an unsupported action.",
+            alias.name
+        ));
+    }
+    if alias.command_preview.trim().is_empty() {
+        return Err(format!("Alias {} has no command.", alias.name));
+    }
+    if alias.created_at.trim().is_empty() || alias.updated_at.trim().is_empty() {
+        return Err(format!(
+            "Alias \"{}\" has incomplete timestamps.",
+            alias.name
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_alias_collection(aliases: &[AliasEntry]) -> Result<(), String> {
+    if aliases.len() > MAX_BACKUP_ALIASES {
+        return Err(format!(
+            "Backup contains more than {} aliases.",
+            MAX_BACKUP_ALIASES
+        ));
+    }
+
+    let mut ids = HashSet::new();
+    let mut names = HashSet::new();
+    for alias in aliases {
+        validate_alias_entry(alias)?;
+        if !ids.insert(alias.id.as_str()) {
+            return Err(format!("Duplicate alias id in backup: {}", alias.id));
+        }
+        if !names.insert(alias.name.as_str()) {
+            return Err(format!("Duplicate alias name in backup: {}", alias.name));
+        }
+    }
+
+    Ok(())
+}
+
+fn read_backup(path: &Path) -> Result<AliasBackup, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("{} could not be inspected: {}", path.display(), error))?;
+    if !metadata.is_file() {
+        return Err("Choose an EasyAlias JSON backup file.".to_string());
+    }
+    if metadata.len() > MAX_BACKUP_BYTES {
+        return Err("The backup is larger than 5 MB.".to_string());
+    }
+
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let backup: AliasBackup = serde_json::from_str(&content)
+        .map_err(|error| format!("This is not a valid EasyAlias backup: {}", error))?;
+
+    if backup.format != BACKUP_FORMAT || backup.version != BACKUP_VERSION {
+        return Err("This EasyAlias backup format is not supported.".to_string());
+    }
+    if backup.exported_at.trim().is_empty() {
+        return Err("The backup has no export timestamp.".to_string());
+    }
+    validate_alias_collection(&backup.aliases)?;
+
+    Ok(backup)
+}
+
 // Wrap a zsh command in single quotes for an alias assignment.
 // Embedded single quotes are escaped using the standard '\'' pattern.
 fn single_quote(value: &str) -> String {
@@ -355,13 +464,7 @@ fn render_aliases(aliases: &[AliasEntry]) -> Result<String, String> {
     ];
 
     for alias in aliases {
-        if !validate_alias_name(&alias.name) {
-            return Err(format!("Invalid alias name: {}", alias.name));
-        }
-
-        if alias.command_preview.trim().is_empty() {
-            return Err(format!("Alias {} has no command.", alias.name));
-        }
+        validate_alias_entry(alias)?;
 
         lines.push(format!(
             "alias {}={}",
@@ -458,6 +561,112 @@ fn save_aliases(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
 
     write_alias_files(&aliases)?;
     app_state(aliases, Vec::new())
+}
+
+// Export only the aliases selected in the review dialog. The backend verifies
+// that every requested id still exists before writing the portable JSON file.
+#[tauri::command]
+fn export_alias_backup(
+    selected_ids: Vec<String>,
+    destination: String,
+    exported_at: String,
+) -> Result<BackupExportResult, String> {
+    if selected_ids.is_empty() {
+        return Err("Select at least one alias to export.".to_string());
+    }
+    if destination.trim().is_empty() {
+        return Err("Choose where to save the backup.".to_string());
+    }
+    if exported_at.trim().is_empty() {
+        return Err("Export timestamp is missing.".to_string());
+    }
+
+    let selected_id_set: HashSet<&str> = selected_ids.iter().map(String::as_str).collect();
+    let aliases = load_config_aliases()?;
+    let selected: Vec<AliasEntry> = aliases
+        .into_iter()
+        .filter(|alias| selected_id_set.contains(alias.id.as_str()))
+        .collect();
+    if selected.len() != selected_id_set.len() {
+        return Err("Some aliases changed. Reopen Export and try again.".to_string());
+    }
+    validate_alias_collection(&selected)?;
+
+    let backup = AliasBackup {
+        format: BACKUP_FORMAT.to_string(),
+        version: BACKUP_VERSION,
+        exported_at,
+        aliases: selected,
+    };
+    let json = serde_json::to_string_pretty(&backup)
+        .map_err(|error| format!("Backup could not be serialized: {}", error))?;
+    let path = PathBuf::from(destination);
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))?;
+
+    Ok(BackupExportResult {
+        file: path.display().to_string(),
+        exported_count: backup.aliases.len(),
+    })
+}
+
+// Read and validate a backup before the frontend displays its entries. No app
+// data is changed at this stage, so file selection and drop remain reversible.
+#[tauri::command]
+fn inspect_alias_backup(path: String) -> Result<Vec<AliasEntry>, String> {
+    Ok(read_backup(Path::new(&path))?.aliases)
+}
+
+// Merge selected backup entries by alias name. Name conflicts intentionally
+// replace the existing entry so a backup can restore an edited alias cleanly.
+#[tauri::command]
+fn import_alias_backup(
+    path: String,
+    selected_ids: Vec<String>,
+    imported_at: String,
+) -> Result<BackupImportResult, String> {
+    if selected_ids.is_empty() {
+        return Err("Select at least one alias to import.".to_string());
+    }
+    if imported_at.trim().is_empty() {
+        return Err("Import timestamp is missing.".to_string());
+    }
+
+    let backup = read_backup(Path::new(&path))?;
+    let selected_id_set: HashSet<&str> = selected_ids.iter().map(String::as_str).collect();
+    let mut selected: Vec<AliasEntry> = backup
+        .aliases
+        .into_iter()
+        .filter(|alias| selected_id_set.contains(alias.id.as_str()))
+        .collect();
+    if selected.len() != selected_id_set.len() {
+        return Err("Some selected aliases are no longer present in the backup.".to_string());
+    }
+
+    let mut aliases = load_config_aliases()?;
+    let selected_names: HashSet<String> = selected.iter().map(|alias| alias.name.clone()).collect();
+    let replaced_count = aliases
+        .iter()
+        .filter(|alias| selected_names.contains(&alias.name))
+        .count();
+    aliases.retain(|alias| !selected_names.contains(&alias.name));
+
+    for alias in &mut selected {
+        // New ids avoid collisions when a backup is imported more than once.
+        alias.id = format!("backup-{}-{}", unix_timestamp()?, alias.id);
+        alias.updated_at = imported_at.clone();
+    }
+    let imported_count = selected.len();
+    aliases.extend(selected);
+    aliases.sort_by(|left, right| left.name.cmp(&right.name));
+    validate_alias_collection(&aliases)?;
+    write_alias_files(&aliases)?;
+
+    Ok(BackupImportResult {
+        state: app_state(aliases, Vec::new())?,
+        imported_count,
+        replaced_count,
+    })
 }
 
 // Manually rescan ~/.zshrc when the user opens Import from the header. Unlike
@@ -575,6 +784,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_aliases,
             save_aliases,
+            export_alias_backup,
+            inspect_alias_backup,
+            import_alias_backup,
             scan_zshrc_import,
             dismiss_zshrc_import,
             import_zshrc_aliases
@@ -587,6 +799,9 @@ fn main() {
 mod tests {
     use super::*;
     use std::ffi::OsString;
+    use std::sync::Mutex;
+
+    static HOME_LOCK: Mutex<()> = Mutex::new(());
 
     struct TemporaryHome {
         path: PathBuf,
@@ -619,6 +834,19 @@ mod tests {
                 env::remove_var("HOME");
             }
             let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn test_alias(id: &str, name: &str, command: &str) -> AliasEntry {
+        AliasEntry {
+            id: id.to_string(),
+            name: name.to_string(),
+            path: String::new(),
+            action: "custom".to_string(),
+            custom_command: Some(command.to_string()),
+            command_preview: command.to_string(),
+            created_at: "2026-08-13T18:00:00.000Z".to_string(),
+            updated_at: "2026-08-13T18:00:00.000Z".to_string(),
         }
     }
 
@@ -668,6 +896,7 @@ mod tests {
 
     #[test]
     fn first_start_import_creates_backup_and_managed_files() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
         let temporary_home = TemporaryHome::create();
         let zshrc_path = temporary_home.path.join(".zshrc");
         fs::write(
@@ -699,5 +928,71 @@ mod tests {
             .contains("alias legacy='echo legacy'"));
         assert_eq!(load_config_aliases().unwrap().len(), 1);
         assert!(import_marker_file().unwrap().exists());
+    }
+
+    #[test]
+    fn backup_export_contains_only_selected_aliases() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let temporary_home = TemporaryHome::create();
+        ensure_app_files().unwrap();
+        write_alias_files(&[
+            test_alias("one", "ll", "ls -lah"),
+            test_alias("two", "gs", "git status"),
+        ])
+        .unwrap();
+        let destination = temporary_home.path.join("selected.json");
+
+        let result = export_alias_backup(
+            vec!["two".to_string()],
+            destination.display().to_string(),
+            "2026-08-13T18:30:00.000Z".to_string(),
+        )
+        .unwrap();
+        let backup = read_backup(&destination).unwrap();
+
+        assert_eq!(result.exported_count, 1);
+        assert_eq!(backup.aliases.len(), 1);
+        assert_eq!(backup.aliases[0].name, "gs");
+    }
+
+    #[test]
+    fn backup_import_replaces_name_conflicts_and_keeps_other_aliases() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let temporary_home = TemporaryHome::create();
+        ensure_app_files().unwrap();
+        write_alias_files(&[
+            test_alias("current-ll", "ll", "ls"),
+            test_alias("keep", "gs", "git status"),
+        ])
+        .unwrap();
+        let backup_path = temporary_home.path.join("restore.json");
+        let backup = AliasBackup {
+            format: BACKUP_FORMAT.to_string(),
+            version: BACKUP_VERSION,
+            exported_at: "2026-08-13T18:30:00.000Z".to_string(),
+            aliases: vec![
+                test_alias("backup-ll", "ll", "ls -lah"),
+                test_alias("backup-dcu", "dcu", "docker compose up -d"),
+            ],
+        };
+        fs::write(&backup_path, serde_json::to_string(&backup).unwrap()).unwrap();
+
+        let result = import_alias_backup(
+            backup_path.display().to_string(),
+            vec!["backup-ll".to_string(), "backup-dcu".to_string()],
+            "2026-08-13T19:00:00.000Z".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(result.imported_count, 2);
+        assert_eq!(result.replaced_count, 1);
+        assert_eq!(result.state.aliases.len(), 3);
+        assert!(result
+            .state
+            .aliases
+            .iter()
+            .any(|alias| alias.name == "ll" && alias.command_preview == "ls -lah"));
+        assert!(result.state.aliases.iter().any(|alias| alias.name == "gs"));
+        assert!(result.state.aliases.iter().any(|alias| alias.name == "dcu"));
     }
 }
