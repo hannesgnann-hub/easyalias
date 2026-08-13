@@ -474,10 +474,55 @@ textarea:focus {
 
 .alias-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 64px 38px;
+  grid-template-columns: 38px minmax(0, 1fr) 64px 38px;
   gap: 8px;
   align-items: stretch;
   margin-bottom: 8px;
+}
+
+.favorite-button {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  min-height: 100%;
+  padding: 0;
+  border: 1px solid #dce5e1;
+  border-radius: 8px;
+  color: #71807b;
+  background: #f4f8f6;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.favorite-button:hover {
+  border-color: #d6b54a;
+  color: #8a6900;
+  background: #fff8d9;
+}
+
+.favorite-button.active {
+  border-color: #e2bf43;
+  color: #8a6900;
+  background: #ffef9e;
+}
+
+.favorite-button.active svg {
+  fill: currentColor;
+}
+
+.favorite-button:focus-visible {
+  outline: 3px solid rgba(226, 191, 67, 0.32);
+  outline-offset: 2px;
+}
+
+.favorite-button svg {
+  display: block;
+  width: 19px;
+  height: 19px;
+  pointer-events: none;
 }
 
 .row-main {
@@ -818,7 +863,7 @@ textarea:focus {
   }
 
   .alias-row {
-    grid-template-columns: minmax(0, 1fr) 58px 38px;
+    grid-template-columns: 38px minmax(0, 1fr) 58px 38px;
   }
 
   .modal-layer {
