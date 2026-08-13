@@ -83,6 +83,22 @@ struct BackupImportResult {
     replaced_count: usize,
 }
 
+// Deleted aliases live in a separate file so config.json remains fully
+// backwards-compatible. deleted_at is Unix time, which keeps retention locale-independent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrashEntry {
+    alias: AliasEntry,
+    deleted_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrashMutationResult {
+    state: AppState,
+    trash: Vec<TrashEntry>,
+}
+
 // EasyAlias owns ~/.easyalias/aliases.sh and adds only these small integration
 // lines to the active shell's startup file.
 const SOURCE_LINE: &str = "source ~/.easyalias/aliases.sh";
@@ -93,6 +109,7 @@ const BACKUP_FORMAT: &str = "easyalias-backup";
 const BACKUP_VERSION: u32 = 1;
 const MAX_BACKUP_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_BACKUP_ALIASES: usize = 5000;
+const TRASH_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
 
 #[derive(Debug)]
 struct ShellSetup {
@@ -141,6 +158,10 @@ fn config_file() -> Result<PathBuf, String> {
 
 fn aliases_file() -> Result<PathBuf, String> {
     Ok(app_dir()?.join("aliases.sh"))
+}
+
+fn trash_file() -> Result<PathBuf, String> {
+    Ok(app_dir()?.join("trash.json"))
 }
 
 fn import_marker_file() -> Result<PathBuf, String> {
@@ -544,6 +565,39 @@ fn write_alias_files(aliases: &[AliasEntry]) -> Result<(), String> {
         .map_err(|error| format!("{} could not be written: {}", config_path.display(), error))
 }
 
+fn write_trash_entries(entries: &[TrashEntry]) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(entries)
+        .map_err(|error| format!("Trash could not be serialized: {}", error))?;
+    let path = trash_file()?;
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))
+}
+
+// Reading the trash also enforces retention. Expired entries are removed from
+// disk immediately, so they cannot reappear after an app restart.
+fn load_trash_entries() -> Result<Vec<TrashEntry>, String> {
+    ensure_app_files()?;
+    let path = trash_file()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let mut entries: Vec<TrashEntry> = serde_json::from_str(&content)
+        .map_err(|error| format!("trash.json is not valid EasyAlias JSON: {}", error))?;
+    let now = unix_timestamp()?;
+    let original_len = entries.len();
+    entries.retain(|entry| now.saturating_sub(entry.deleted_at) < TRASH_RETENTION_SECONDS);
+    entries.sort_by(|left, right| right.deleted_at.cmp(&left.deleted_at));
+
+    if entries.len() != original_len {
+        write_trash_entries(&entries)?;
+    }
+
+    Ok(entries)
+}
+
 fn replace_imported_alias_lines(content: &str, selected_lines: &HashMap<usize, &str>) -> String {
     let mut lines: Vec<String> = content.split('\n').map(str::to_string).collect();
     for (index, line) in lines.iter_mut().enumerate() {
@@ -586,6 +640,96 @@ fn save_aliases(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
 
     write_alias_files(&aliases)?;
     app_state(aliases, &setup, Vec::new())
+}
+
+#[tauri::command]
+fn list_trash() -> Result<Vec<TrashEntry>, String> {
+    load_trash_entries()
+}
+
+// Write the recoverable copy first. If updating active alias files fails, the
+// alias can exist in both places temporarily, but user data is never lost.
+#[tauri::command]
+fn move_alias_to_trash(id: String) -> Result<TrashMutationResult, String> {
+    let setup = shell_setup()?;
+    ensure_app_files()?;
+    ensure_shell_source(&setup)?;
+    let mut aliases = load_config_aliases()?;
+    let index = aliases
+        .iter()
+        .position(|alias| alias.id == id)
+        .ok_or_else(|| "Alias no longer exists.".to_string())?;
+    let alias = aliases.remove(index);
+    let mut trash = load_trash_entries()?;
+    trash.retain(|entry| entry.alias.id != alias.id);
+    trash.push(TrashEntry {
+        alias,
+        deleted_at: unix_timestamp()?,
+    });
+    trash.sort_by(|left, right| right.deleted_at.cmp(&left.deleted_at));
+
+    write_trash_entries(&trash)?;
+    write_alias_files(&aliases)?;
+
+    Ok(TrashMutationResult {
+        state: app_state(aliases, &setup, Vec::new())?,
+        trash,
+    })
+}
+
+// Name conflicts are rejected so restoring never silently replaces a newer alias.
+#[tauri::command]
+fn restore_trash_alias(id: String) -> Result<TrashMutationResult, String> {
+    let setup = shell_setup()?;
+    ensure_app_files()?;
+    ensure_shell_source(&setup)?;
+    let mut trash = load_trash_entries()?;
+    let index = trash
+        .iter()
+        .position(|entry| entry.alias.id == id)
+        .ok_or_else(|| "Deleted alias no longer exists.".to_string())?;
+    let alias = trash[index].alias.clone();
+    let mut aliases = load_config_aliases()?;
+
+    if aliases.iter().any(|existing| existing.name == alias.name) {
+        return Err(format!(
+            "Alias \"{}\" already exists. Rename or delete the active alias before restoring.",
+            alias.name
+        ));
+    }
+    if aliases.iter().any(|existing| existing.id == alias.id) {
+        return Err("An active alias already uses this id.".to_string());
+    }
+
+    aliases.push(alias);
+    aliases.sort_by(|left, right| left.name.cmp(&right.name));
+    write_alias_files(&aliases)?;
+    trash.remove(index);
+    write_trash_entries(&trash)?;
+
+    Ok(TrashMutationResult {
+        state: app_state(aliases, &setup, Vec::new())?,
+        trash,
+    })
+}
+
+#[tauri::command]
+fn permanently_delete_trash_alias(id: String) -> Result<Vec<TrashEntry>, String> {
+    let mut trash = load_trash_entries()?;
+    let original_len = trash.len();
+    trash.retain(|entry| entry.alias.id != id);
+    if trash.len() == original_len {
+        return Err("Deleted alias no longer exists.".to_string());
+    }
+    write_trash_entries(&trash)?;
+    Ok(trash)
+}
+
+#[tauri::command]
+fn empty_trash() -> Result<Vec<TrashEntry>, String> {
+    ensure_app_files()?;
+    write_trash_entries(&[])?;
+    Ok(Vec::new())
 }
 
 // Export only the aliases selected in the review dialog. The backend verifies
@@ -812,6 +956,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_aliases,
             save_aliases,
+            list_trash,
+            move_alias_to_trash,
+            restore_trash_alias,
+            permanently_delete_trash_alias,
+            empty_trash,
             scan_shell_import,
             dismiss_shell_import,
             import_shell_aliases,
@@ -921,6 +1070,55 @@ mod tests {
 
         let alias: AliasEntry = serde_json::from_str(legacy).unwrap();
         assert!(!alias.favorite);
+    }
+
+    #[test]
+    fn deleted_alias_can_be_restored_from_trash() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let _temporary_home = TemporaryHome::create();
+        ensure_app_files().unwrap();
+        write_alias_files(&[test_alias("one", "ll", "ls -lah")]).unwrap();
+
+        let deleted = move_alias_to_trash("one".to_string()).unwrap();
+        assert!(deleted.state.aliases.is_empty());
+        assert_eq!(deleted.trash.len(), 1);
+        assert_eq!(deleted.trash[0].alias.name, "ll");
+        assert!(!fs::read_to_string(aliases_file().unwrap())
+            .unwrap()
+            .contains("alias ll="));
+
+        let restored = restore_trash_alias("one".to_string()).unwrap();
+        assert_eq!(restored.state.aliases.len(), 1);
+        assert!(restored.trash.is_empty());
+        assert!(fs::read_to_string(aliases_file().unwrap())
+            .unwrap()
+            .contains("alias ll='ls -lah'"));
+    }
+
+    #[test]
+    fn expired_trash_entries_are_removed_automatically() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let _temporary_home = TemporaryHome::create();
+        ensure_app_files().unwrap();
+        let now = unix_timestamp().unwrap();
+        write_trash_entries(&[
+            TrashEntry {
+                alias: test_alias("expired", "old", "echo old"),
+                deleted_at: now.saturating_sub(TRASH_RETENTION_SECONDS + 1),
+            },
+            TrashEntry {
+                alias: test_alias("current", "new", "echo new"),
+                deleted_at: now,
+            },
+        ])
+        .unwrap();
+
+        let trash = load_trash_entries().unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].alias.id, "current");
+        assert!(!fs::read_to_string(trash_file().unwrap())
+            .unwrap()
+            .contains("expired"));
     }
 
     #[test]
