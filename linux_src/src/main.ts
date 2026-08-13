@@ -1,4 +1,5 @@
 import "./styles.css";
+import { createIcons, FileDown, FileUp, SquareTerminal } from "lucide";
 
 // Actions are the high-level choices shown in the dropdown.
 // The selected action decides how the final shell command is generated.
@@ -979,7 +980,7 @@ function render() {
             aria-label="Import aliases from ${escapeHtml(appState.shellConfigFile)}"
             data-action="open-import"
             ${importBusy ? "disabled" : ""}
-          ><span aria-hidden="true">&#8681;</span></button>
+          ><i data-lucide="square-terminal"></i></button>
           <button
             class="header-icon-button"
             type="button"
@@ -987,7 +988,7 @@ function render() {
             aria-label="Export alias backup"
             data-action="open-backup-export"
             ${aliases.length && !backupBusy ? "" : "disabled"}
-          ><span aria-hidden="true">&#8679;</span></button>
+          ><i data-lucide="file-up"></i></button>
           <button
             class="header-icon-button"
             type="button"
@@ -995,7 +996,7 @@ function render() {
             aria-label="Import alias backup"
             data-action="open-backup-import"
             ${backupBusy ? "disabled" : ""}
-          ><span aria-hidden="true">&#128196;</span></button>
+          ><i data-lucide="file-down"></i></button>
         </div>
       </header>
 
@@ -1179,6 +1180,16 @@ function render() {
       </footer>
     </section>
   `;
+
+  createIcons({
+    icons: { SquareTerminal, FileDown, FileUp },
+    attrs: {
+      "aria-hidden": "true",
+      width: "20",
+      height: "20",
+      "stroke-width": "2"
+    }
+  });
 
   bindEvents();
 }
