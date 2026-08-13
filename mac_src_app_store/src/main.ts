@@ -1,5 +1,5 @@
 import "./styles.css";
-import { createIcons, FileDown, FileUp, SquareTerminal, X } from "lucide";
+import { createIcons, FileDown, FileUp, SquareTerminal, Star, X } from "lucide";
 
 // Actions are the high-level choices shown in the dropdown.
 // The selected action decides how the final shell command is generated.
@@ -21,6 +21,7 @@ type AliasEntry = {
   action: AliasAction;
   customCommand?: string;
   commandPreview: string;
+  favorite: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -500,7 +501,7 @@ async function loadState() {
 async function saveState() {
   clearMessages();
 
-  const aliases = [...appState.aliases].sort((a, b) => a.name.localeCompare(b.name));
+  const aliases = [...appState.aliases].sort(compareAliases);
 
   if (isTauriRuntime()) {
     try {
@@ -674,7 +675,7 @@ function openBackupExport() {
   clearMessages();
   backupError = "";
   backupFilePath = "";
-  backupCandidates = [...appState.aliases].sort((a, b) => a.name.localeCompare(b.name));
+  backupCandidates = [...appState.aliases].sort(compareAliases);
   selectedBackupIds = new Set(backupCandidates.map((alias) => alias.id));
   backupDialogMode = "export";
   render();
@@ -849,6 +850,7 @@ async function useSuggestion(id: string) {
     action: suggestion.action,
     customCommand: suggestion.action === "custom" ? suggestion.customCommand : undefined,
     commandPreview: buildCommandPreview(suggestion),
+    favorite: false,
     createdAt: timestamp,
     updatedAt: timestamp
   };
@@ -916,6 +918,7 @@ async function upsertAlias(event: SubmitEvent) {
     action: form.action,
     customCommand: form.action === "custom" ? form.customCommand.trim() : undefined,
     commandPreview: buildCommandPreview(form),
+    favorite: false,
     createdAt: timestamp,
     updatedAt: timestamp
   };
@@ -963,6 +966,7 @@ async function updateAlias(event: SubmitEvent) {
     action: editForm.action,
     customCommand: editForm.action === "custom" ? editForm.customCommand.trim() : undefined,
     commandPreview: buildCommandPreview(editForm),
+    favorite: existing.favorite,
     createdAt: existing.createdAt,
     updatedAt: nowIso()
   };
@@ -990,6 +994,24 @@ async function deleteAlias(id: string) {
     editForm = null;
     editError = "";
   }
+
+  await saveState();
+}
+
+// Favorite changes are persisted immediately and therefore survive restarts
+// as well as the existing JSON backup/export flow.
+async function toggleFavorite(id: string) {
+  const existing = appState.aliases.find((alias) => alias.id === id);
+  if (!existing) return;
+
+  appState = {
+    ...appState,
+    aliases: appState.aliases.map((alias) =>
+      alias.id === id
+        ? { ...alias, favorite: !Boolean(alias.favorite), updatedAt: nowIso() }
+        : alias
+    )
+  };
 
   await saveState();
 }
@@ -1033,6 +1055,12 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
+// Favorites are grouped first; each group remains predictable and alphabetical.
+function compareAliases(left: AliasEntry, right: AliasEntry) {
+  const favoriteDifference = Number(Boolean(right.favorite)) - Number(Boolean(left.favorite));
+  return favoriteDifference || left.name.localeCompare(right.name);
+}
+
 function formPreview() {
   return buildCommandPreview(form) || "No command generated yet";
 }
@@ -1062,7 +1090,7 @@ function clearRenderedEditError() {
 // Main render function. This replaces the app HTML from state and then calls bindEvents().
 // For a larger app, this would be a good candidate to split into smaller render helpers.
 function render() {
-  const aliases = [...appState.aliases].sort((a, b) => a.name.localeCompare(b.name));
+  const aliases = [...appState.aliases].sort(compareAliases);
   const existingNames = new Set(aliases.map((alias) => alias.name));
   const availableSuggestions = aliasSuggestions.filter(
     (suggestion) => !existingNames.has(suggestion.name)
@@ -1268,8 +1296,17 @@ function render() {
                   .map(
                     (alias) => `
                       <article class="alias-row ${alias.id === editingId ? "selected" : ""}">
+                        <button
+                          class="favorite-button ${alias.favorite ? "active" : ""}"
+                          type="button"
+                          title="${alias.favorite ? "Remove from favorites" : "Add to favorites"}"
+                          aria-label="${alias.favorite ? "Remove" : "Add"} ${escapeHtml(alias.name)} ${alias.favorite ? "from" : "to"} favorites"
+                          aria-pressed="${Boolean(alias.favorite)}"
+                          data-action="toggle-favorite"
+                          data-id="${alias.id}"
+                        ><i data-lucide="star"></i></button>
                         <div class="row-main">
-                          <span class="alias-name">${alias.name}</span>
+                          <span class="alias-name">${escapeHtml(alias.name)}</span>
                           <span class="alias-action">${actionLabels[alias.action]}</span>
                           <code>${escapeHtml(alias.commandPreview)}</code>
                           <span class="created">Created ${formatDate(alias.createdAt)}</span>
@@ -1318,7 +1355,7 @@ function render() {
   // Replace the lightweight icon placeholders after each state-driven render.
   // Importing only the icons used here keeps the production bundle tree-shakable.
   createIcons({
-    icons: { SquareTerminal, FileDown, FileUp, X },
+    icons: { SquareTerminal, FileDown, FileUp, Star, X },
     attrs: {
       "aria-hidden": "true",
       width: "20",
@@ -1663,6 +1700,7 @@ function bindEvents() {
       if (action === "open-backup-export") openBackupExport();
       if (action === "open-backup-import") openBackupImport();
       if (action === "dismiss-message") dismissMessage();
+      if (action === "toggle-favorite" && id) void toggleFavorite(id);
       if (action === "close-backup") closeBackupDialog();
       if (action === "choose-backup-file") void chooseBackupFile();
       if (action === "close-import") closeManualImport();
