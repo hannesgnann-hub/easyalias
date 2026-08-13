@@ -227,6 +227,48 @@ code {
   font-weight: 700;
 }
 
+.message-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.message-banner > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.message-dismiss {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: currentColor;
+  background: transparent;
+  cursor: pointer;
+}
+
+.message-dismiss:hover {
+  background: rgba(15, 58, 53, 0.1);
+}
+
+.message-dismiss:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.24);
+  outline-offset: 1px;
+}
+
+.message-dismiss svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
 .notice {
   color: #10443f;
   background: #d9f4ef;
