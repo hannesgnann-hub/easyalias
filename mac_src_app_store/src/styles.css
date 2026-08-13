@@ -514,6 +514,52 @@ textarea:focus {
   width: min(640px, 100%);
 }
 
+.backup-card {
+  width: min(680px, 100%);
+}
+
+.backup-drop-zone {
+  display: grid;
+  place-items: center;
+  gap: 5px;
+  min-height: 126px;
+  border: 2px dashed #9fcfc0;
+  border-radius: 8px;
+  padding: 18px;
+  color: #17423d;
+  background: #f4faf7;
+  text-align: center;
+}
+
+.backup-drop-zone:hover,
+.backup-drop-zone.is-dragging {
+  border-color: #0f766e;
+  background: #e3f5ee;
+}
+
+.backup-drop-zone span:last-child,
+.backup-empty {
+  color: #66736f;
+  font-size: 0.8rem;
+}
+
+.backup-drop-icon {
+  font-size: 1.8rem;
+  line-height: 1;
+}
+
+.backup-conflict {
+  color: #9a5a16 !important;
+}
+
+.backup-empty {
+  margin: 0;
+  padding: 18px;
+  border: 1px solid #d5dfdb;
+  border-radius: 8px;
+  text-align: center;
+}
+
 .modal-title,
 .modal-actions {
   display: flex;
