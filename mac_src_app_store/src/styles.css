@@ -490,6 +490,58 @@ textarea:focus {
   font-size: 0.78rem;
 }
 
+.suggestion-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.suggestion-page-button {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: #17423d;
+  background: transparent;
+  font-size: 0.9rem;
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.suggestion-page-button:hover:not(:disabled):not(.is-current) {
+  background: rgba(23, 66, 61, 0.08);
+}
+
+.suggestion-page-button.is-current {
+  color: #fff;
+  background: #17423d;
+  text-decoration: none;
+}
+
+.suggestion-page-button.suggestion-page-arrow {
+  color: #17423d;
+  background: #dfe8e4;
+  text-decoration: none;
+}
+
+.suggestion-page-button:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.24);
+  outline-offset: 2px;
+}
+
+.suggestion-page-button svg {
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
 .preview {
   display: grid;
   gap: 8px;
