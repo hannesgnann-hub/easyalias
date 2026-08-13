@@ -36,7 +36,7 @@ button:disabled {
 .shell {
   width: min(1180px, calc(100vw - 32px));
   margin: 0 auto;
-  padding: 28px 0 40px;
+  padding: 28px 0 104px;
 }
 
 .topbar {
@@ -617,11 +617,42 @@ textarea:focus {
   justify-content: flex-end;
 }
 
+.support-banner {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 9px 14px;
+  border-top: 1px solid #e9c96a;
+  color: #49380f;
+  background: #fff4c9;
+  box-shadow: 0 -4px 16px rgba(73, 56, 15, 0.08);
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.support-banner a {
+  color: #0f665f;
+  text-decoration: none;
+}
+
+.support-banner a:hover {
+  color: #0b514c;
+  text-decoration: underline;
+}
+
 .app-footer {
   display: flex;
   justify-content: center;
   gap: 5px;
-  margin-top: 28px;
+  margin-top: 14px;
   color: #66736f;
   font-size: 0.78rem;
   font-weight: 700;
@@ -640,7 +671,7 @@ textarea:focus {
 @media (max-width: 860px) {
   .shell {
     width: min(100% - 20px, 680px);
-    padding-top: 18px;
+    padding: 18px 0 118px;
   }
 
   .topbar,
@@ -690,5 +721,11 @@ textarea:focus {
   .modal-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .support-banner {
+    align-items: center;
+    flex-direction: column;
+    gap: 3px;
   }
 }
