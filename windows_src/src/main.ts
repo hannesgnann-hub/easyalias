@@ -1,5 +1,5 @@
 import "./styles.css";
-import { createIcons, FileDown, FileUp, SquareTerminal } from "lucide";
+import { createIcons, FileDown, FileUp, SquareTerminal, X } from "lucide";
 
 // Actions are the high-level choices shown in the dropdown.
 // The selected action decides how the final shell command is generated.
@@ -244,6 +244,8 @@ let importBusy = false;
 let manualImportOpen = false;
 let notice = "";
 let error = "";
+let messageDismissTimer: ReturnType<typeof setTimeout> | null = null;
+let scheduledMessageKey = "";
 let editError = "";
 let importError = "";
 // Backup import/export has its own modal state so it never interferes with the
@@ -488,7 +490,17 @@ async function saveState() {
 }
 
 // Message helpers keep the visible notice/error state separate from form data.
+function cancelMessageDismissal() {
+  if (messageDismissTimer !== null) {
+    clearTimeout(messageDismissTimer);
+    messageDismissTimer = null;
+  }
+
+  scheduledMessageKey = "";
+}
+
 function clearMessages() {
+  cancelMessageDismissal();
   notice = "";
   error = "";
 }
@@ -496,6 +508,34 @@ function clearMessages() {
 function clearRenderedMessages() {
   document.querySelector(".notice")?.remove();
   document.querySelector(".error")?.remove();
+}
+
+function dismissMessage() {
+  clearMessages();
+  render();
+}
+
+// Every new global status message gets a fresh three-second lifetime. Re-renders
+// with the same message keep the existing deadline instead of extending it.
+function scheduleMessageDismissal() {
+  const messageKey = error ? `error:${error}` : notice ? `notice:${notice}` : "";
+
+  if (!messageKey) {
+    cancelMessageDismissal();
+    return;
+  }
+
+  if (messageDismissTimer !== null && scheduledMessageKey === messageKey) return;
+
+  cancelMessageDismissal();
+  scheduledMessageKey = messageKey;
+  messageDismissTimer = setTimeout(() => {
+    messageDismissTimer = null;
+    scheduledMessageKey = "";
+    notice = "";
+    error = "";
+    render();
+  }, 3000);
 }
 
 function toggleSuggestions() {
@@ -1047,8 +1087,26 @@ function render() {
             </aside>`
       }
 
-      ${notice ? `<p class="notice">${notice}</p>` : ""}
-      ${error ? `<p class="error">${error}</p>` : ""}
+      ${
+        notice
+          ? `<div class="message-banner notice" role="status">
+              <span>${escapeHtml(notice)}</span>
+              <button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-action="dismiss-message">
+                <i data-lucide="x"></i>
+              </button>
+            </div>`
+          : ""
+      }
+      ${
+        error
+          ? `<div class="message-banner error" role="alert">
+              <span>${escapeHtml(error)}</span>
+              <button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-action="dismiss-message">
+                <i data-lucide="x"></i>
+              </button>
+            </div>`
+          : ""
+      }
 
       ${
         availableSuggestions.length
@@ -1205,9 +1263,9 @@ function render() {
   `;
 
   // Replace the lightweight icon placeholders after each state-driven render.
-  // Importing only these three icons keeps the production bundle tree-shakable.
+  // Importing only the icons used here keeps the production bundle tree-shakable.
   createIcons({
-    icons: { SquareTerminal, FileDown, FileUp },
+    icons: { SquareTerminal, FileDown, FileUp, X },
     attrs: {
       "aria-hidden": "true",
       width: "20",
@@ -1216,6 +1274,7 @@ function render() {
     }
   });
 
+  scheduleMessageDismissal();
   bindEvents();
 }
 
@@ -1544,6 +1603,7 @@ function bindEvents() {
       if (action === "open-import") void openCommandFileImport();
       if (action === "open-backup-export") openBackupExport();
       if (action === "open-backup-import") openBackupImport();
+      if (action === "dismiss-message") dismissMessage();
       if (action === "close-backup") closeBackupDialog();
       if (action === "choose-backup-file") void chooseBackupFile();
       if (action === "close-import") closeManualImport();
