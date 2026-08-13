@@ -1,5 +1,16 @@
 import "./styles.css";
-import { createIcons, FileDown, FileUp, RotateCcw, SquareTerminal, Star, Trash2, X } from "lucide";
+import {
+  ChevronLeft,
+  ChevronRight,
+  createIcons,
+  FileDown,
+  FileUp,
+  RotateCcw,
+  SquareTerminal,
+  Star,
+  Trash2,
+  X
+} from "lucide";
 
 // Actions are the high-level choices shown in the dropdown.
 // The selected action decides how the final shell command is generated.
@@ -110,25 +121,9 @@ const emptyForm: AliasForm = {
   customCommand: ""
 };
 
-// Safe Linux developer shortcuts compatible with both bash and zsh. Wrapper
-// aliases such as gw naturally receive arguments appended by the active shell.
+// Safe Linux developer shortcuts compatible with both bash and zsh. They are
+// ordered in themed groups so every nine-item page remains easy to scan.
 const aliasSuggestions: AliasSuggestion[] = [
-  {
-    id: "list-details",
-    name: "ll",
-    path: "",
-    action: "custom",
-    customCommand: "ls -lah",
-    description: "Detailed file list"
-  },
-  {
-    id: "clear-terminal",
-    name: "c",
-    path: "",
-    action: "custom",
-    customCommand: "clear",
-    description: "Clear the terminal"
-  },
   {
     id: "git-status",
     name: "gs",
@@ -136,6 +131,166 @@ const aliasSuggestions: AliasSuggestion[] = [
     action: "custom",
     customCommand: "git status --short --branch",
     description: "Compact Git status"
+  },
+  {
+    id: "git-add-all",
+    name: "gaa",
+    path: "",
+    action: "custom",
+    customCommand: "git add --all",
+    description: "Stage all Git changes"
+  },
+  {
+    id: "git-commit",
+    name: "gc",
+    path: "",
+    action: "custom",
+    customCommand: "git commit",
+    description: "Create a Git commit"
+  },
+  {
+    id: "git-commit-message",
+    name: "gcm",
+    path: "",
+    action: "custom",
+    customCommand: "git commit -m",
+    description: "Commit with a message"
+  },
+  {
+    id: "git-push",
+    name: "gp",
+    path: "",
+    action: "custom",
+    customCommand: "git push",
+    description: "Push the current branch"
+  },
+  {
+    id: "git-pull-rebase",
+    name: "gpl",
+    path: "",
+    action: "custom",
+    customCommand: "git pull --rebase",
+    description: "Pull with rebase"
+  },
+  {
+    id: "git-branch",
+    name: "gb",
+    path: "",
+    action: "custom",
+    customCommand: "git branch",
+    description: "List local Git branches"
+  },
+  {
+    id: "git-switch",
+    name: "gsw",
+    path: "",
+    action: "custom",
+    customCommand: "git switch",
+    description: "Switch Git branches"
+  },
+  {
+    id: "git-diff",
+    name: "gd",
+    path: "",
+    action: "custom",
+    customCommand: "git diff",
+    description: "Show unstaged changes"
+  },
+  {
+    id: "git-diff-staged",
+    name: "gds",
+    path: "",
+    action: "custom",
+    customCommand: "git diff --staged",
+    description: "Show staged changes"
+  },
+  {
+    id: "git-log-graph",
+    name: "glog",
+    path: "",
+    action: "custom",
+    customCommand: "git log --oneline --graph --decorate --all",
+    description: "Compact Git history graph"
+  },
+  {
+    id: "git-stash",
+    name: "gstash",
+    path: "",
+    action: "custom",
+    customCommand: "git stash push",
+    description: "Stash current changes"
+  },
+  {
+    id: "docker-compose-up",
+    name: "dcu",
+    path: "",
+    action: "custom",
+    customCommand: "docker compose up -d",
+    description: "Start Docker Compose"
+  },
+  {
+    id: "docker-compose-down",
+    name: "dcd",
+    path: "",
+    action: "custom",
+    customCommand: "docker compose down",
+    description: "Stop Docker Compose"
+  },
+  {
+    id: "docker-compose-logs",
+    name: "dcl",
+    path: "",
+    action: "custom",
+    customCommand: "docker compose logs -f",
+    description: "Follow Compose logs"
+  },
+  {
+    id: "docker-compose-build",
+    name: "dcb",
+    path: "",
+    action: "custom",
+    customCommand: "docker compose build",
+    description: "Build Compose services"
+  },
+  {
+    id: "docker-compose-restart",
+    name: "dcr",
+    path: "",
+    action: "custom",
+    customCommand: "docker compose restart",
+    description: "Restart Compose services"
+  },
+  {
+    id: "docker-ps",
+    name: "dps",
+    path: "",
+    action: "custom",
+    customCommand: "docker ps",
+    description: "List running containers"
+  },
+  {
+    id: "docker-images",
+    name: "di",
+    path: "",
+    action: "custom",
+    customCommand: "docker images",
+    description: "List local Docker images"
+  },
+  {
+    id: "docker-disk-usage",
+    name: "ddf",
+    path: "",
+    action: "custom",
+    customCommand: "docker system df",
+    description: "Show Docker disk usage"
+  },
+  {
+    id: "docker-exec",
+    name: "dex",
+    path: "",
+    action: "custom",
+    customCommand: "docker exec -it",
+    description: "Run a command in a container"
   },
   {
     id: "gradle-wrapper",
@@ -170,12 +325,60 @@ const aliasSuggestions: AliasSuggestion[] = [
     description: "Run the Maven wrapper"
   },
   {
-    id: "git-log-graph",
-    name: "glog",
+    id: "maven-wrapper-build",
+    name: "mvnb",
     path: "",
     action: "custom",
-    customCommand: "git log --oneline --graph --decorate --all",
-    description: "Compact Git history graph"
+    customCommand: "./mvnw clean package",
+    description: "Build with Maven wrapper"
+  },
+  {
+    id: "maven-wrapper-test",
+    name: "mvnt",
+    path: "",
+    action: "custom",
+    customCommand: "./mvnw test",
+    description: "Run Maven tests"
+  },
+  {
+    id: "npm-install",
+    name: "ni",
+    path: "",
+    action: "custom",
+    customCommand: "npm install",
+    description: "Install npm dependencies"
+  },
+  {
+    id: "npm-run-dev",
+    name: "nrd",
+    path: "",
+    action: "custom",
+    customCommand: "npm run dev",
+    description: "Start the npm dev script"
+  },
+  {
+    id: "npm-run-build",
+    name: "nrb",
+    path: "",
+    action: "custom",
+    customCommand: "npm run build",
+    description: "Run the npm build script"
+  },
+  {
+    id: "list-details",
+    name: "ll",
+    path: "",
+    action: "custom",
+    customCommand: "ls -lah",
+    description: "Detailed file list"
+  },
+  {
+    id: "clear-terminal",
+    name: "c",
+    path: "",
+    action: "custom",
+    customCommand: "clear",
+    description: "Clear the terminal"
   },
   {
     id: "python-server",
@@ -184,14 +387,6 @@ const aliasSuggestions: AliasSuggestion[] = [
     action: "custom",
     customCommand: "python3 -m http.server",
     description: "Serve the current folder"
-  },
-  {
-    id: "docker-compose-up",
-    name: "dcu",
-    path: "",
-    action: "custom",
-    customCommand: "docker compose up -d",
-    description: "Start Docker Compose"
   },
   {
     id: "list-ports",
@@ -208,14 +403,6 @@ const aliasSuggestions: AliasSuggestion[] = [
     action: "navigate",
     customCommand: "",
     description: "Jump to Downloads"
-  },
-  {
-    id: "open-home",
-    name: "home",
-    path: "~",
-    action: "open",
-    customCommand: "",
-    description: "Open your home folder"
   },
   {
     id: "network-info",
@@ -245,6 +432,10 @@ let editForm: AliasForm | null = null;
 let editingId: string | null = null;
 // Suggestions start collapsed and stay in the selected state across renders.
 let suggestionsExpanded = false;
+// Nine cards fill the three-column suggestion grid without making the panel
+// overly tall. Additional suggestions remain reachable through pagination.
+const suggestionPageSize = 9;
+let suggestionPage = 1;
 let selectedImportIds = new Set<string>();
 let importBusy = false;
 // Manual imports share the first-start modal but can close without writing the
@@ -554,6 +745,12 @@ function scheduleMessageDismissal() {
 // aliases. Its state is intentionally UI-only and does not need persistence.
 function toggleSuggestions() {
   suggestionsExpanded = !suggestionsExpanded;
+  render();
+}
+
+function showSuggestionPage(page: number) {
+  if (!Number.isFinite(page)) return;
+  suggestionPage = Math.max(1, Math.floor(page));
   render();
 }
 
@@ -1210,6 +1407,16 @@ function render() {
   const availableSuggestions = aliasSuggestions.filter(
     (suggestion) => !existingNames.has(suggestion.name)
   );
+  const suggestionPageCount = Math.max(
+    1,
+    Math.ceil(availableSuggestions.length / suggestionPageSize)
+  );
+  suggestionPage = Math.min(suggestionPage, suggestionPageCount);
+  const suggestionPageStart = (suggestionPage - 1) * suggestionPageSize;
+  const visibleSuggestions = availableSuggestions.slice(
+    suggestionPageStart,
+    suggestionPageStart + suggestionPageSize
+  );
 
   appElement.innerHTML = `
     <section class="shell">
@@ -1304,26 +1511,64 @@ function render() {
               </div>
               ${
                 suggestionsExpanded
-                  ? `<div class="suggestion-grid" id="suggestion-list">
-                      ${availableSuggestions
-                        .map(
-                          (suggestion) => `
-                            <article class="suggestion-item">
-                              <div class="suggestion-copy">
-                                <strong>${escapeHtml(suggestion.name)}</strong>
-                                <span>${escapeHtml(suggestion.description)}</span>
-                                <code>${escapeHtml(buildCommandPreview(suggestion))}</code>
-                              </div>
+                  ? `<div id="suggestion-list">
+                      <div class="suggestion-grid">
+                        ${visibleSuggestions
+                          .map(
+                            (suggestion) => `
+                              <article class="suggestion-item">
+                                <div class="suggestion-copy">
+                                  <strong>${escapeHtml(suggestion.name)}</strong>
+                                  <span>${escapeHtml(suggestion.description)}</span>
+                                  <code>${escapeHtml(buildCommandPreview(suggestion))}</code>
+                                </div>
+                                <button
+                                  class="suggestion-button"
+                                  type="button"
+                                  data-action="use-suggestion"
+                                  data-suggestion-id="${suggestion.id}"
+                                >Use</button>
+                              </article>
+                            `
+                          )
+                          .join("")}
+                      </div>
+                      ${
+                        suggestionPageCount > 1
+                          ? `<nav class="suggestion-pagination" aria-label="Suggestion pages">
                               <button
-                                class="suggestion-button"
+                                class="suggestion-page-button suggestion-page-arrow"
                                 type="button"
-                                data-action="use-suggestion"
-                                data-suggestion-id="${suggestion.id}"
-                              >Use</button>
-                            </article>
-                          `
-                        )
-                        .join("")}
+                                title="Previous suggestion page"
+                                aria-label="Previous suggestion page"
+                                data-action="suggestion-page"
+                                data-page="${suggestionPage - 1}"
+                                ${suggestionPage === 1 ? "disabled" : ""}
+                              ><i data-lucide="chevron-left"></i></button>
+                              ${Array.from({ length: suggestionPageCount }, (_, index) => index + 1)
+                                .map(
+                                  (page) => `<button
+                                    class="suggestion-page-button${page === suggestionPage ? " is-current" : ""}"
+                                    type="button"
+                                    aria-label="Show suggestion page ${page}"
+                                    aria-current="${page === suggestionPage ? "page" : "false"}"
+                                    data-action="suggestion-page"
+                                    data-page="${page}"
+                                  >${page}</button>`
+                                )
+                                .join("")}
+                              <button
+                                class="suggestion-page-button suggestion-page-arrow"
+                                type="button"
+                                title="Next suggestion page"
+                                aria-label="Next suggestion page"
+                                data-action="suggestion-page"
+                                data-page="${suggestionPage + 1}"
+                                ${suggestionPage === suggestionPageCount ? "disabled" : ""}
+                              ><i data-lucide="chevron-right"></i></button>
+                            </nav>`
+                          : ""
+                      }
                     </div>`
                   : ""
               }
@@ -1449,7 +1694,17 @@ function render() {
   `;
 
   createIcons({
-    icons: { SquareTerminal, FileDown, FileUp, RotateCcw, Star, Trash2, X },
+    icons: {
+      ChevronLeft,
+      ChevronRight,
+      SquareTerminal,
+      FileDown,
+      FileUp,
+      RotateCcw,
+      Star,
+      Trash2,
+      X
+    },
     attrs: {
       "aria-hidden": "true",
       width: "20",
@@ -1828,6 +2083,7 @@ function bindEvents() {
       if (action === "close-import") closeManualImport();
       if (action === "dismiss-import") void dismissShellImport();
       if (action === "toggle-suggestions") toggleSuggestions();
+      if (action === "suggestion-page") showSuggestionPage(Number(button.dataset.page));
       if (action === "use-suggestion") {
         const suggestionId = button.dataset.suggestionId;
         if (suggestionId) void useSuggestion(suggestionId);
