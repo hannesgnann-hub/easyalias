@@ -55,6 +55,17 @@ type ImportResult = {
   warning?: string;
 };
 
+type BackupExportResult = {
+  file: string;
+  exportedCount: number;
+};
+
+type BackupImportResult = {
+  state: AppState;
+  importedCount: number;
+  replacedCount: number;
+};
+
 // AliasForm is the temporary state for either the create form or the edit modal.
 // It is intentionally close to AliasEntry but does not include timestamps.
 type AliasForm = {
@@ -74,6 +85,7 @@ type AliasSuggestion = AliasForm & {
 
 type PickerTarget = "create" | "edit";
 type PickerKind = "file" | "folder";
+type BackupDialogMode = "export" | "import";
 
 const actionLabels: Record<AliasAction, string> = {
   navigate: "Go to Folder",
@@ -233,6 +245,14 @@ let notice = "";
 let error = "";
 let editError = "";
 let importError = "";
+// Backup import/export has its own modal state so it never interferes with the
+// first-start ~/.zshrc migration flow above.
+let backupDialogMode: BackupDialogMode | null = null;
+let backupCandidates: AliasEntry[] = [];
+let selectedBackupIds = new Set<string>();
+let backupFilePath = "";
+let backupBusy = false;
+let backupError = "";
 
 // Vite mounts the app into <main id="app"> from index.html.
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -569,6 +589,167 @@ async function importSelectedCommandFiles(event: SubmitEvent) {
 
 // Turn one suggestion into a real AliasEntry immediately. The duplicate guard
 // also protects against a second click that arrives while a save is in flight.
+function openBackupExport() {
+  clearMessages();
+  backupError = "";
+  backupFilePath = "";
+  backupCandidates = [...appState.aliases].sort((a, b) => a.name.localeCompare(b.name));
+  selectedBackupIds = new Set(backupCandidates.map((alias) => alias.id));
+  backupDialogMode = "export";
+  render();
+}
+
+function openBackupImport() {
+  clearMessages();
+  backupError = "";
+  backupFilePath = "";
+  backupCandidates = [];
+  selectedBackupIds.clear();
+  backupDialogMode = "import";
+  render();
+}
+
+function closeBackupDialog() {
+  if (backupBusy) return;
+  backupDialogMode = null;
+  backupCandidates = [];
+  selectedBackupIds.clear();
+  backupFilePath = "";
+  backupError = "";
+  render();
+}
+
+async function chooseBackupFile() {
+  if (backupBusy || backupDialogMode !== "import") return;
+  backupError = "";
+
+  if (!isTauriRuntime()) {
+    backupError = "Backup files can only be opened in the Tauri app.";
+    render();
+    return;
+  }
+
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "EasyAlias Backup", extensions: ["json"] }]
+    });
+    if (typeof selected === "string") await inspectBackupFile(selected);
+  } catch (fileError) {
+    backupError = `Backup could not be selected: ${String(fileError)}`;
+    render();
+  }
+}
+
+async function inspectBackupFile(path: string) {
+  if (backupBusy || backupDialogMode !== "import") return;
+  backupBusy = true;
+  backupError = "";
+  render();
+
+  try {
+    backupCandidates = await invokeCommand<AliasEntry[]>("inspect_alias_backup", { path });
+    backupFilePath = path;
+    selectedBackupIds = new Set(backupCandidates.map((alias) => alias.id));
+  } catch (inspectError) {
+    backupCandidates = [];
+    selectedBackupIds.clear();
+    backupFilePath = "";
+    backupError = String(inspectError);
+  }
+
+  backupBusy = false;
+  render();
+}
+
+async function exportSelectedAliases(event: SubmitEvent) {
+  event.preventDefault();
+  if (backupBusy || backupDialogMode !== "export") return;
+  backupError = "";
+
+  if (selectedBackupIds.size === 0) {
+    backupError = "Select at least one alias to export.";
+    render();
+    return;
+  }
+  if (!isTauriRuntime()) {
+    backupError = "Backups can only be exported in the Tauri app.";
+    render();
+    return;
+  }
+
+  try {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const destination = await save({
+      defaultPath: `EasyAlias-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: "EasyAlias Backup", extensions: ["json"] }]
+    });
+    if (typeof destination !== "string") return;
+
+    backupBusy = true;
+    render();
+    const result = await invokeCommand<BackupExportResult>("export_alias_backup", {
+      selectedIds: [...selectedBackupIds],
+      destination,
+      exportedAt: nowIso()
+    });
+    closeBackupDialogAfterSuccess();
+    notice = `${result.exportedCount} aliases exported to ${result.file}.`;
+  } catch (exportError) {
+    backupError = String(exportError);
+  }
+
+  backupBusy = false;
+  render();
+}
+
+async function importSelectedBackupAliases(event: SubmitEvent) {
+  event.preventDefault();
+  if (backupBusy || backupDialogMode !== "import") return;
+  backupError = "";
+
+  if (!backupFilePath || selectedBackupIds.size === 0) {
+    backupError = backupFilePath
+      ? "Select at least one alias to import."
+      : "Choose or drop an EasyAlias backup first.";
+    render();
+    return;
+  }
+
+  backupBusy = true;
+  render();
+  try {
+    const result = await invokeCommand<BackupImportResult>("import_alias_backup", {
+      path: backupFilePath,
+      selectedIds: [...selectedBackupIds],
+      importedAt: nowIso()
+    });
+    appState = result.state;
+    closeBackupDialogAfterSuccess();
+    const replacementNote = result.replacedCount
+      ? ` ${result.replacedCount} existing aliases replaced.`
+      : "";
+    notice = `${result.importedCount} aliases imported.${replacementNote}`;
+  } catch (backupImportError) {
+    backupError = String(backupImportError);
+  }
+
+  backupBusy = false;
+  render();
+}
+
+function closeBackupDialogAfterSuccess() {
+  backupDialogMode = null;
+  backupCandidates = [];
+  selectedBackupIds.clear();
+  backupFilePath = "";
+  backupError = "";
+}
+
+// Save a suggestion immediately. Suggestions with an existing alias name are
+// hidden in the UI, while the duplicate check also protects against stale clicks.
 async function useSuggestion(id: string) {
   const suggestion = aliasSuggestions.find((item) => item.id === id);
   if (!suggestion) return;
@@ -822,6 +1003,22 @@ function render() {
             data-action="open-import"
             ${importBusy ? "disabled" : ""}
           ><span aria-hidden="true">&#8681;</span></button>
+          <button
+            class="header-icon-button"
+            type="button"
+            title="Export alias backup"
+            aria-label="Export alias backup"
+            data-action="open-backup-export"
+            ${aliases.length && !backupBusy ? "" : "disabled"}
+          ><span aria-hidden="true">&#8679;</span></button>
+          <button
+            class="header-icon-button"
+            type="button"
+            title="Import alias backup"
+            aria-label="Import alias backup"
+            data-action="open-backup-import"
+            ${backupBusy ? "disabled" : ""}
+          ><span aria-hidden="true">&#128196;</span></button>
         </div>
       </header>
 
@@ -980,6 +1177,7 @@ function render() {
       </section>
 
       ${renderImportModal()}
+      ${renderBackupDialog()}
       ${renderEditModal()}
 
       <aside class="support-banner" aria-label="Support EasyAlias">
@@ -1008,6 +1206,111 @@ function render() {
   bindEvents();
 }
 
+function renderBackupDialog() {
+  if (!backupDialogMode) return "";
+
+  const isExport = backupDialogMode === "export";
+  const allSelected =
+    backupCandidates.length > 0 &&
+    backupCandidates.every((alias) => selectedBackupIds.has(alias.id));
+  const existingNames = new Set(appState.aliases.map((alias) => alias.name));
+  const fileName = backupFilePath.split(/[\\/]/).pop() ?? backupFilePath;
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <form
+        class="modal-card import-card backup-card"
+        id="${isExport ? "backup-export-form" : "backup-import-form"}"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="backup-title"
+      >
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">${isExport ? "Portable Backup" : "Restore Backup"}</p>
+            <h2 id="backup-title">${isExport ? "Export aliases" : "Import aliases"}</h2>
+          </div>
+          <button class="ghost-button modal-close" type="button" data-action="close-backup" ${backupBusy ? "disabled" : ""}>Close</button>
+        </div>
+
+        <p class="import-intro">
+          ${
+            isExport
+              ? "Choose which aliases to include. The resulting JSON file can be restored with EasyAlias later."
+              : "Choose an EasyAlias JSON backup or drop it below. You can review every alias before anything is changed."
+          }
+        </p>
+
+        ${backupError ? `<p class="modal-error">${escapeHtml(backupError)}</p>` : ""}
+
+        ${
+          isExport
+            ? ""
+            : `<button class="backup-drop-zone" type="button" data-action="choose-backup-file" ${backupBusy ? "disabled" : ""}>
+                <span class="backup-drop-icon" aria-hidden="true">&#8681;</span>
+                <strong>${backupFilePath ? escapeHtml(fileName) : "Drop an EasyAlias backup here"}</strong>
+                <span>${backupFilePath ? `${backupCandidates.length} aliases found` : "or click to choose a .json file"}</span>
+              </button>`
+        }
+
+        ${
+          backupCandidates.length
+            ? `<label class="import-select-all">
+                <input type="checkbox" name="backup-all" ${allSelected ? "checked" : ""} ${backupBusy ? "disabled" : ""} />
+                <span>Select all</span>
+              </label>
+
+              <div class="import-list" aria-label="Aliases available for ${isExport ? "export" : "import"}">
+                ${backupCandidates
+                  .map((alias) => {
+                    const willReplace = !isExport && existingNames.has(alias.name);
+                    return `
+                      <label class="import-row">
+                        <input
+                          type="checkbox"
+                          name="backup-candidate"
+                          value="${escapeHtml(alias.id)}"
+                          ${selectedBackupIds.has(alias.id) ? "checked" : ""}
+                          ${backupBusy ? "disabled" : ""}
+                        />
+                        <span class="import-alias-copy">
+                          <span class="import-alias-meta">
+                            <strong>${escapeHtml(alias.name)}</strong>
+                            <span class="${willReplace ? "backup-conflict" : ""}">${willReplace ? "Replaces existing" : actionLabels[alias.action]}</span>
+                          </span>
+                          <code>${escapeHtml(alias.commandPreview)}</code>
+                        </span>
+                      </label>
+                    `;
+                  })
+                  .join("")}
+              </div>`
+            : isExport
+              ? `<p class="backup-empty">No aliases are available to export.</p>`
+              : ""
+        }
+
+        <p class="import-safety">
+          ${
+            isExport
+              ? "The backup contains only the aliases you select."
+              : "Aliases with matching names replace their current EasyAlias entry. Unselected aliases stay unchanged."
+          }
+        </p>
+
+        <div class="modal-actions import-actions">
+          <button class="ghost-button" type="button" data-action="close-backup" ${backupBusy ? "disabled" : ""}>Cancel</button>
+          <button class="primary-button" type="submit" ${selectedBackupIds.size && !backupBusy ? "" : "disabled"}>
+            ${backupBusy ? "Working..." : `${isExport ? "Export" : "Import"} Selected (${selectedBackupIds.size})`}
+          </button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+// The same migration dialog handles both first-start discovery and a manual
+// rescan from the header. The mode only changes labels and close behavior.
 function renderImportModal() {
   const candidates = appState.importCandidates;
   if (!candidates.length) return "";
@@ -1149,6 +1452,8 @@ function bindEvents() {
   document.querySelector<HTMLFormElement>("#alias-form")?.addEventListener("submit", upsertAlias);
   document.querySelector<HTMLFormElement>("#edit-form")?.addEventListener("submit", updateAlias);
   document.querySelector<HTMLFormElement>("#import-form")?.addEventListener("submit", importSelectedCommandFiles);
+  document.querySelector<HTMLFormElement>("#backup-export-form")?.addEventListener("submit", exportSelectedAliases);
+  document.querySelector<HTMLFormElement>("#backup-import-form")?.addEventListener("submit", importSelectedBackupAliases);
   document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => {
     link.addEventListener("click", openExternalLink);
   });
@@ -1200,12 +1505,34 @@ function bindEvents() {
     });
   });
 
+  document.querySelector<HTMLInputElement>('input[name="backup-all"]')?.addEventListener("change", (event) => {
+    selectedBackupIds = (event.target as HTMLInputElement).checked
+      ? new Set(backupCandidates.map((alias) => alias.id))
+      : new Set();
+    render();
+  });
+
+  document.querySelectorAll<HTMLInputElement>('input[name="backup-candidate"]').forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        selectedBackupIds.add(checkbox.value);
+      } else {
+        selectedBackupIds.delete(checkbox.value);
+      }
+      render();
+    });
+  });
+
   document.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const action = button.dataset.action;
       const id = button.dataset.id;
 
       if (action === "open-import") void openCommandFileImport();
+      if (action === "open-backup-export") openBackupExport();
+      if (action === "open-backup-import") openBackupImport();
+      if (action === "close-backup") closeBackupDialog();
+      if (action === "choose-backup-file") void chooseBackupFile();
       if (action === "close-import") closeManualImport();
       if (action === "dismiss-import") void dismissCommandFileImport();
       if (action === "edit" && id) openEditModal(id);
@@ -1237,5 +1564,37 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#039;");
 }
 
+// Tauri reports native file drops even though the HTML drop event does not
+// contain a browser File object. Only drops while the backup dialog is open are
+// consumed; dropping multiple files produces a clear validation message.
+async function bindNativeBackupDrop() {
+  if (!isTauriRuntime()) return;
+
+  try {
+    const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+    await getCurrentWebview().onDragDropEvent((event) => {
+      if (backupDialogMode !== "import") return;
+
+      if (event.payload.type === "enter" || event.payload.type === "over") {
+        document.querySelector(".backup-drop-zone")?.classList.add("is-dragging");
+        return;
+      }
+
+      document.querySelector(".backup-drop-zone")?.classList.remove("is-dragging");
+      if (event.payload.type !== "drop") return;
+      if (event.payload.paths.length !== 1) {
+        backupError = "Drop exactly one EasyAlias JSON backup.";
+        render();
+        return;
+      }
+
+      void inspectBackupFile(event.payload.paths[0]);
+    });
+  } catch (dropError) {
+    console.warn("Native backup drop could not be initialized", dropError);
+  }
+}
+
 // Initial app boot.
+void bindNativeBackupDrop();
 void loadState();
