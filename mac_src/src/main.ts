@@ -234,6 +234,7 @@ if (!app) {
 const appElement = app;
 const repoUrl = "https://github.com/hannesgnann-hub/easyalias";
 const redditUrl = "https://www.reddit.com/r/easyalias/";
+const websiteUrl = "https://easyalias.org";
 
 // Tauri injects this marker only inside the native desktop runtime.
 // Browser preview mode uses localStorage and skips native-only features.
@@ -290,7 +291,7 @@ async function openPathPicker(target: PickerTarget, kind: PickerKind) {
 }
 
 // Footer links need Tauri's opener plugin in the desktop app. Reading the URL
-// from the clicked static anchor lets GitHub and Reddit share one safe handler.
+// from the clicked static anchor lets all footer links share one safe handler.
 async function openExternalLink(event: Event) {
   event.preventDefault();
   const anchor = event.currentTarget as HTMLAnchorElement;
@@ -960,6 +961,10 @@ function render() {
         <span aria-hidden="true">-</span>
         <a href="${redditUrl}" target="_blank" rel="noreferrer" data-external-link>
           Reddit
+        </a>
+        <span aria-hidden="true">-</span>
+        <a href="${websiteUrl}" target="_blank" rel="noreferrer" data-external-link>
+          Website
         </a>
       </footer>
     </section>
