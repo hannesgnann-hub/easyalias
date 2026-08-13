@@ -132,6 +132,28 @@ h2 {
   outline-offset: 2px;
 }
 
+.trash-header-button {
+  position: relative;
+}
+
+.header-count {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border: 2px solid #eef4f1;
+  border-radius: 9px;
+  color: #fff;
+  background: #a33b35;
+  font-size: 0.62rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
 .ghost-button {
   padding: 10px 14px;
   color: #20302c;
@@ -626,6 +648,138 @@ textarea:focus {
   width: min(680px, 100%);
 }
 
+.trash-card {
+  width: min(720px, 100%);
+}
+
+.trash-list {
+  display: grid;
+  gap: 8px;
+  max-height: 430px;
+  overflow: auto;
+}
+
+.trash-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: stretch;
+  padding: 12px;
+  border: 1px solid #dce5e1;
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.trash-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.trash-copy strong {
+  color: #1d2528;
+  font-size: 0.96rem;
+}
+
+.trash-copy span,
+.trash-copy small {
+  color: #66736f;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.trash-copy code {
+  color: #29413b;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.trash-row-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.trash-action {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  min-height: 40px;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.trash-action.restore {
+  color: #17423d;
+  background: #d9f4ef;
+}
+
+.trash-action.permanent {
+  color: #812626;
+  background: #f7dedc;
+}
+
+.trash-action:hover:not(:disabled) {
+  filter: brightness(0.96);
+}
+
+.trash-action:focus-visible,
+.danger-button:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.24);
+  outline-offset: 2px;
+}
+
+.trash-action:disabled,
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.trash-action svg,
+.danger-button svg {
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
+.trash-empty {
+  display: grid;
+  place-items: center;
+  gap: 7px;
+  min-height: 210px;
+  color: #66736f;
+  text-align: center;
+}
+
+.trash-empty svg {
+  width: 30px;
+  height: 30px;
+  color: #82908b;
+}
+
+.trash-empty strong {
+  color: #1d2528;
+}
+
+.trash-empty span {
+  font-size: 0.82rem;
+}
+
+.danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  background: #9b3732;
+  font-weight: 800;
+  cursor: pointer;
+}
+
 .backup-drop-zone {
   display: grid;
   place-items: center;
@@ -893,6 +1047,14 @@ textarea:focus {
   .modal-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .trash-row {
+    grid-template-columns: 1fr;
+  }
+
+  .trash-row-actions {
+    justify-content: flex-end;
   }
 
   .support-banner {

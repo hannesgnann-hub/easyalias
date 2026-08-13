@@ -1,5 +1,5 @@
 import "./styles.css";
-import { createIcons, FileDown, FileUp, SquareTerminal, Star, X } from "lucide";
+import { createIcons, FileDown, FileUp, RotateCcw, SquareTerminal, Star, Trash2, X } from "lucide";
 
 // Actions are the high-level choices shown in the dropdown.
 // The selected action decides how the final shell command is generated.
@@ -63,6 +63,16 @@ type BackupImportResult = {
   state: AppState;
   importedCount: number;
   replacedCount: number;
+};
+
+type TrashEntry = {
+  alias: AliasEntry;
+  deletedAt: number;
+};
+
+type TrashMutationResult = {
+  state: AppState;
+  trash: TrashEntry[];
 };
 
 // AliasForm is the temporary state for either the create form or the edit modal.
@@ -251,6 +261,14 @@ let selectedBackupIds = new Set<string>();
 let backupFilePath = "";
 let backupBusy = false;
 let backupError = "";
+// Deleted aliases remain recoverable for 30 days. Native builds persist these
+// entries in ~/.easyalias/trash.json; browser preview mirrors them locally.
+let trashEntries: TrashEntry[] = [];
+let trashOpen = false;
+let trashBusy = false;
+let trashError = "";
+
+const trashRetentionSeconds = 30 * 24 * 60 * 60;
 
 // Vite mounts the app into <main id="app"> from index.html.
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -477,6 +495,14 @@ async function loadState() {
   if (isTauriRuntime()) {
     try {
       appState = await invokeCommand<AppState>("load_aliases");
+      try {
+        trashEntries = await invokeCommand<TrashEntry[]>("list_trash");
+      } catch (trashLoadError) {
+        // Alias loading remains usable even if the separate trash file needs
+        // attention; surface the problem without replacing native state.
+        trashEntries = [];
+        error = `Trash could not be loaded: ${String(trashLoadError)}`;
+      }
       selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
       render();
       return;
@@ -493,8 +519,20 @@ async function loadState() {
       importCandidates: []
     };
   }
+  const savedTrash = localStorage.getItem("easyalias-trash");
+  if (savedTrash) {
+    const cutoff = Math.floor(Date.now() / 1000) - trashRetentionSeconds;
+    trashEntries = (JSON.parse(savedTrash) as TrashEntry[])
+      .filter((entry) => entry.deletedAt > cutoff)
+      .sort((left, right) => right.deletedAt - left.deletedAt);
+    localStorage.setItem("easyalias-trash", JSON.stringify(trashEntries));
+  }
 
   render();
+}
+
+function saveBrowserTrash() {
+  localStorage.setItem("easyalias-trash", JSON.stringify(trashEntries));
 }
 
 // Persists current aliases. Tauri writes real files; browser preview only writes localStorage.
@@ -982,12 +1020,36 @@ async function updateAlias(event: SubmitEvent) {
   await saveState();
 }
 
-// Removes an alias and then rewrites the generated alias file through saveState().
+// Deleting now moves the alias into the recoverable 30-day trash instead of
+// removing it immediately from disk.
 async function deleteAlias(id: string) {
-  appState = {
-    ...appState,
-    aliases: appState.aliases.filter((alias) => alias.id !== id)
-  };
+  const existing = appState.aliases.find((alias) => alias.id === id);
+  if (!existing) return;
+
+  clearMessages();
+
+  if (isTauriRuntime()) {
+    try {
+      const result = await invokeCommand<TrashMutationResult>("move_alias_to_trash", { id });
+      appState = result.state;
+      trashEntries = result.trash;
+    } catch (deleteError) {
+      error = String(deleteError);
+      render();
+      return;
+    }
+  } else {
+    appState = {
+      ...appState,
+      aliases: appState.aliases.filter((alias) => alias.id !== id)
+    };
+    trashEntries = [
+      { alias: existing, deletedAt: Math.floor(Date.now() / 1000) },
+      ...trashEntries.filter((entry) => entry.alias.id !== id)
+    ];
+    localStorage.setItem("easyalias-state", JSON.stringify(appState));
+    saveBrowserTrash();
+  }
 
   if (editingId === id) {
     editingId = null;
@@ -995,7 +1057,116 @@ async function deleteAlias(id: string) {
     editError = "";
   }
 
-  await saveState();
+  notice = `Alias "${existing.name}" moved to Trash.`;
+  render();
+}
+
+async function openTrash() {
+  if (trashBusy) return;
+  clearMessages();
+  trashError = "";
+
+  if (isTauriRuntime()) {
+    try {
+      trashEntries = await invokeCommand<TrashEntry[]>("list_trash");
+    } catch (loadError) {
+      error = `Trash could not be opened: ${String(loadError)}`;
+      render();
+      return;
+    }
+  }
+
+  trashOpen = true;
+  render();
+}
+
+function closeTrash() {
+  if (trashBusy) return;
+  trashOpen = false;
+  trashError = "";
+  render();
+}
+
+async function restoreTrashAlias(id: string) {
+  if (trashBusy) return;
+  const entry = trashEntries.find((item) => item.alias.id === id);
+  if (!entry) return;
+  trashBusy = true;
+  trashError = "";
+  render();
+
+  try {
+    if (isTauriRuntime()) {
+      const result = await invokeCommand<TrashMutationResult>("restore_trash_alias", { id });
+      appState = result.state;
+      trashEntries = result.trash;
+    } else {
+      if (appState.aliases.some((alias) => alias.name === entry.alias.name)) {
+        throw new Error(`Alias "${entry.alias.name}" already exists.`);
+      }
+      appState = {
+        ...appState,
+        aliases: [...appState.aliases, entry.alias].sort(compareAliases)
+      };
+      trashEntries = trashEntries.filter((item) => item.alias.id !== id);
+      localStorage.setItem("easyalias-state", JSON.stringify(appState));
+      saveBrowserTrash();
+    }
+    notice = `Alias "${entry.alias.name}" restored.`;
+  } catch (restoreError) {
+    trashError = String(restoreError);
+  } finally {
+    trashBusy = false;
+    render();
+  }
+}
+
+async function permanentlyDeleteTrashAlias(id: string) {
+  if (trashBusy) return;
+  const entry = trashEntries.find((item) => item.alias.id === id);
+  if (!entry) return;
+  if (!window.confirm(`Permanently delete alias "${entry.alias.name}"? This cannot be undone.`)) return;
+
+  trashBusy = true;
+  trashError = "";
+  render();
+  try {
+    if (isTauriRuntime()) {
+      trashEntries = await invokeCommand<TrashEntry[]>("permanently_delete_trash_alias", { id });
+    } else {
+      trashEntries = trashEntries.filter((item) => item.alias.id !== id);
+      saveBrowserTrash();
+    }
+    notice = `Alias "${entry.alias.name}" permanently deleted.`;
+  } catch (deleteError) {
+    trashError = String(deleteError);
+  } finally {
+    trashBusy = false;
+    render();
+  }
+}
+
+async function emptyTrash() {
+  if (trashBusy || !trashEntries.length) return;
+  if (!window.confirm(`Permanently delete all ${trashEntries.length} aliases in Trash? This cannot be undone.`)) return;
+
+  trashBusy = true;
+  trashError = "";
+  render();
+  try {
+    if (isTauriRuntime()) {
+      trashEntries = await invokeCommand<TrashEntry[]>("empty_trash");
+    } else {
+      trashEntries = [];
+      saveBrowserTrash();
+    }
+    notice = "Trash emptied.";
+  } catch (emptyError) {
+    trashError = String(emptyError);
+  } finally {
+    trashBusy = false;
+    render();
+  }
 }
 
 // Favorite changes are persisted immediately and therefore survive restarts
@@ -1053,6 +1224,18 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(value));
+}
+
+function formatDeletedDate(value: number) {
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(new Date(value * 1000));
+}
+
+function trashDaysRemaining(value: number) {
+  const purgeAt = value + trashRetentionSeconds;
+  return Math.max(1, Math.ceil((purgeAt - Date.now() / 1000) / (24 * 60 * 60)));
 }
 
 // Favorites are grouped first; each group remains predictable and alphabetical.
@@ -1128,6 +1311,17 @@ function render() {
             data-action="open-backup-import"
             ${backupBusy ? "disabled" : ""}
           ><i data-lucide="file-down"></i></button>
+          <button
+            class="header-icon-button trash-header-button"
+            type="button"
+            title="Trash${trashEntries.length ? ` (${trashEntries.length})` : ""}"
+            aria-label="Open Trash${trashEntries.length ? ` with ${trashEntries.length} deleted aliases` : ""}"
+            data-action="open-trash"
+            ${trashBusy ? "disabled" : ""}
+          >
+            <i data-lucide="trash-2"></i>
+            ${trashEntries.length ? `<span class="header-count" aria-hidden="true">${trashEntries.length}</span>` : ""}
+          </button>
         </div>
       </header>
 
@@ -1327,6 +1521,7 @@ function render() {
 
       ${renderImportModal()}
       ${renderBackupDialog()}
+      ${renderTrashDialog()}
       ${renderEditModal()}
 
       <aside class="support-banner" aria-label="Support EasyAlias">
@@ -1355,7 +1550,7 @@ function render() {
   // Replace the lightweight icon placeholders after each state-driven render.
   // Importing only the icons used here keeps the production bundle tree-shakable.
   createIcons({
-    icons: { SquareTerminal, FileDown, FileUp, Star, X },
+    icons: { SquareTerminal, FileDown, FileUp, RotateCcw, Star, Trash2, X },
     attrs: {
       "aria-hidden": "true",
       width: "20",
@@ -1467,6 +1662,83 @@ function renderBackupDialog() {
           </button>
         </div>
       </form>
+    </section>
+  `;
+}
+
+function renderTrashDialog() {
+  if (!trashOpen) return "";
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <section class="modal-card trash-card" role="dialog" aria-modal="true" aria-labelledby="trash-title">
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">Recovery</p>
+            <h2 id="trash-title">Trash</h2>
+          </div>
+          <span class="import-count">${trashEntries.length} deleted</span>
+        </div>
+
+        <p class="import-intro">
+          Deleted aliases stay here for 30 days. Restore an alias at any time, or delete it permanently now.
+        </p>
+
+        ${trashError ? `<p class="modal-error">${escapeHtml(trashError)}</p>` : ""}
+
+        ${
+          trashEntries.length
+            ? `<div class="trash-list" aria-label="Deleted aliases">
+                ${trashEntries
+                  .map(
+                    (entry) => `
+                      <article class="trash-row">
+                        <div class="trash-copy">
+                          <strong>${escapeHtml(entry.alias.name)}</strong>
+                          <span>${escapeHtml(actionLabels[entry.alias.action])}</span>
+                          <code>${escapeHtml(entry.alias.commandPreview)}</code>
+                          <small>Deleted ${formatDeletedDate(entry.deletedAt)} · ${trashDaysRemaining(entry.deletedAt)} days remaining</small>
+                        </div>
+                        <div class="trash-row-actions">
+                          <button
+                            class="trash-action restore"
+                            type="button"
+                            title="Restore ${escapeHtml(entry.alias.name)}"
+                            aria-label="Restore ${escapeHtml(entry.alias.name)}"
+                            data-action="restore-trash"
+                            data-id="${escapeHtml(entry.alias.id)}"
+                            ${trashBusy ? "disabled" : ""}
+                          ><i data-lucide="rotate-ccw"></i></button>
+                          <button
+                            class="trash-action permanent"
+                            type="button"
+                            title="Permanently delete ${escapeHtml(entry.alias.name)}"
+                            aria-label="Permanently delete ${escapeHtml(entry.alias.name)}"
+                            data-action="permanently-delete-trash"
+                            data-id="${escapeHtml(entry.alias.id)}"
+                            ${trashBusy ? "disabled" : ""}
+                          ><i data-lucide="trash-2"></i></button>
+                        </div>
+                      </article>
+                    `
+                  )
+                  .join("")}
+              </div>`
+            : `<div class="trash-empty">
+                <i data-lucide="trash-2"></i>
+                <strong>Trash is empty</strong>
+                <span>Deleted aliases will appear here for 30 days.</span>
+              </div>`
+        }
+
+        <div class="modal-actions trash-footer-actions">
+          <button class="ghost-button" type="button" data-action="close-trash" ${trashBusy ? "disabled" : ""}>Close</button>
+          <button class="danger-button" type="button" data-action="empty-trash" ${trashEntries.length && !trashBusy ? "" : "disabled"}>
+            <i data-lucide="trash-2"></i>
+            <span>${trashBusy ? "Working..." : "Empty Trash"}</span>
+          </button>
+        </div>
+      </section>
     </section>
   `;
 }
@@ -1699,6 +1971,11 @@ function bindEvents() {
       if (action === "change-zshrc") void changeZshrc();
       if (action === "open-backup-export") openBackupExport();
       if (action === "open-backup-import") openBackupImport();
+      if (action === "open-trash") void openTrash();
+      if (action === "close-trash") closeTrash();
+      if (action === "restore-trash" && id) void restoreTrashAlias(id);
+      if (action === "permanently-delete-trash" && id) void permanentlyDeleteTrashAlias(id);
+      if (action === "empty-trash") void emptyTrash();
       if (action === "dismiss-message") dismissMessage();
       if (action === "toggle-favorite" && id) void toggleFavorite(id);
       if (action === "close-backup") closeBackupDialog();

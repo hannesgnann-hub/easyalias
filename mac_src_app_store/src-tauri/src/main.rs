@@ -91,6 +91,23 @@ struct BackupImportResult {
     replaced_count: usize,
 }
 
+// Deleted aliases live in a separate file so config.json remains fully
+// backwards-compatible. deleted_at is Unix time, which makes the 30-day
+// retention rule independent from locale and frontend date parsing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrashEntry {
+    alias: AliasEntry,
+    deleted_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrashMutationResult {
+    state: AppState,
+    trash: Vec<TrashEntry>,
+}
+
 const MANAGED_BLOCK_START: &str = "# >>> EasyAlias managed aliases >>>";
 const MANAGED_BLOCK_END: &str = "# <<< EasyAlias managed aliases <<<";
 const IMPORT_MARKER_CONTENT: &str = "zshrc import prompt handled\n";
@@ -99,6 +116,7 @@ const BACKUP_FORMAT: &str = "easyalias-backup";
 const BACKUP_VERSION: u32 = 1;
 const MAX_BACKUP_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_BACKUP_ALIASES: usize = 5000;
+const TRASH_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
 
 // Tauri resolves app_data_dir inside the macOS App Sandbox container. All
 // structured data, bookmarks, and backups stay there.
@@ -122,6 +140,10 @@ fn import_marker_file(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn backups_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_dir(app)?.join("backups"))
+}
+
+fn trash_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_dir(app)?.join("trash.json"))
 }
 
 fn ensure_app_files(app: &AppHandle) -> Result<(), String> {
@@ -713,6 +735,42 @@ fn load_aliases(app: AppHandle) -> Result<AppState, String> {
     app_state(&app, aliases, import_candidates)
 }
 
+fn write_trash_entries(app: &AppHandle, entries: &[TrashEntry]) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(entries)
+        .map_err(|error| format!("Trash could not be serialized: {error}"))?;
+    let path = trash_file(app)?;
+    fs::write(&path, format!("{json}\n"))
+        .map_err(|error| format!("{} could not be written: {error}", path.display()))
+}
+
+fn retain_current_trash_entries(entries: &mut Vec<TrashEntry>, now: u64) -> bool {
+    let original_len = entries.len();
+    entries.retain(|entry| now.saturating_sub(entry.deleted_at) < TRASH_RETENTION_SECONDS);
+    entries.sort_by(|left, right| right.deleted_at.cmp(&left.deleted_at));
+    entries.len() != original_len
+}
+
+// Reading the trash also enforces retention. Expired entries are removed from
+// disk immediately, so they cannot reappear after an app restart.
+fn load_trash_entries(app: &AppHandle) -> Result<Vec<TrashEntry>, String> {
+    ensure_app_files(app)?;
+    let path = trash_file(app)?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("{} could not be read: {error}", path.display()))?;
+    let mut entries: Vec<TrashEntry> = serde_json::from_str(&content)
+        .map_err(|error| format!("trash.json is not valid EasyAlias JSON: {error}"))?;
+
+    if retain_current_trash_entries(&mut entries, unix_timestamp()?) {
+        write_trash_entries(app, &entries)?;
+    }
+
+    Ok(entries)
+}
+
 // Called immediately after NSOpenPanel returns a user-selected .zshrc. The
 // security-scoped bookmark is stored before the temporary panel permission ends.
 #[tauri::command]
@@ -756,6 +814,11 @@ fn connect_zshrc(app: AppHandle, path: String) -> Result<AppState, String> {
 
 #[tauri::command]
 fn save_aliases(app: AppHandle, aliases: Vec<AliasEntry>) -> Result<AppState, String> {
+    write_active_aliases(&app, &aliases)?;
+    app_state(&app, aliases, Vec::new())
+}
+
+fn write_active_aliases(app: &AppHandle, aliases: &[AliasEntry]) -> Result<(), String> {
     ensure_app_files(&app)?;
     render_managed_block(&aliases)?;
     with_zshrc_access(&app, |path| {
@@ -765,9 +828,96 @@ fn save_aliases(app: AppHandle, aliases: Vec<AliasEntry>) -> Result<AppState, St
             .map_err(|error| format!("{} could not be updated: {error}", path.display()))
     })?;
     write_config_aliases(&app, &aliases)?;
-    app_state(&app, aliases, Vec::new())
+    Ok(())
 }
 
+#[tauri::command]
+fn list_trash(app: AppHandle) -> Result<Vec<TrashEntry>, String> {
+    load_trash_entries(&app)
+}
+
+// Write the recoverable copy first. If updating the active alias files then
+// fails, the alias may exist in both places, but user data is never lost.
+#[tauri::command]
+fn move_alias_to_trash(app: AppHandle, id: String) -> Result<TrashMutationResult, String> {
+    let mut aliases = load_config_aliases(&app)?;
+    let index = aliases
+        .iter()
+        .position(|alias| alias.id == id)
+        .ok_or_else(|| "Alias no longer exists.".to_string())?;
+    let alias = aliases.remove(index);
+    let mut trash = load_trash_entries(&app)?;
+    trash.retain(|entry| entry.alias.id != alias.id);
+    trash.push(TrashEntry {
+        alias,
+        deleted_at: unix_timestamp()?,
+    });
+    trash.sort_by(|left, right| right.deleted_at.cmp(&left.deleted_at));
+
+    write_trash_entries(&app, &trash)?;
+    write_active_aliases(&app, &aliases)?;
+
+    Ok(TrashMutationResult {
+        state: app_state(&app, aliases, Vec::new())?,
+        trash,
+    })
+}
+
+// Restore into active storage before removing the recoverable copy. A name
+// conflict is rejected to avoid silently replacing a newer alias.
+#[tauri::command]
+fn restore_trash_alias(app: AppHandle, id: String) -> Result<TrashMutationResult, String> {
+    let mut trash = load_trash_entries(&app)?;
+    let index = trash
+        .iter()
+        .position(|entry| entry.alias.id == id)
+        .ok_or_else(|| "Deleted alias no longer exists.".to_string())?;
+    let alias = trash[index].alias.clone();
+    let mut aliases = load_config_aliases(&app)?;
+
+    if aliases.iter().any(|existing| existing.name == alias.name) {
+        return Err(format!(
+            "Alias \"{}\" already exists. Rename or delete the active alias before restoring.",
+            alias.name
+        ));
+    }
+    if aliases.iter().any(|existing| existing.id == alias.id) {
+        return Err("An active alias already uses this id.".to_string());
+    }
+
+    aliases.push(alias);
+    aliases.sort_by(|left, right| left.name.cmp(&right.name));
+    write_active_aliases(&app, &aliases)?;
+    trash.remove(index);
+    write_trash_entries(&app, &trash)?;
+
+    Ok(TrashMutationResult {
+        state: app_state(&app, aliases, Vec::new())?,
+        trash,
+    })
+}
+
+#[tauri::command]
+fn permanently_delete_trash_alias(app: AppHandle, id: String) -> Result<Vec<TrashEntry>, String> {
+    let mut trash = load_trash_entries(&app)?;
+    let original_len = trash.len();
+    trash.retain(|entry| entry.alias.id != id);
+    if trash.len() == original_len {
+        return Err("Deleted alias no longer exists.".to_string());
+    }
+    write_trash_entries(&app, &trash)?;
+    Ok(trash)
+}
+
+#[tauri::command]
+fn empty_trash(app: AppHandle) -> Result<Vec<TrashEntry>, String> {
+    ensure_app_files(&app)?;
+    write_trash_entries(&app, &[])?;
+    Ok(Vec::new())
+}
+
+// Export only the aliases selected in the review dialog. The backend verifies
+// that every requested id still exists before writing the portable JSON file.
 #[tauri::command]
 fn export_alias_backup(
     app: AppHandle,
@@ -1004,6 +1154,11 @@ fn main() {
             connect_zshrc,
             disconnect_zshrc,
             save_aliases,
+            list_trash,
+            move_alias_to_trash,
+            restore_trash_alias,
+            permanently_delete_trash_alias,
+            empty_trash,
             export_alias_backup,
             inspect_alias_backup,
             import_alias_backup,
@@ -1088,6 +1243,25 @@ mod tests {
 
         let alias: AliasEntry = serde_json::from_str(legacy).unwrap();
         assert!(!alias.favorite);
+    }
+
+    #[test]
+    fn expired_trash_entries_are_removed_automatically() {
+        let now: u64 = 10_000_000;
+        let mut trash = vec![
+            TrashEntry {
+                alias: alias("old", "echo old"),
+                deleted_at: now.saturating_sub(TRASH_RETENTION_SECONDS + 1),
+            },
+            TrashEntry {
+                alias: alias("new", "echo new"),
+                deleted_at: now,
+            },
+        ];
+
+        assert!(retain_current_trash_entries(&mut trash, now));
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].alias.id, "new");
     }
 
     #[test]
