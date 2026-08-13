@@ -18,6 +18,8 @@ struct AliasEntry {
     action: String,
     custom_command: Option<String>,
     command_preview: String,
+    #[serde(default)]
+    favorite: bool,
     created_at: String,
     updated_at: String,
 }
@@ -1005,6 +1007,7 @@ fn import_command_files(
             action: "custom".to_string(),
             custom_command: Some(candidate.command.clone()),
             command_preview: candidate.command.clone(),
+            favorite: false,
             created_at: timestamp.clone(),
             updated_at: timestamp.clone(),
         });
@@ -1138,6 +1141,7 @@ mod tests {
             action: "custom".to_string(),
             custom_command: Some(command.to_string()),
             command_preview: command.to_string(),
+            favorite: false,
             created_at: "2026-08-13T18:00:00.000Z".to_string(),
             updated_at: "2026-08-13T18:00:00.000Z".to_string(),
         }
@@ -1152,6 +1156,18 @@ mod tests {
         assert!(parse_legacy_command_script("echo one\necho two\n").is_none());
         assert!(parse_legacy_command_script("@echo off\ncall %~dp0tool.cmd %*\n").is_none());
         assert!(parse_legacy_command_script("@echo off\n:label\n").is_none());
+    }
+
+    #[test]
+    fn old_alias_json_defaults_to_not_favorite() {
+        let legacy = r#"{
+            "id":"legacy-1","name":"ll","path":"","action":"custom",
+            "customCommand":"dir /a","commandPreview":"dir /a",
+            "createdAt":"2026-07-01T12:00:00.000Z","updatedAt":"2026-07-01T12:00:00.000Z"
+        }"#;
+
+        let alias: AliasEntry = serde_json::from_str(legacy).unwrap();
+        assert!(!alias.favorite);
     }
 
     #[test]
