@@ -96,14 +96,35 @@ h2 {
   border-radius: 8px;
   color: #17423d;
   background: #f8fbfa;
-  font-size: 1.45rem;
-  font-weight: 800;
-  line-height: 1;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
 }
 
-.header-icon-button:hover {
+.header-icon-button svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+  pointer-events: none;
+}
+
+.header-icon-button:hover:not(:disabled) {
   border-color: #8fb8ad;
   background: #e8f5f1;
+  color: #0f766e;
+  transform: translateY(-1px);
+}
+
+.header-icon-button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.header-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
 }
 
 .header-icon-button:focus-visible {
