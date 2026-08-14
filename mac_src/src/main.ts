@@ -38,12 +38,13 @@ type AliasEntry = {
 };
 
 // The backend exposes only conservative, single-line aliases as import choices.
-// lineNumber helps users locate a command in ~/.zshrc before confirming it.
-type ZshrcAliasCandidate = {
+// The source path and line number let users verify each candidate first.
+type ShellAliasCandidate = {
   id: string;
   name: string;
   command: string;
   lineNumber: number;
+  sourceFile: string;
 };
 
 // AppState mirrors what the Rust backend returns to the frontend.
@@ -53,8 +54,10 @@ type AppState = {
   configFile: string;
   aliasesFile: string;
   sourceLine: string;
-  zshrcSourcePresent: boolean;
-  importCandidates: ZshrcAliasCandidate[];
+  shellName: string;
+  shellConfigFile: string;
+  shellSourcePresent: boolean;
+  importCandidates: ShellAliasCandidate[];
 };
 
 type ImportResult = {
@@ -406,12 +409,12 @@ const aliasSuggestions: AliasSuggestion[] = [
     description: "Open your home folder"
   },
   {
-    id: "reload-zsh",
-    name: "reloadzsh",
+    id: "reload-shell",
+    name: "reloadshell",
     path: "",
     action: "custom",
-    customCommand: "source ~/.zshrc",
-    description: "Reload zsh configuration"
+    customCommand: 'exec "$SHELL" -l',
+    description: "Reload the login shell"
   }
 ];
 
@@ -422,7 +425,9 @@ let appState: AppState = {
   configFile: "~/.easyalias/config.json",
   aliasesFile: "~/.easyalias/aliases.zsh",
   sourceLine: "source ~/.easyalias/aliases.zsh",
-  zshrcSourcePresent: false,
+  shellName: "zsh + Bash",
+  shellConfigFile: "~/.zshrc, ~/.bash_profile and ~/.bashrc",
+  shellSourcePresent: false,
   importCandidates: []
 };
 
@@ -449,7 +454,7 @@ let scheduledMessageKey = "";
 let editError = "";
 let importError = "";
 // Backup import/export has its own modal state so it never interferes with the
-// first-start ~/.zshrc migration flow above.
+// first-start shell migration flow above.
 let backupDialogMode: BackupDialogMode | null = null;
 let backupCandidates: AliasEntry[] = [];
 let selectedBackupIds = new Set<string>();
@@ -567,7 +572,7 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-// Converts a user-entered path into a safe zsh command argument.
+// Converts a user-entered path into a safe Bash/zsh command argument.
 // "~/" is expanded to "$HOME/" so generated aliases keep working reliably.
 function shellPath(path: string) {
   const trimmed = path.trim();
@@ -761,7 +766,7 @@ function showSuggestionPage(page: number) {
 // The header import button requests a fresh backend scan even after the
 // first-start prompt was handled. Candidates already managed by EasyAlias are
 // filtered by Rust before this shared import modal is opened.
-async function openZshrcImport() {
+async function openShellImport() {
   if (importBusy) return;
   clearMessages();
   importError = "";
@@ -769,12 +774,12 @@ async function openZshrcImport() {
   render();
 
   try {
-    appState = await invokeCommand<AppState>("scan_zshrc_import");
+    appState = await invokeCommand<AppState>("scan_shell_import");
     selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
     manualImportOpen = appState.importCandidates.length > 0;
 
     if (!manualImportOpen) {
-      notice = "No new aliases found in ~/.zshrc.";
+      notice = `No new aliases found in ${appState.shellConfigFile}.`;
     }
   } catch (scanError) {
     error = String(scanError);
@@ -795,17 +800,17 @@ function closeManualImport() {
 
 // Skipping writes a small marker in ~/.easyalias so the first-run question is
 // not shown again. It does not remove or change any existing alias line.
-async function dismissZshrcImport() {
+async function dismissShellImport() {
   if (importBusy) return;
   importBusy = true;
   importError = "";
   render();
 
   try {
-    appState = await invokeCommand<AppState>("dismiss_zshrc_import");
+    appState = await invokeCommand<AppState>("dismiss_shell_import");
     selectedImportIds.clear();
     manualImportOpen = false;
-    notice = "Existing aliases were left unchanged in ~/.zshrc.";
+    notice = `Existing aliases were left unchanged in ${appState.shellConfigFile}.`;
   } catch (dismissError) {
     importError = String(dismissError);
   }
@@ -814,9 +819,9 @@ async function dismissZshrcImport() {
   render();
 }
 
-// The Rust command rescans ~/.zshrc, creates the backup, moves only the selected
-// lines, and writes the matching AliasEntry objects as one coordinated action.
-async function importSelectedZshrcAliases(event: SubmitEvent) {
+// Rust rescans all supported startup files, backs up every affected file, and
+// moves only the selected lines into EasyAlias-managed storage.
+async function importSelectedShellAliases(event: SubmitEvent) {
   event.preventDefault();
   if (importBusy) return;
   importError = "";
@@ -831,7 +836,7 @@ async function importSelectedZshrcAliases(event: SubmitEvent) {
   render();
 
   try {
-    const result = await invokeCommand<ImportResult>("import_zshrc_aliases", {
+    const result = await invokeCommand<ImportResult>("import_shell_aliases", {
       selectedIds: [...selectedImportIds],
       timestamp: nowIso()
     });
@@ -1438,8 +1443,8 @@ function render() {
           <button
             class="header-icon-button"
             type="button"
-            title="Import aliases from ~/.zshrc"
-            aria-label="Import aliases from ~/.zshrc"
+            title="Import aliases from ${escapeHtml(appState.shellConfigFile)}"
+            aria-label="Import aliases from ${escapeHtml(appState.shellConfigFile)}"
             data-action="open-import"
             ${importBusy ? "disabled" : ""}
           ><i data-lucide="square-terminal"></i></button>
@@ -1479,8 +1484,8 @@ function render() {
           <strong>${appState.aliasesFile}</strong>
         </div>
         <div>
-          <span>.zshrc Source</span>
-          <strong>${appState.zshrcSourcePresent ? "Connected" : "Not connected yet"}</strong>
+          <span>${escapeHtml(appState.shellName)} Source</span>
+          <strong>${appState.shellSourcePresent ? "Connected" : "Not connected yet"}</strong>
         </div>
         <div>
           <span>Aliases</span>
@@ -1489,10 +1494,10 @@ function render() {
       </section>
 
       ${
-        appState.zshrcSourcePresent
+        appState.shellSourcePresent
           ? ""
           : `<aside class="source-hint">
-              <span>Automatically added to ~/.zshrc on first Tauri startup:</span>
+              <span>Automatically added to ${escapeHtml(appState.shellConfigFile)} on first startup:</span>
               <code>${appState.sourceLine}</code>
             </aside>`
       }
@@ -1971,7 +1976,7 @@ function renderImportModal() {
                   <span class="import-alias-copy">
                     <span class="import-alias-meta">
                       <strong>${escapeHtml(candidate.name)}</strong>
-                      <span>Line ${candidate.lineNumber}</span>
+                      <span>${escapeHtml(candidate.sourceFile)} · Line ${candidate.lineNumber}</span>
                     </span>
                     <code>${escapeHtml(candidate.command)}</code>
                   </span>
@@ -1982,7 +1987,7 @@ function renderImportModal() {
         </div>
 
         <p class="import-safety">
-          EasyAlias will create a timestamped <code>~/.zshrc.easyalias-backup-…</code> before changing the selected lines.
+          EasyAlias will create timestamped backups next to every startup file it changes.
         </p>
 
         <div class="modal-actions import-actions">
@@ -2068,7 +2073,7 @@ function renderEditModal() {
 function bindEvents() {
   document.querySelector<HTMLFormElement>("#alias-form")?.addEventListener("submit", upsertAlias);
   document.querySelector<HTMLFormElement>("#edit-form")?.addEventListener("submit", updateAlias);
-  document.querySelector<HTMLFormElement>("#import-form")?.addEventListener("submit", importSelectedZshrcAliases);
+  document.querySelector<HTMLFormElement>("#import-form")?.addEventListener("submit", importSelectedShellAliases);
   document.querySelector<HTMLFormElement>("#backup-export-form")?.addEventListener("submit", exportSelectedAliases);
   document.querySelector<HTMLFormElement>("#backup-import-form")?.addEventListener("submit", importSelectedBackupAliases);
   document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => {
@@ -2149,7 +2154,7 @@ function bindEvents() {
       const action = button.dataset.action;
       const id = button.dataset.id;
 
-      if (action === "open-import") void openZshrcImport();
+      if (action === "open-import") void openShellImport();
       if (action === "open-backup-export") openBackupExport();
       if (action === "open-backup-import") openBackupImport();
       if (action === "open-trash") void openTrash();
@@ -2162,7 +2167,7 @@ function bindEvents() {
       if (action === "close-backup") closeBackupDialog();
       if (action === "choose-backup-file") void chooseBackupFile();
       if (action === "close-import") closeManualImport();
-      if (action === "dismiss-import") void dismissZshrcImport();
+      if (action === "dismiss-import") void dismissShellImport();
       if (action === "edit" && id) openEditModal(id);
       if (action === "close-edit") closeEditModal();
       if (action === "toggle-suggestions") toggleSuggestions();

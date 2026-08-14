@@ -24,15 +24,16 @@ struct AliasEntry {
     updated_at: String,
 }
 
-// A conservative, single-line alias found in ~/.zshrc. The line number is part
-// of the id so the backend can rescan and verify the user's selection on import.
+// A conservative, single-line alias found in a shell startup file. The source
+// path and line number let the backend verify the selection again on import.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ZshrcAliasCandidate {
+struct ShellAliasCandidate {
     id: String,
     name: String,
     command: String,
     line_number: usize,
+    source_file: String,
 }
 
 // State returned to the frontend on load/save. Besides aliases, it contains
@@ -44,12 +45,14 @@ struct AppState {
     config_file: String,
     aliases_file: String,
     source_line: String,
-    zshrc_source_present: bool,
-    import_candidates: Vec<ZshrcAliasCandidate>,
+    shell_name: String,
+    shell_config_file: String,
+    shell_source_present: bool,
+    import_candidates: Vec<ShellAliasCandidate>,
 }
 
-// Import returns the updated state together with the backup location so the UI
-// can tell the user exactly where the original ~/.zshrc was preserved.
+// Import returns the updated state together with the backup locations so the UI
+// can tell the user where every changed startup file was preserved.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ImportResult {
@@ -102,23 +105,45 @@ struct TrashMutationResult {
     trash: Vec<TrashEntry>,
 }
 
-// EasyAlias owns ~/.easyalias/aliases.zsh and only adds a source line to ~/.zshrc.
-// This keeps the user's existing shell config mostly untouched.
+// Keep the established aliases.zsh path for backwards compatibility. The file
+// contains syntax understood by both zsh and Bash, regardless of its extension.
 const SOURCE_LINE: &str = "source ~/.easyalias/aliases.zsh";
 const APP_ALIAS_NAME: &str = "easya";
 const APP_ALIAS_LINE: &str = "alias easya='open /Applications/EasyAlias.app'";
-const IMPORT_MARKER_CONTENT: &str = "zshrc import prompt handled\n";
+const IMPORT_MARKER_CONTENT: &str = "shell alias import prompt handled\n";
 const BACKUP_FORMAT: &str = "easyalias-backup";
 const BACKUP_VERSION: u32 = 1;
 const MAX_BACKUP_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_BACKUP_ALIASES: usize = 5000;
 const TRASH_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
 
+#[derive(Debug)]
+struct ShellSetup {
+    name: String,
+    config_files: Vec<PathBuf>,
+}
+
 // Resolve the user's home directory without pulling in extra dependencies.
 fn home_dir() -> Result<PathBuf, String> {
     env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "HOME could not be read.".to_string())
+}
+
+// macOS and editor terminals can use different shells while inheriting the same
+// SHELL value. Connect both supported shells so a zsh login session and a Bash
+// VS Code terminal see the same EasyAlias commands.
+fn shell_setup() -> Result<ShellSetup, String> {
+    let home = home_dir()?;
+
+    Ok(ShellSetup {
+        name: "zsh + Bash".to_string(),
+        config_files: vec![
+            home.join(".zshrc"),
+            home.join(".bash_profile"),
+            home.join(".bashrc"),
+        ],
+    })
 }
 
 // All app-managed files live below ~/.easyalias.
@@ -138,16 +163,12 @@ fn trash_file() -> Result<PathBuf, String> {
     Ok(app_dir()?.join("trash.json"))
 }
 
-fn import_marker_file() -> Result<PathBuf, String> {
-    Ok(app_dir()?.join(".zshrc-import-v1"))
-}
-
-fn zshrc_file() -> Result<PathBuf, String> {
-    Ok(home_dir()?.join(".zshrc"))
+fn import_marker_file(_setup: &ShellSetup) -> Result<PathBuf, String> {
+    Ok(app_dir()?.join(".shell-import-v3"))
 }
 
 // A missing startup file is a valid first-run state. Every other read error is
-// surfaced so EasyAlias can never overwrite an unreadable ~/.zshrc as if empty.
+// surfaced so EasyAlias can never overwrite an unreadable startup file as empty.
 fn read_text_or_empty(path: &Path) -> Result<String, String> {
     match fs::read_to_string(path) {
         Ok(content) => Ok(content),
@@ -156,7 +177,7 @@ fn read_text_or_empty(path: &Path) -> Result<String, String> {
     }
 }
 
-// Decode one shell word without running zsh. This supports the common quoted
+// Decode one shell word without running a shell. This supports common quoted
 // and escaped forms used by alias declarations while rejecting extra words.
 fn decode_alias_value(value: &str) -> Option<String> {
     #[derive(Clone, Copy, PartialEq)]
@@ -219,7 +240,7 @@ fn decode_alias_value(value: &str) -> Option<String> {
 // Parse only unindented, one-line aliases with one assignment. Skipping shell
 // options, indented conditional aliases, and multi-assignment lines keeps the
 // first-run migration intentionally predictable.
-fn parse_zshrc_alias_line(line: &str, line_number: usize) -> Option<ZshrcAliasCandidate> {
+fn parse_shell_alias_line(line: &str, line_number: usize) -> Option<ShellAliasCandidate> {
     if line.chars().next().is_some_and(char::is_whitespace) {
         return None;
     }
@@ -241,19 +262,20 @@ fn parse_zshrc_alias_line(line: &str, line_number: usize) -> Option<ZshrcAliasCa
     }
 
     let command = decode_alias_value(assignment[equals_index + 1..].trim_start())?;
-    Some(ZshrcAliasCandidate {
-        id: format!("zshrc-line-{}", line_number),
+    Some(ShellAliasCandidate {
+        id: format!("shell-line-{}", line_number),
         name: name.to_string(),
         command,
         line_number,
+        source_file: String::new(),
     })
 }
 
-fn find_zshrc_aliases(content: &str) -> Vec<ZshrcAliasCandidate> {
-    let parsed: Vec<ZshrcAliasCandidate> = content
+fn find_shell_aliases(content: &str) -> Vec<ShellAliasCandidate> {
+    let parsed: Vec<ShellAliasCandidate> = content
         .lines()
         .enumerate()
-        .filter_map(|(index, line)| parse_zshrc_alias_line(line, index + 1))
+        .filter_map(|(index, line)| parse_shell_alias_line(line, index + 1))
         .collect();
     let mut name_counts: HashMap<String, usize> = HashMap::new();
 
@@ -269,14 +291,33 @@ fn find_zshrc_aliases(content: &str) -> Vec<ZshrcAliasCandidate> {
         .collect()
 }
 
-fn scan_zshrc_aliases() -> Result<Vec<ZshrcAliasCandidate>, String> {
-    let path = zshrc_file()?;
-    let content = read_text_or_empty(&path)?;
-    Ok(find_zshrc_aliases(&content))
+fn scan_shell_aliases(setup: &ShellSetup) -> Result<Vec<ShellAliasCandidate>, String> {
+    let mut candidates = Vec::new();
+
+    for (file_index, path) in setup.config_files.iter().enumerate() {
+        let source_file = display_home_path(path.clone())?;
+        for mut candidate in find_shell_aliases(&read_text_or_empty(path)?) {
+            candidate.id = format!("shell-{}-line-{}", file_index, candidate.line_number);
+            candidate.source_file = source_file.clone();
+            candidates.push(candidate);
+        }
+    }
+
+    let mut name_counts: HashMap<String, usize> = HashMap::new();
+    for candidate in &candidates {
+        *name_counts.entry(candidate.name.clone()).or_default() += 1;
+    }
+
+    // A Bash alias may be declared in both startup files. Skip ambiguous names
+    // instead of importing one declaration and exposing another unexpectedly.
+    Ok(candidates
+        .into_iter()
+        .filter(|candidate| name_counts.get(&candidate.name) == Some(&1))
+        .collect())
 }
 
-fn mark_import_handled() -> Result<(), String> {
-    let path = import_marker_file()?;
+fn mark_import_handled(setup: &ShellSetup) -> Result<(), String> {
+    let path = import_marker_file(setup)?;
     fs::write(&path, IMPORT_MARKER_CONTENT)
         .map_err(|error| format!("{} could not be written: {}", path.display(), error))
 }
@@ -288,32 +329,38 @@ fn unix_timestamp() -> Result<u64, String> {
         .map_err(|error| format!("System time could not be read: {}", error))
 }
 
-fn next_zshrc_backup_file() -> Result<PathBuf, String> {
-    let home = home_dir()?;
+fn next_shell_backup_file(path: &Path) -> Result<PathBuf, String> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(".shellrc");
     let timestamp = unix_timestamp()?;
 
     for suffix in 0..1000 {
-        let file_name = if suffix == 0 {
-            format!(".zshrc.easyalias-backup-{}", timestamp)
+        let backup_name = if suffix == 0 {
+            format!("{}.easyalias-backup-{}", file_name, timestamp)
         } else {
-            format!(".zshrc.easyalias-backup-{}-{}", timestamp, suffix)
+            format!("{}.easyalias-backup-{}-{}", file_name, timestamp, suffix)
         };
-        let candidate = home.join(file_name);
+        let candidate = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(backup_name);
         if !candidate.exists() {
             return Ok(candidate);
         }
     }
 
-    Err("A unique .zshrc backup name could not be created.".to_string())
+    Err("A unique shell configuration backup name could not be created.".to_string())
 }
 
-// Used by the UI to show whether the shell is already wired up.
-fn zshrc_source_present() -> bool {
-    zshrc_file()
-        .ok()
-        .and_then(|path| fs::read_to_string(path).ok())
-        .map(|content| content.lines().any(|line| line.trim() == SOURCE_LINE))
-        .unwrap_or(false)
+fn shell_source_present(setup: &ShellSetup) -> bool {
+    setup.config_files.iter().all(|path| {
+        fs::read_to_string(path)
+            .ok()
+            .map(|content| content.lines().any(|line| line.trim() == SOURCE_LINE))
+            .unwrap_or(false)
+    })
 }
 
 // First-run setup: create ~/.easyalias and an empty generated aliases.zsh.
@@ -333,10 +380,7 @@ fn ensure_app_files() -> Result<(), String> {
     Ok(())
 }
 
-// First-run shell setup. The app appends only the missing EasyAlias lines and
-// avoids overwriting an existing easya alias.
-fn ensure_zshrc_source() -> Result<(), String> {
-    let path = zshrc_file()?;
+fn ensure_shell_file(path: &Path) -> Result<(), String> {
     let content = read_text_or_empty(&path)?;
 
     let source_present = content.lines().any(|line| line.trim() == SOURCE_LINE);
@@ -368,6 +412,25 @@ fn ensure_zshrc_source() -> Result<(), String> {
 
     fs::write(&path, next_content)
         .map_err(|error| format!("{} could not be updated: {}", path.display(), error))
+}
+
+// Connect every supported startup file. Existing content is preserved
+// byte-for-byte apart from missing EasyAlias blocks at the end.
+fn ensure_shell_source(setup: &ShellSetup) -> Result<(), String> {
+    for path in &setup.config_files {
+        ensure_shell_file(path)?;
+    }
+    Ok(())
+}
+
+fn shell_config_file_display(setup: &ShellSetup) -> Result<String, String> {
+    setup
+        .config_files
+        .iter()
+        .cloned()
+        .map(display_home_path)
+        .collect::<Result<Vec<_>, _>>()
+        .map(|paths| paths.join(" and "))
 }
 
 // Shorten paths below HOME for display, e.g. /Users/name/.easyalias -> ~/.easyalias.
@@ -472,7 +535,7 @@ fn read_backup(path: &Path) -> Result<AliasBackup, String> {
     Ok(backup)
 }
 
-// Wrap a zsh command in single quotes for an alias assignment.
+// Wrap a shell command in single quotes for a Bash/zsh alias assignment.
 // Embedded single quotes are escaped using the standard '\'' pattern.
 fn single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
@@ -503,14 +566,17 @@ fn render_aliases(aliases: &[AliasEntry]) -> Result<String, String> {
 // Build a complete AppState after load/save.
 fn app_state(
     aliases: Vec<AliasEntry>,
-    import_candidates: Vec<ZshrcAliasCandidate>,
+    setup: &ShellSetup,
+    import_candidates: Vec<ShellAliasCandidate>,
 ) -> Result<AppState, String> {
     Ok(AppState {
         aliases,
         config_file: display_home_path(config_file()?)?,
         aliases_file: display_home_path(aliases_file()?)?,
         source_line: SOURCE_LINE.to_string(),
-        zshrc_source_present: zshrc_source_present(),
+        shell_name: setup.name.clone(),
+        shell_config_file: shell_config_file_display(setup)?,
+        shell_source_present: shell_source_present(setup),
         import_candidates,
     })
 }
@@ -587,37 +653,38 @@ fn replace_imported_alias_lines(content: &str, selected_lines: &HashMap<usize, &
     lines.join("\n")
 }
 
-// Called by the frontend when the app starts.
-// Also performs first-run file and .zshrc setup.
+// Called by the frontend when the app starts. Detect and connect the login
+// shell before loading managed aliases or offering a first-run import.
 #[tauri::command]
 fn load_aliases() -> Result<AppState, String> {
+    let setup = shell_setup()?;
     ensure_app_files()?;
     let config_exists = config_file()?.exists();
-    let import_was_handled = import_marker_file()?.exists();
+    let import_was_handled = import_marker_file(&setup)?.exists();
     let import_candidates = if !config_exists && !import_was_handled {
-        scan_zshrc_aliases()?
+        scan_shell_aliases(&setup)?
     } else {
         Vec::new()
     };
 
     if !config_exists && !import_was_handled && import_candidates.is_empty() {
-        mark_import_handled()?;
+        mark_import_handled(&setup)?;
     }
 
-    ensure_zshrc_source()?;
-    app_state(load_config_aliases()?, import_candidates)
+    ensure_shell_source(&setup)?;
+    app_state(load_config_aliases()?, &setup, import_candidates)
 }
 
 // Called whenever aliases are created, edited, or deleted.
-// Writes both config.json for the UI and aliases.zsh for zsh.
+// Writes both config.json for the UI and the shared shell alias file.
 #[tauri::command]
 fn save_aliases(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
-    let directory = app_dir()?;
-    fs::create_dir_all(&directory)
-        .map_err(|error| format!("{} could not be created: {}", directory.display(), error))?;
+    let setup = shell_setup()?;
+    ensure_app_files()?;
+    ensure_shell_source(&setup)?;
 
     write_alias_files(&aliases)?;
-    app_state(aliases, Vec::new())
+    app_state(aliases, &setup, Vec::new())
 }
 
 #[tauri::command]
@@ -629,6 +696,9 @@ fn list_trash() -> Result<Vec<TrashEntry>, String> {
 // fails, the alias may exist in both places, but user data is never lost.
 #[tauri::command]
 fn move_alias_to_trash(id: String) -> Result<TrashMutationResult, String> {
+    let setup = shell_setup()?;
+    ensure_app_files()?;
+    ensure_shell_source(&setup)?;
     let mut aliases = load_config_aliases()?;
     let index = aliases
         .iter()
@@ -647,7 +717,7 @@ fn move_alias_to_trash(id: String) -> Result<TrashMutationResult, String> {
     write_alias_files(&aliases)?;
 
     Ok(TrashMutationResult {
-        state: app_state(aliases, Vec::new())?,
+        state: app_state(aliases, &setup, Vec::new())?,
         trash,
     })
 }
@@ -656,6 +726,9 @@ fn move_alias_to_trash(id: String) -> Result<TrashMutationResult, String> {
 // conflict is rejected to avoid silently replacing a newer alias.
 #[tauri::command]
 fn restore_trash_alias(id: String) -> Result<TrashMutationResult, String> {
+    let setup = shell_setup()?;
+    ensure_app_files()?;
+    ensure_shell_source(&setup)?;
     let mut trash = load_trash_entries()?;
     let index = trash
         .iter()
@@ -681,7 +754,7 @@ fn restore_trash_alias(id: String) -> Result<TrashMutationResult, String> {
     write_trash_entries(&trash)?;
 
     Ok(TrashMutationResult {
-        state: app_state(aliases, Vec::new())?,
+        state: app_state(aliases, &setup, Vec::new())?,
         trash,
     })
 }
@@ -774,6 +847,9 @@ fn import_alias_backup(
         return Err("Import timestamp is missing.".to_string());
     }
 
+    let setup = shell_setup()?;
+    ensure_app_files()?;
+    ensure_shell_source(&setup)?;
     let backup = read_backup(Path::new(&path))?;
     let selected_id_set: HashSet<&str> = selected_ids.iter().map(String::as_str).collect();
     let mut selected: Vec<AliasEntry> = backup
@@ -805,45 +881,44 @@ fn import_alias_backup(
     write_alias_files(&aliases)?;
 
     Ok(BackupImportResult {
-        state: app_state(aliases, Vec::new())?,
+        state: app_state(aliases, &setup, Vec::new())?,
         imported_count,
         replaced_count,
     })
 }
 
-// Manually rescan ~/.zshrc when the user opens Import from the header. Unlike
-// the first-start prompt, this deliberately ignores the handled marker so more
-// aliases added later can still be moved into EasyAlias. Already managed names
-// are excluded to keep the selection importable as a group.
+// Manually rescan all supported shell startup files when Import is opened. This
+// ignores the first-run marker so aliases added later remain importable.
 #[tauri::command]
-fn scan_zshrc_import() -> Result<AppState, String> {
+fn scan_shell_import() -> Result<AppState, String> {
+    let setup = shell_setup()?;
     ensure_app_files()?;
-    ensure_zshrc_source()?;
+    ensure_shell_source(&setup)?;
 
     let aliases = load_config_aliases()?;
     let existing_names: HashSet<&str> = aliases.iter().map(|alias| alias.name.as_str()).collect();
-    let import_candidates = scan_zshrc_aliases()?
+    let import_candidates = scan_shell_aliases(&setup)?
         .into_iter()
         .filter(|candidate| !existing_names.contains(candidate.name.as_str()))
         .collect();
 
-    app_state(aliases, import_candidates)
+    app_state(aliases, &setup, import_candidates)
 }
 
 // Records that the one-time prompt was declined. No alias lines are changed.
 #[tauri::command]
-fn dismiss_zshrc_import() -> Result<AppState, String> {
+fn dismiss_shell_import() -> Result<AppState, String> {
+    let setup = shell_setup()?;
     ensure_app_files()?;
-    ensure_zshrc_source()?;
-    mark_import_handled()?;
-    app_state(load_config_aliases()?, Vec::new())
+    ensure_shell_source(&setup)?;
+    mark_import_handled(&setup)?;
+    app_state(load_config_aliases()?, &setup, Vec::new())
 }
 
-// Move selected aliases into EasyAlias. The backend rescans ~/.zshrc instead of
-// trusting commands sent by the WebView, creates a backup, and replaces only the
-// selected source lines with harmless zsh no-op markers.
+// Move selected aliases into EasyAlias. The backend rescans startup files
+// instead of trusting commands from the WebView and backs up every file changed.
 #[tauri::command]
-fn import_zshrc_aliases(
+fn import_shell_aliases(
     selected_ids: Vec<String>,
     timestamp: String,
 ) -> Result<ImportResult, String> {
@@ -854,20 +929,22 @@ fn import_zshrc_aliases(
         return Err("Import timestamp is missing.".to_string());
     }
 
+    let setup = shell_setup()?;
     ensure_app_files()?;
-    ensure_zshrc_source()?;
+    ensure_shell_source(&setup)?;
 
     let selected_id_set: HashSet<&str> = selected_ids.iter().map(String::as_str).collect();
-    let candidates = scan_zshrc_aliases()?;
-    let selected: Vec<ZshrcAliasCandidate> = candidates
+    let candidates = scan_shell_aliases(&setup)?;
+    let selected: Vec<ShellAliasCandidate> = candidates
         .into_iter()
         .filter(|candidate| selected_id_set.contains(candidate.id.as_str()))
         .collect();
 
     if selected.len() != selected_id_set.len() {
-        return Err(
-            "Some aliases changed in ~/.zshrc. Reopen EasyAlias and try again.".to_string(),
-        );
+        return Err(format!(
+            "Some aliases changed in {}. Reopen EasyAlias and try again.",
+            shell_config_file_display(&setup)?
+        ));
     }
 
     let mut aliases = load_config_aliases()?;
@@ -881,7 +958,7 @@ fn import_zshrc_aliases(
     let import_id = unix_timestamp()?;
     for candidate in &selected {
         aliases.push(AliasEntry {
-            id: format!("imported-{}-{}", import_id, candidate.line_number),
+            id: format!("imported-{}-{}", import_id, candidate.id),
             name: candidate.name.clone(),
             path: String::new(),
             action: "custom".to_string(),
@@ -894,27 +971,40 @@ fn import_zshrc_aliases(
     }
     aliases.sort_by(|left, right| left.name.cmp(&right.name));
 
-    let zshrc_path = zshrc_file()?;
-    let zshrc_content = read_text_or_empty(&zshrc_path)?;
-    let selected_lines: HashMap<usize, &str> = selected
-        .iter()
-        .map(|candidate| (candidate.line_number, candidate.name.as_str()))
-        .collect();
-    let next_zshrc_content = replace_imported_alias_lines(&zshrc_content, &selected_lines);
+    let mut updates = Vec::new();
+    let mut backup_files = Vec::new();
+    for config_path in &setup.config_files {
+        let source_file = display_home_path(config_path.clone())?;
+        let selected_lines: HashMap<usize, &str> = selected
+            .iter()
+            .filter(|candidate| candidate.source_file == source_file)
+            .map(|candidate| (candidate.line_number, candidate.name.as_str()))
+            .collect();
+        if selected_lines.is_empty() {
+            continue;
+        }
 
-    let backup_path = next_zshrc_backup_file()?;
-    fs::write(&backup_path, &zshrc_content)
-        .map_err(|error| format!("{} could not be written: {}", backup_path.display(), error))?;
+        let content = read_text_or_empty(config_path)?;
+        let next_content = replace_imported_alias_lines(&content, &selected_lines);
+        let backup_path = next_shell_backup_file(config_path)?;
+        fs::write(&backup_path, &content).map_err(|error| {
+            format!("{} could not be written: {}", backup_path.display(), error)
+        })?;
+        backup_files.push(display_home_path(backup_path)?);
+        updates.push((config_path.clone(), next_content));
+    }
 
     write_alias_files(&aliases)?;
-    fs::write(&zshrc_path, next_zshrc_content)
-        .map_err(|error| format!("{} could not be updated: {}", zshrc_path.display(), error))?;
-    mark_import_handled()?;
+    for (path, content) in updates {
+        fs::write(&path, content)
+            .map_err(|error| format!("{} could not be updated: {}", path.display(), error))?;
+    }
+    mark_import_handled(&setup)?;
 
     Ok(ImportResult {
-        state: app_state(aliases, Vec::new())?,
+        state: app_state(aliases, &setup, Vec::new())?,
         imported_count: selected.len(),
-        backup_file: display_home_path(backup_path)?,
+        backup_file: backup_files.join(", "),
     })
 }
 
@@ -935,9 +1025,9 @@ fn main() {
             export_alias_backup,
             inspect_alias_backup,
             import_alias_backup,
-            scan_zshrc_import,
-            dismiss_zshrc_import,
-            import_zshrc_aliases
+            scan_shell_import,
+            dismiss_shell_import,
+            import_shell_aliases
         ])
         .run(tauri::generate_context!())
         .expect("error while running EasyAlias");
@@ -954,10 +1044,15 @@ mod tests {
     struct TemporaryHome {
         path: PathBuf,
         previous_home: Option<OsString>,
+        previous_shell: Option<OsString>,
     }
 
     impl TemporaryHome {
         fn create() -> Self {
+            Self::create_with_shell("/bin/zsh")
+        }
+
+        fn create_with_shell(shell: &str) -> Self {
             let path = env::temp_dir().join(format!(
                 "easyalias-import-test-{}-{}",
                 std::process::id(),
@@ -965,11 +1060,14 @@ mod tests {
             ));
             fs::create_dir_all(&path).unwrap();
             let previous_home = env::var_os("HOME");
+            let previous_shell = env::var_os("SHELL");
             env::set_var("HOME", &path);
+            env::set_var("SHELL", shell);
 
             Self {
                 path,
                 previous_home,
+                previous_shell,
             }
         }
     }
@@ -980,6 +1078,11 @@ mod tests {
                 env::set_var("HOME", previous_home);
             } else {
                 env::remove_var("HOME");
+            }
+            if let Some(previous_shell) = &self.previous_shell {
+                env::set_var("SHELL", previous_shell);
+            } else {
+                env::remove_var("SHELL");
             }
             let _ = fs::remove_dir_all(&self.path);
         }
@@ -1000,33 +1103,33 @@ mod tests {
     }
 
     #[test]
-    fn parses_common_alias_forms_without_running_zsh() {
-        let single = parse_zshrc_alias_line("alias ll='ls -lah'", 4).unwrap();
+    fn parses_common_alias_forms_without_running_a_shell() {
+        let single = parse_shell_alias_line("alias ll='ls -lah'", 4).unwrap();
         assert_eq!(single.name, "ll");
         assert_eq!(single.command, "ls -lah");
-        assert_eq!(single.id, "zshrc-line-4");
+        assert_eq!(single.id, "shell-line-4");
 
         let double =
-            parse_zshrc_alias_line(r#"alias project="cd \"$HOME/My Project\"""#, 8).unwrap();
+            parse_shell_alias_line(r#"alias project="cd \"$HOME/My Project\"""#, 8).unwrap();
         assert_eq!(double.command, "cd \"$HOME/My Project\"");
 
-        let escaped = parse_zshrc_alias_line(r"alias notes=open\ ~/notes.txt", 12).unwrap();
+        let escaped = parse_shell_alias_line(r"alias notes=open\ ~/notes.txt", 12).unwrap();
         assert_eq!(escaped.command, "open ~/notes.txt");
     }
 
     #[test]
     fn skips_aliases_that_are_unsafe_to_move_automatically() {
-        assert!(parse_zshrc_alias_line("  alias nested='echo nested'", 1).is_none());
-        assert!(parse_zshrc_alias_line("alias -g pipe='| grep'", 2).is_none());
-        assert!(parse_zshrc_alias_line("alias one='echo one' two='echo two'", 3).is_none());
-        assert!(parse_zshrc_alias_line("alias easya='open something-else'", 4).is_none());
-        assert!(parse_zshrc_alias_line("alias broken='missing quote", 5).is_none());
+        assert!(parse_shell_alias_line("  alias nested='echo nested'", 1).is_none());
+        assert!(parse_shell_alias_line("alias -g pipe='| grep'", 2).is_none());
+        assert!(parse_shell_alias_line("alias one='echo one' two='echo two'", 3).is_none());
+        assert!(parse_shell_alias_line("alias easya='open something-else'", 4).is_none());
+        assert!(parse_shell_alias_line("alias broken='missing quote", 5).is_none());
     }
 
     #[test]
     fn skips_repeated_alias_names() {
         let content = "alias gs='git status'\nalias ll='ls -lah'\nalias gs='git status --short'\n";
-        let candidates = find_zshrc_aliases(content);
+        let candidates = find_shell_aliases(content);
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].name, "ll");
@@ -1124,7 +1227,7 @@ mod tests {
         assert_eq!(initial_state.import_candidates.len(), 1);
         assert_eq!(initial_state.import_candidates[0].name, "legacy");
 
-        let result = import_zshrc_aliases(
+        let result = import_shell_aliases(
             vec![initial_state.import_candidates[0].id.clone()],
             "2026-07-17T12:00:00.000Z".to_string(),
         )
@@ -1142,7 +1245,68 @@ mod tests {
             .unwrap()
             .contains("alias legacy='echo legacy'"));
         assert_eq!(load_config_aliases().unwrap().len(), 1);
-        assert!(import_marker_file().unwrap().exists());
+        assert!(import_marker_file(&shell_setup().unwrap())
+            .unwrap()
+            .exists());
+    }
+
+    #[test]
+    fn connects_zsh_and_bash_when_login_shell_is_zsh() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let temporary_home = TemporaryHome::create_with_shell("/bin/zsh");
+
+        let state = load_aliases().unwrap();
+        assert_eq!(state.shell_name, "zsh + Bash");
+        assert!(state.shell_config_file.contains("~/.zshrc"));
+        assert!(state.shell_config_file.contains("~/.bash_profile"));
+        assert!(state.shell_config_file.contains("~/.bashrc"));
+        assert!(state.shell_source_present);
+
+        for file_name in [".zshrc", ".bash_profile", ".bashrc"] {
+            let content = fs::read_to_string(temporary_home.path.join(file_name)).unwrap();
+            assert!(content.contains(SOURCE_LINE));
+            assert!(content.contains(APP_ALIAS_LINE));
+        }
+    }
+
+    #[test]
+    fn bash_imports_from_both_startup_files_with_separate_backups() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let temporary_home = TemporaryHome::create_with_shell("/bin/bash");
+        fs::write(
+            temporary_home.path.join(".bash_profile"),
+            "alias loginonly='echo login'\n",
+        )
+        .unwrap();
+        fs::write(
+            temporary_home.path.join(".bashrc"),
+            "alias interactive='echo interactive'\n",
+        )
+        .unwrap();
+
+        let state = load_aliases().unwrap();
+        assert_eq!(state.import_candidates.len(), 2);
+        let ids = state
+            .import_candidates
+            .iter()
+            .map(|candidate| candidate.id.clone())
+            .collect();
+        let result = import_shell_aliases(ids, "2026-08-14T00:00:00.000Z".to_string()).unwrap();
+
+        assert_eq!(result.imported_count, 2);
+        assert_eq!(result.backup_file.split(", ").count(), 2);
+        assert!(
+            fs::read_to_string(temporary_home.path.join(".bash_profile"))
+                .unwrap()
+                .contains(": # EasyAlias imported alias loginonly")
+        );
+        assert!(fs::read_to_string(temporary_home.path.join(".bashrc"))
+            .unwrap()
+            .contains(": # EasyAlias imported alias interactive"));
+        assert!(result.backup_file.split(", ").all(|path| temporary_home
+            .path
+            .join(path.trim_start_matches("~/"))
+            .exists()));
     }
 
     #[test]
