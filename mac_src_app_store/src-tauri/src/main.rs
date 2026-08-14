@@ -32,14 +32,16 @@ struct AliasEntry {
     updated_at: String,
 }
 
-// Only conservative, single-line aliases are offered for migration.
+// Only conservative, single-line aliases are offered for migration. The
+// source file keeps imports verifiable when zsh and Bash files are scanned.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ZshrcAliasCandidate {
+struct ShellAliasCandidate {
     id: String,
     name: String,
     command: String,
     line_number: usize,
+    source_file: String,
 }
 
 // State sent to the WebView. The Store edition exposes connection state rather
@@ -50,11 +52,12 @@ struct AppState {
     aliases: Vec<AliasEntry>,
     config_file: String,
     alias_target: String,
-    zshrc_path: Option<String>,
-    zshrc_connected: bool,
+    home_path: Option<String>,
+    home_connected: bool,
+    shell_config_file: String,
     managed_block_present: bool,
     connection_error: Option<String>,
-    import_candidates: Vec<ZshrcAliasCandidate>,
+    import_candidates: Vec<ShellAliasCandidate>,
 }
 
 #[derive(Debug, Serialize)]
@@ -110,8 +113,9 @@ struct TrashMutationResult {
 
 const MANAGED_BLOCK_START: &str = "# >>> EasyAlias managed aliases >>>";
 const MANAGED_BLOCK_END: &str = "# <<< EasyAlias managed aliases <<<";
-const IMPORT_MARKER_CONTENT: &str = "zshrc import prompt handled\n";
+const IMPORT_MARKER_CONTENT: &str = "shell alias import prompt handled\n";
 const RESERVED_ALIAS_NAME: &str = "easya";
+const SHELL_STARTUP_FILES: [&str; 3] = [".zshrc", ".bash_profile", ".bashrc"];
 const BACKUP_FORMAT: &str = "easyalias-backup";
 const BACKUP_VERSION: u32 = 1;
 const MAX_BACKUP_BYTES: u64 = 5 * 1024 * 1024;
@@ -131,11 +135,15 @@ fn config_file(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn bookmark_file(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app_dir(app)?.join("zshrc.bookmark"))
+    Ok(app_dir(app)?.join("home.bookmark"))
 }
 
 fn import_marker_file(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app_dir(app)?.join(".zshrc-import-v1"))
+    Ok(app_dir(app)?.join(".shell-import-v2"))
+}
+
+fn legacy_bookmark_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_dir(app)?.join("zshrc.bookmark"))
 }
 
 fn backups_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -171,15 +179,20 @@ fn unix_timestamp() -> Result<u64, String> {
         .map_err(|error| format!("System time could not be read: {error}"))
 }
 
-fn next_backup_file(app: &AppHandle) -> Result<PathBuf, String> {
+fn next_backup_file(app: &AppHandle, source: &Path) -> Result<PathBuf, String> {
     let directory = backups_dir(app)?;
     let timestamp = unix_timestamp()?;
+    let source_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("shellrc")
+        .trim_start_matches('.');
 
     for suffix in 0..1000 {
         let file_name = if suffix == 0 {
-            format!("zshrc-{timestamp}.backup")
+            format!("{source_name}-{timestamp}.backup")
         } else {
-            format!("zshrc-{timestamp}-{suffix}.backup")
+            format!("{source_name}-{timestamp}-{suffix}.backup")
         };
         let candidate = directory.join(file_name);
         if !candidate.exists() {
@@ -187,14 +200,32 @@ fn next_backup_file(app: &AppHandle) -> Result<PathBuf, String> {
         }
     }
 
-    Err("A unique .zshrc backup name could not be created.".to_string())
+    Err("A unique shell startup file backup name could not be created.".to_string())
 }
 
-fn write_backup(app: &AppHandle, content: &str) -> Result<PathBuf, String> {
-    let path = next_backup_file(app)?;
+fn write_backup(app: &AppHandle, source: &Path, content: &str) -> Result<PathBuf, String> {
+    let path = next_backup_file(app, source)?;
     fs::write(&path, content)
         .map_err(|error| format!("{} could not be written: {error}", path.display()))?;
     Ok(path)
+}
+
+fn shell_config_paths(home: &Path) -> Vec<PathBuf> {
+    SHELL_STARTUP_FILES
+        .iter()
+        .map(|file_name| home.join(file_name))
+        .collect()
+}
+
+fn shell_config_file_display() -> String {
+    "~/.zshrc, ~/.bash_profile and ~/.bashrc".to_string()
+}
+
+fn display_shell_path(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| format!("~/{name}"))
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 // Alias names become shell identifiers, so the accepted character set is
@@ -311,7 +342,7 @@ fn render_managed_block(aliases: &[AliasEntry]) -> Result<String, String> {
 }
 
 // Remove the previous EasyAlias block while rejecting malformed or duplicated
-// markers. Refusing ambiguous input prevents accidental .zshrc damage.
+// markers. Refusing ambiguous input prevents accidental shell-file damage.
 fn without_managed_block(content: &str) -> Result<String, String> {
     let had_trailing_newline = content.ends_with('\n');
     let mut output = Vec::new();
@@ -322,7 +353,9 @@ fn without_managed_block(content: &str) -> Result<String, String> {
         match line.trim() {
             MANAGED_BLOCK_START => {
                 if inside_block || block_seen {
-                    return Err("The .zshrc contains multiple EasyAlias blocks.".to_string());
+                    return Err(
+                        "A shell startup file contains multiple EasyAlias blocks.".to_string()
+                    );
                 }
                 inside_block = true;
                 block_seen = true;
@@ -330,7 +363,8 @@ fn without_managed_block(content: &str) -> Result<String, String> {
             MANAGED_BLOCK_END => {
                 if !inside_block {
                     return Err(
-                        "The .zshrc contains an unmatched EasyAlias end marker.".to_string()
+                        "A shell startup file contains an unmatched EasyAlias end marker."
+                            .to_string(),
                     );
                 }
                 inside_block = false;
@@ -341,7 +375,9 @@ fn without_managed_block(content: &str) -> Result<String, String> {
     }
 
     if inside_block {
-        return Err("The .zshrc contains an EasyAlias block without an end marker.".to_string());
+        return Err(
+            "A shell startup file contains an EasyAlias block without an end marker.".to_string(),
+        );
     }
 
     let mut result = output.join("\n");
@@ -437,7 +473,7 @@ fn decode_alias_value(value: &str) -> Option<String> {
     Some(decoded)
 }
 
-fn parse_zshrc_alias_line(line: &str, line_number: usize) -> Option<ZshrcAliasCandidate> {
+fn parse_shell_alias_line(line: &str, line_number: usize) -> Option<ShellAliasCandidate> {
     if line.chars().next().is_some_and(char::is_whitespace) {
         return None;
     }
@@ -459,20 +495,21 @@ fn parse_zshrc_alias_line(line: &str, line_number: usize) -> Option<ZshrcAliasCa
     }
 
     let command = decode_alias_value(assignment[equals_index + 1..].trim_start())?;
-    Some(ZshrcAliasCandidate {
-        id: format!("zshrc-line-{line_number}"),
+    Some(ShellAliasCandidate {
+        id: format!("shell-line-{line_number}"),
         name: name.to_string(),
         command,
         line_number,
+        source_file: String::new(),
     })
 }
 
-fn find_zshrc_aliases(content: &str) -> Result<Vec<ZshrcAliasCandidate>, String> {
+fn find_shell_aliases(content: &str) -> Result<Vec<ShellAliasCandidate>, String> {
     // Validate marker structure first, then scan the original lines so ids keep
-    // referring to the real .zshrc line numbers even if a user moves the block.
+    // referring to the real startup-file line numbers if the block is moved.
     without_managed_block(content)?;
     let mut inside_block = false;
-    let parsed: Vec<ZshrcAliasCandidate> = content
+    let parsed: Vec<ShellAliasCandidate> = content
         .lines()
         .enumerate()
         .filter_map(|(index, line)| {
@@ -487,7 +524,7 @@ fn find_zshrc_aliases(content: &str) -> Result<Vec<ZshrcAliasCandidate>, String>
             if inside_block {
                 return None;
             }
-            parse_zshrc_alias_line(line, index + 1)
+            parse_shell_alias_line(line, index + 1)
         })
         .collect();
     let mut name_counts: HashMap<String, usize> = HashMap::new();
@@ -540,18 +577,11 @@ fn mark_import_handled(app: &AppHandle) -> Result<(), String> {
         .map_err(|error| format!("{} could not be written: {error}", path.display()))
 }
 
-fn validate_selected_zshrc(path: &Path) -> Result<(), String> {
-    if path.file_name().and_then(|name| name.to_str()) != Some(".zshrc") {
-        return Err("Please choose a file named .zshrc.".to_string());
+fn validate_selected_home(path: &Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err(format!("{} is not a folder.", path.display()));
     }
-    if !path.is_file() {
-        return Err(format!("{} is not a file.", path.display()));
-    }
-    fs::File::options()
-        .read(true)
-        .write(true)
-        .open(path)
-        .map_err(|error| format!("{} is not readable and writable: {error}", path.display()))?;
+    fs::read_dir(path).map_err(|error| format!("{} is not readable: {error}", path.display()))?;
     Ok(())
 }
 
@@ -564,7 +594,7 @@ fn foundation_error(error: &NSError) -> String {
 fn create_bookmark_bytes(path: &Path) -> Result<Vec<u8>, String> {
     let path = path
         .to_str()
-        .ok_or_else(|| "The selected .zshrc path is not valid UTF-8.".to_string())?;
+        .ok_or_else(|| "The selected Home folder path is not valid UTF-8.".to_string())?;
     let path = NSString::from_str(path);
     let url = NSURL::fileURLWithPath(&path);
     let data = url
@@ -575,7 +605,7 @@ fn create_bookmark_bytes(path: &Path) -> Result<Vec<u8>, String> {
         )
         .map_err(|error| {
             format!(
-                "macOS could not create persistent access for .zshrc: {}",
+                "macOS could not create persistent access for the selected Home folder: {}",
                 foundation_error(&error)
             )
         })?;
@@ -601,14 +631,14 @@ fn resolve_bookmark(
     }
     .map_err(|error| {
         format!(
-            "The saved .zshrc permission could not be restored: {}",
+            "The saved Home folder permission could not be restored: {}",
             foundation_error(&error)
         )
     })?;
     let resolved_path = url
         .path()
         .map(|path| PathBuf::from(path.to_string()))
-        .ok_or_else(|| "The saved .zshrc bookmark has no file path.".to_string())?;
+        .ok_or_else(|| "The saved Home folder bookmark has no file path.".to_string())?;
     Ok((url, resolved_path, is_stale.as_bool()))
 }
 
@@ -622,7 +652,7 @@ fn refresh_bookmark(app: &AppHandle, url: &NSURL) -> Result<(), String> {
         )
         .map_err(|error| {
             format!(
-                "The .zshrc permission could not be refreshed: {}",
+                "The Home folder permission could not be refreshed: {}",
                 foundation_error(&error)
             )
         })?;
@@ -632,7 +662,7 @@ fn refresh_bookmark(app: &AppHandle, url: &NSURL) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn with_zshrc_access<T>(
+fn with_home_access<T>(
     app: &AppHandle,
     operation: impl FnOnce(&Path) -> Result<T, String>,
 ) -> Result<T, String> {
@@ -640,7 +670,8 @@ fn with_zshrc_access<T>(
     let access_started = unsafe { url.startAccessingSecurityScopedResource() };
     if !access_started {
         return Err(
-            "macOS did not grant access to the saved .zshrc. Choose the file again.".to_string(),
+            "macOS did not grant access to the saved Home folder. Choose the folder again."
+                .to_string(),
         );
     }
 
@@ -659,7 +690,7 @@ fn create_bookmark_bytes(_path: &Path) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn with_zshrc_access<T>(
+fn with_home_access<T>(
     _app: &AppHandle,
     _operation: impl FnOnce(&Path) -> Result<T, String>,
 ) -> Result<T, String> {
@@ -671,9 +702,14 @@ fn connection_status(app: &AppHandle) -> (bool, Option<String>, bool, Option<Str
         return (false, None, false, None);
     }
 
-    match with_zshrc_access(app, |path| {
-        let content = read_text_or_empty(path)?;
-        Ok((path.display().to_string(), managed_block_present(&content)))
+    match with_home_access(app, |home| {
+        validate_selected_home(home)?;
+        let mut all_blocks_present = true;
+        for path in shell_config_paths(home) {
+            let content = read_text_or_empty(&path)?;
+            all_blocks_present &= managed_block_present(&content);
+        }
+        Ok((home.display().to_string(), all_blocks_present))
     }) {
         Ok((path, block_present)) => (true, Some(path), block_present, None),
         Err(error) => (false, None, false, Some(error)),
@@ -683,38 +719,102 @@ fn connection_status(app: &AppHandle) -> (bool, Option<String>, bool, Option<Str
 fn app_state(
     app: &AppHandle,
     aliases: Vec<AliasEntry>,
-    import_candidates: Vec<ZshrcAliasCandidate>,
+    import_candidates: Vec<ShellAliasCandidate>,
 ) -> Result<AppState, String> {
-    let (connected, zshrc_path, block_present, connection_error) = connection_status(app);
-    let alias_target = zshrc_path
-        .as_ref()
-        .map(|path| format!("{path} (managed block)"))
-        .unwrap_or_else(|| "Choose .zshrc to connect".to_string());
+    let (connected, home_path, block_present, connection_error) = connection_status(app);
+    let alias_target = if connected {
+        format!("{} (managed blocks)", shell_config_file_display())
+    } else {
+        "Choose your Home folder to connect shell files".to_string()
+    };
 
     Ok(AppState {
         aliases,
         config_file: config_file(app)?.display().to_string(),
         alias_target,
-        zshrc_path,
-        zshrc_connected: connected,
+        home_path,
+        home_connected: connected,
+        shell_config_file: shell_config_file_display(),
         managed_block_present: block_present,
         connection_error,
         import_candidates,
     })
 }
 
+fn scan_shell_candidates_in_home(home: &Path) -> Result<Vec<ShellAliasCandidate>, String> {
+    let mut candidates = Vec::new();
+
+    for (source_index, path) in shell_config_paths(home).into_iter().enumerate() {
+        let content = read_text_or_empty(&path)?;
+        let source_file = display_shell_path(&path);
+        for mut candidate in find_shell_aliases(&content)? {
+            candidate.id = format!("shell-{source_index}-line-{}", candidate.line_number);
+            candidate.source_file = source_file.clone();
+            candidates.push(candidate);
+        }
+    }
+
+    let mut name_counts: HashMap<String, usize> = HashMap::new();
+    for candidate in &candidates {
+        *name_counts.entry(candidate.name.clone()).or_default() += 1;
+    }
+
+    Ok(candidates
+        .into_iter()
+        .filter(|candidate| name_counts.get(&candidate.name) == Some(&1))
+        .collect())
+}
+
 fn scan_import_candidates(
     app: &AppHandle,
     aliases: &[AliasEntry],
-) -> Result<Vec<ZshrcAliasCandidate>, String> {
+) -> Result<Vec<ShellAliasCandidate>, String> {
     let existing_names: HashSet<&str> = aliases.iter().map(|alias| alias.name.as_str()).collect();
-    with_zshrc_access(app, |path| {
-        let content = read_text_or_empty(path)?;
-        Ok(find_zshrc_aliases(&content)?
+    with_home_access(app, |home| {
+        Ok(scan_shell_candidates_in_home(home)?
             .into_iter()
             .filter(|candidate| !existing_names.contains(candidate.name.as_str()))
             .collect())
     })
+}
+
+fn prepare_managed_shell_updates(
+    home: &Path,
+    aliases: &[AliasEntry],
+) -> Result<Vec<(PathBuf, String, String)>, String> {
+    shell_config_paths(home)
+        .into_iter()
+        .map(|path| {
+            let content = read_text_or_empty(&path)?;
+            let next_content = update_managed_block(&content, aliases)?;
+            Ok((path, content, next_content))
+        })
+        .collect()
+}
+
+fn write_managed_shell_blocks(
+    app: &AppHandle,
+    home: &Path,
+    aliases: &[AliasEntry],
+    create_backups: bool,
+) -> Result<Vec<PathBuf>, String> {
+    let updates = prepare_managed_shell_updates(home, aliases)?;
+    let mut backups = Vec::new();
+
+    if create_backups {
+        for (path, content, _) in &updates {
+            if path.exists() || !content.is_empty() {
+                backups.push(write_backup(app, path, content)?);
+            }
+        }
+    }
+
+    for (path, _, next_content) in updates {
+        fs::write(&path, next_content)
+            .map_err(|error| format!("{} could not be updated: {error}", path.display()))?;
+    }
+
+    Ok(backups)
 }
 
 #[tauri::command]
@@ -771,13 +871,13 @@ fn load_trash_entries(app: &AppHandle) -> Result<Vec<TrashEntry>, String> {
     Ok(entries)
 }
 
-// Called immediately after NSOpenPanel returns a user-selected .zshrc. The
+// Called immediately after NSOpenPanel returns a user-selected Home folder. The
 // security-scoped bookmark is stored before the temporary panel permission ends.
 #[tauri::command]
-fn connect_zshrc(app: AppHandle, path: String) -> Result<AppState, String> {
+fn connect_home(app: AppHandle, path: String) -> Result<AppState, String> {
     ensure_app_files(&app)?;
     let selected_path = PathBuf::from(path);
-    validate_selected_zshrc(&selected_path)?;
+    validate_selected_home(&selected_path)?;
 
     let bookmark = create_bookmark_bytes(&selected_path)?;
     let bookmark_path = bookmark_file(&app)?;
@@ -785,18 +885,21 @@ fn connect_zshrc(app: AppHandle, path: String) -> Result<AppState, String> {
         .map_err(|error| format!("{} could not be written: {error}", bookmark_path.display()))?;
 
     let aliases = load_config_aliases(&app)?;
-    let update_result = with_zshrc_access(&app, |zshrc_path| {
-        validate_selected_zshrc(zshrc_path)?;
-        let content = read_text_or_empty(zshrc_path)?;
-        write_backup(&app, &content)?;
-        let next_content = update_managed_block(&content, &aliases)?;
-        fs::write(zshrc_path, next_content)
-            .map_err(|error| format!("{} could not be updated: {error}", zshrc_path.display()))
+    let update_result = with_home_access(&app, |home| {
+        validate_selected_home(home)?;
+        write_managed_shell_blocks(&app, home, &aliases, true)?;
+        Ok(())
     });
 
     if let Err(error) = update_result {
         let _ = fs::remove_file(&bookmark_path);
         return Err(error);
+    }
+
+    let legacy_path = legacy_bookmark_file(&app)?;
+    if legacy_path.exists() {
+        fs::remove_file(&legacy_path)
+            .map_err(|error| format!("{} could not be removed: {error}", legacy_path.display()))?;
     }
 
     let config_exists = config_file(&app)?.exists();
@@ -821,11 +924,9 @@ fn save_aliases(app: AppHandle, aliases: Vec<AliasEntry>) -> Result<AppState, St
 fn write_active_aliases(app: &AppHandle, aliases: &[AliasEntry]) -> Result<(), String> {
     ensure_app_files(&app)?;
     render_managed_block(&aliases)?;
-    with_zshrc_access(&app, |path| {
-        let content = read_text_or_empty(path)?;
-        let next_content = update_managed_block(&content, &aliases)?;
-        fs::write(path, next_content)
-            .map_err(|error| format!("{} could not be updated: {error}", path.display()))
+    with_home_access(&app, |home| {
+        write_managed_shell_blocks(app, home, aliases, false)?;
+        Ok(())
     })?;
     write_config_aliases(&app, &aliases)?;
     Ok(())
@@ -1011,11 +1112,9 @@ fn import_alias_backup(
     aliases.sort_by(|left, right| left.name.cmp(&right.name));
     validate_alias_collection(&aliases)?;
 
-    with_zshrc_access(&app, |zshrc_path| {
-        let content = read_text_or_empty(zshrc_path)?;
-        let next_content = update_managed_block(&content, &aliases)?;
-        fs::write(zshrc_path, next_content)
-            .map_err(|error| format!("{} could not be updated: {error}", zshrc_path.display()))
+    with_home_access(&app, |home| {
+        write_managed_shell_blocks(&app, home, &aliases, false)?;
+        Ok(())
     })?;
     write_config_aliases(&app, &aliases)?;
 
@@ -1026,22 +1125,31 @@ fn import_alias_backup(
     })
 }
 
-// A deliberate disconnect removes the block from the old file before dropping
-// its bookmark. Structured aliases remain in the container for reconnection.
+// A deliberate disconnect removes the blocks from the three allowlisted shell
+// files before dropping the folder bookmark. Structured aliases remain stored.
 #[tauri::command]
-fn disconnect_zshrc(app: AppHandle) -> Result<AppState, String> {
+fn disconnect_home(app: AppHandle) -> Result<AppState, String> {
     ensure_app_files(&app)?;
     let aliases = load_config_aliases(&app)?;
     let path = bookmark_file(&app)?;
 
     if path.exists() {
-        with_zshrc_access(&app, |zshrc_path| {
-            let content = read_text_or_empty(zshrc_path)?;
-            if managed_block_present(&content) {
-                write_backup(&app, &content)?;
-                let next_content = without_managed_block(&content)?;
-                fs::write(zshrc_path, next_content).map_err(|error| {
-                    format!("{} could not be updated: {error}", zshrc_path.display())
+        with_home_access(&app, |home| {
+            let mut updates = Vec::new();
+            for shell_path in shell_config_paths(home) {
+                let content = read_text_or_empty(&shell_path)?;
+                if managed_block_present(&content) {
+                    let next_content = without_managed_block(&content)?;
+                    updates.push((shell_path, content, next_content));
+                }
+            }
+
+            for (shell_path, content, _) in &updates {
+                write_backup(&app, shell_path, content)?;
+            }
+            for (shell_path, _, next_content) in updates {
+                fs::write(&shell_path, next_content).map_err(|error| {
+                    format!("{} could not be updated: {error}", shell_path.display())
                 })?;
             }
             Ok(())
@@ -1050,11 +1158,17 @@ fn disconnect_zshrc(app: AppHandle) -> Result<AppState, String> {
             .map_err(|error| format!("{} could not be removed: {error}", path.display()))?;
     }
 
+    let legacy_path = legacy_bookmark_file(&app)?;
+    if legacy_path.exists() {
+        fs::remove_file(&legacy_path)
+            .map_err(|error| format!("{} could not be removed: {error}", legacy_path.display()))?;
+    }
+
     app_state(&app, aliases, Vec::new())
 }
 
 #[tauri::command]
-fn scan_zshrc_import(app: AppHandle) -> Result<AppState, String> {
+fn scan_shell_import(app: AppHandle) -> Result<AppState, String> {
     ensure_app_files(&app)?;
     let aliases = load_config_aliases(&app)?;
     let import_candidates = scan_import_candidates(&app, &aliases)?;
@@ -1062,14 +1176,14 @@ fn scan_zshrc_import(app: AppHandle) -> Result<AppState, String> {
 }
 
 #[tauri::command]
-fn dismiss_zshrc_import(app: AppHandle) -> Result<AppState, String> {
+fn dismiss_shell_import(app: AppHandle) -> Result<AppState, String> {
     ensure_app_files(&app)?;
     mark_import_handled(&app)?;
     app_state(&app, load_config_aliases(&app)?, Vec::new())
 }
 
 #[tauri::command]
-fn import_zshrc_aliases(
+fn import_shell_aliases(
     app: AppHandle,
     selected_ids: Vec<String>,
     timestamp: String,
@@ -1085,18 +1199,19 @@ fn import_zshrc_aliases(
     let selected_id_set: HashSet<&str> = selected_ids.iter().map(String::as_str).collect();
     let mut aliases = load_config_aliases(&app)?;
     let mut imported_count = 0;
-    let mut backup_path = PathBuf::new();
+    let mut backup_paths = Vec::new();
 
-    with_zshrc_access(&app, |zshrc_path| {
-        let content = read_text_or_empty(zshrc_path)?;
-        let candidates = find_zshrc_aliases(&content)?;
-        let selected: Vec<ZshrcAliasCandidate> = candidates
+    with_home_access(&app, |home| {
+        let candidates = scan_shell_candidates_in_home(home)?;
+        let selected: Vec<ShellAliasCandidate> = candidates
             .into_iter()
             .filter(|candidate| selected_id_set.contains(candidate.id.as_str()))
             .collect();
 
         if selected.len() != selected_id_set.len() {
-            return Err("Some aliases changed in .zshrc. Reopen Import and try again.".to_string());
+            return Err(
+                "Some aliases changed in the shell files. Reopen Import and try again.".to_string(),
+            );
         }
 
         let mut names: HashSet<String> = aliases.iter().map(|alias| alias.name.clone()).collect();
@@ -1109,7 +1224,7 @@ fn import_zshrc_aliases(
         let import_id = unix_timestamp()?;
         for candidate in &selected {
             aliases.push(AliasEntry {
-                id: format!("imported-{import_id}-{}", candidate.line_number),
+                id: format!("imported-{import_id}-{}", candidate.id),
                 name: candidate.name.clone(),
                 path: String::new(),
                 action: "custom".to_string(),
@@ -1122,16 +1237,28 @@ fn import_zshrc_aliases(
         }
         aliases.sort_by(|left, right| left.name.cmp(&right.name));
 
-        let selected_lines: HashMap<usize, &str> = selected
-            .iter()
-            .map(|candidate| (candidate.line_number, candidate.name.as_str()))
-            .collect();
-        let without_imported_lines = replace_imported_alias_lines(&content, &selected_lines);
-        let next_content = update_managed_block(&without_imported_lines, &aliases)?;
+        let mut updates = Vec::new();
+        for shell_path in shell_config_paths(home) {
+            let content = read_text_or_empty(&shell_path)?;
+            let source_file = display_shell_path(&shell_path);
+            let selected_lines: HashMap<usize, &str> = selected
+                .iter()
+                .filter(|candidate| candidate.source_file == source_file)
+                .map(|candidate| (candidate.line_number, candidate.name.as_str()))
+                .collect();
+            let without_imported_lines = replace_imported_alias_lines(&content, &selected_lines);
+            let next_content = update_managed_block(&without_imported_lines, &aliases)?;
+            updates.push((shell_path, content, next_content));
+        }
 
-        backup_path = write_backup(&app, &content)?;
-        fs::write(zshrc_path, next_content)
-            .map_err(|error| format!("{} could not be updated: {error}", zshrc_path.display()))?;
+        for (shell_path, content, _) in &updates {
+            backup_paths.push(write_backup(&app, shell_path, content)?);
+        }
+        for (shell_path, _, next_content) in updates {
+            fs::write(&shell_path, next_content).map_err(|error| {
+                format!("{} could not be updated: {error}", shell_path.display())
+            })?;
+        }
         imported_count = selected.len();
         Ok(())
     })?;
@@ -1141,7 +1268,11 @@ fn import_zshrc_aliases(
     Ok(ImportResult {
         state: app_state(&app, aliases, Vec::new())?,
         imported_count,
-        backup_file: backup_path.display().to_string(),
+        backup_file: backup_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
     })
 }
 
@@ -1151,8 +1282,8 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             load_aliases,
-            connect_zshrc,
-            disconnect_zshrc,
+            connect_home,
+            disconnect_home,
             save_aliases,
             list_trash,
             move_alias_to_trash,
@@ -1162,9 +1293,9 @@ fn main() {
             export_alias_backup,
             inspect_alias_backup,
             import_alias_backup,
-            scan_zshrc_import,
-            dismiss_zshrc_import,
-            import_zshrc_aliases
+            scan_shell_import,
+            dismiss_shell_import,
+            import_shell_aliases
         ])
         .run(tauri::generate_context!())
         .expect("error while running EasyAlias");
@@ -1194,7 +1325,7 @@ mod tests {
             "alias legacy='echo legacy'\n{}\nalias managed='echo managed'\n{}\n",
             MANAGED_BLOCK_START, MANAGED_BLOCK_END
         );
-        let candidates = find_zshrc_aliases(&content).unwrap();
+        let candidates = find_shell_aliases(&content).unwrap();
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].name, "legacy");
     }

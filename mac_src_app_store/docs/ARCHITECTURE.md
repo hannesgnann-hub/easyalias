@@ -4,14 +4,14 @@ This document describes the sandboxed EasyAlias macOS edition in `mac_src_app_st
 
 ## Design Goal
 
-The Homebrew edition can access the user's home directory directly. The Mac App Store edition cannot. It must run inside App Sandbox and receive explicit permission for every external file it manages.
+The Homebrew edition can access the user's home directory directly. The Mac App Store edition cannot. It must run inside App Sandbox and receive explicit user permission for external files it manages.
 
 The Store edition therefore separates data into two ownership domains:
 
 | Domain | Data |
 | --- | --- |
 | EasyAlias App Sandbox container | structured alias JSON, Trash, bookmark data, import marker, backups |
-| user-selected file | one `.zshrc` containing the EasyAlias managed block |
+| user-selected Home folder | `.zshrc`, `.bash_profile`, and `.bashrc`, each containing the EasyAlias managed block |
 
 ```mermaid
 flowchart LR
@@ -19,8 +19,13 @@ flowchart LR
   Tauri --> Rust["Rust backend"]
   Rust --> Container["App Sandbox container"]
   Rust --> Bookmark["Security-scoped bookmark"]
-  Bookmark --> Zshrc["User-selected .zshrc"]
-  Zshrc --> Terminal["New zsh sessions"]
+  Bookmark --> Home["User-selected Home folder"]
+  Home --> Zshrc[".zshrc"]
+  Home --> BashProfile[".bash_profile"]
+  Home --> Bashrc[".bashrc"]
+  Zshrc --> Zsh["New zsh sessions"]
+  BashProfile --> LoginBash["Login Bash sessions"]
+  Bashrc --> InteractiveBash["Interactive Bash sessions"]
 ```
 
 ## Components
@@ -39,7 +44,7 @@ flowchart LR
 
 ## Connection Flow
 
-The frontend uses Tauri's dialog plugin, which opens a native `NSOpenPanel`. The user selects `.zshrc`, and the selected path is immediately sent to `connect_zshrc`.
+The frontend uses Tauri's dialog plugin, which opens a native `NSOpenPanel`. The user selects their Home folder, and the selected path is immediately sent to `connect_home`.
 
 ```mermaid
 sequenceDiagram
@@ -48,19 +53,19 @@ sequenceDiagram
   participant Panel as NSOpenPanel
   participant Rust as Rust backend
   participant Container as App container
-  participant Zshrc as Selected .zshrc
+  participant Home as Selected Home folder
 
-  User->>UI: Choose .zshrc
-  UI->>Panel: open native picker
+  User->>UI: Choose Home Folder
+  UI->>Panel: open native folder picker
   Panel-->>UI: selected path + temporary access
-  UI->>Rust: connect_zshrc(path)
-  Rust->>Rust: validate filename and read/write access
+  UI->>Rust: connect_home(path)
+  Rust->>Rust: validate directory and read/write access
   Rust->>Rust: create security-scoped bookmark
-  Rust->>Container: save zshrc.bookmark
-  Rust->>Zshrc: start security-scoped access
-  Rust->>Container: create backup
-  Rust->>Zshrc: create managed block
-  Rust->>Zshrc: stop security-scoped access
+  Rust->>Container: save home.bookmark
+  Rust->>Home: start security-scoped access
+  Rust->>Container: back up allowlisted files
+  Rust->>Home: create three managed blocks
+  Rust->>Home: stop security-scoped access
   Rust-->>UI: connected AppState
 ```
 
@@ -68,13 +73,13 @@ The temporary permission from the picker is converted into bookmark data before 
 
 ## Bookmark Lifecycle
 
-Every later `.zshrc` operation follows the same boundary:
+Every later shell-file operation follows the same boundary:
 
-1. Read `zshrc.bookmark` from the app container.
+1. Read `home.bookmark` from the app container.
 2. Resolve it with `NSURLBookmarkResolutionWithSecurityScope`.
 3. Refresh stale bookmark data if macOS requests it.
 4. Call `startAccessingSecurityScopedResource()`.
-5. Perform one bounded read/write operation.
+5. Perform one bounded operation against the fixed `.zshrc`, `.bash_profile`, and `.bashrc` allowlist.
 6. Call `stopAccessingSecurityScopedResource()`.
 
 ```mermaid
@@ -93,9 +98,9 @@ stateDiagram-v2
 
 The resolved path is never treated as permanent authority by itself. The bookmark is the authority.
 
-## Managed Block
+## Managed Blocks
 
-Aliases are rendered directly into the selected `.zshrc`:
+Aliases are rendered into `.zshrc`, `.bash_profile`, and `.bashrc` directly inside the selected Home folder:
 
 ```zsh
 # >>> EasyAlias managed aliases >>>
@@ -108,7 +113,7 @@ Before writing, the backend:
 
 - validates every alias name
 - rejects empty commands
-- escapes commands for a single-quoted zsh alias
+- escapes commands for a POSIX-style single-quoted alias
 - validates that markers are paired
 - rejects duplicate or ambiguous blocks
 - removes only the previous managed block
@@ -122,8 +127,8 @@ The backend exposes commands for connection, active aliases, recovery, backups, 
 
 ```rust
 load_aliases()
-connect_zshrc(path)
-disconnect_zshrc()
+connect_home(path)
+disconnect_home()
 save_aliases(aliases)
 list_trash()
 move_alias_to_trash(id)
@@ -133,9 +138,9 @@ empty_trash()
 export_alias_backup(selected_ids)
 inspect_alias_backup(path)
 import_alias_backup(path, selected_ids)
-scan_zshrc_import()
-dismiss_zshrc_import()
-import_zshrc_aliases(selected_ids, timestamp)
+scan_shell_import()
+dismiss_shell_import()
+import_shell_aliases(selected_ids, timestamp)
 ```
 
 ### `load_aliases`
@@ -146,52 +151,53 @@ import_zshrc_aliases(selected_ids, timestamp)
 - reports connection and managed-block status
 - offers a first import only after a valid connection
 
-It does not scan or modify the home directory.
+It does not choose or scan a Home folder without a valid user-created bookmark.
 
-### `connect_zshrc`
+### `connect_home`
 
-- accepts the path returned by the native picker
-- requires the filename `.zshrc`
-- validates read/write access
+- accepts the directory path returned by the native picker
+- validates that it is a readable and writable directory
 - creates and stores the security-scoped bookmark
-- backs up the file before adding the first block
-- returns existing safe aliases for optional import
+- accesses only the three allowlisted startup filenames inside that directory
+- backs up existing startup files before adding the first blocks
+- returns safe aliases from all supported files for optional import
 
 ### `save_aliases`
 
 - validates and renders all aliases
 - resolves and activates the bookmark
-- replaces the managed block
+- replaces the managed block in all three startup files
 - stops security-scoped access
 - writes structured `config.json`
 
-### `disconnect_zshrc`
+### `disconnect_home`
 
 - resolves the current bookmark
-- backs up the connected `.zshrc`
-- removes the managed block from the old file
+- backs up the connected startup files
+- removes the managed blocks from the old folder
 - deletes the old bookmark
 - keeps structured aliases in the container for the next connection
 
-### `scan_zshrc_import`
+### `scan_shell_import`
 
-- reads the connected file as text
+- reads the three connected startup files as text
 - ignores aliases inside the managed block
 - ignores names already managed by EasyAlias
-- returns conservative one-line candidates
+- rejects names defined in more than one startup file as ambiguous
+- returns conservative one-line candidates with source filename and line number
 
-### `import_zshrc_aliases`
+### `import_shell_aliases`
 
-- rescans the connected file
-- verifies selected ids against current line numbers
+- rescans the connected startup files
+- verifies selected ids against current filenames and line numbers
 - creates a container backup
-- replaces confirmed source lines with zsh no-op markers
-- writes imported commands into the managed block
+- replaces confirmed source lines with shell no-op markers
+- writes imported commands into all managed blocks
 - stores the updated structured config
 
 ### Trash commands
 
-- move deleted aliases out of the active config and managed `.zshrc` block
+- move deleted aliases out of the active config and all managed shell blocks
 - retain deletion metadata in `trash.json` for up to 30 days
 - restore selected entries and regenerate the managed block
 - permanently delete one entry or empty the complete Trash on explicit request
@@ -209,10 +215,12 @@ It does not scan or modify the home directory.
 Application Support/
   config.json
   trash.json
-  zshrc.bookmark
-  .zshrc-import-v1
+  home.bookmark
+  .shell-import-v2
   backups/
     zshrc-<timestamp>.backup
+    bash_profile-<timestamp>.backup
+    bashrc-<timestamp>.backup
 ```
 
 No Apple certificate, private key, API key, or provisioning profile belongs in this directory or in Git.
@@ -227,10 +235,10 @@ No Apple certificate, private key, API key, or provisioning profile belongs in t
 | `com.apple.security.network.client` | allows Tauri's sandboxed WebKit helper processes to load the bundled frontend |
 | `com.apple.application-identifier` | binds the app to Team ID and Bundle ID |
 | `com.apple.developer.team-identifier` | identifies the Apple Developer team |
-| `com.apple.security.files.user-selected.read-write` | permits `.zshrc` selected through `NSOpenPanel` |
-| `com.apple.security.files.bookmarks.app-scope` | persists selected-file access between launches |
+| `com.apple.security.files.user-selected.read-write` | permits access to the Home folder selected through `NSOpenPanel` |
+| `com.apple.security.files.bookmarks.app-scope` | persists selected-folder access between launches |
 
-No broad home-directory entitlement, temporary exception, network server entitlement, shell execution plugin, or child process is used.
+No broad home-directory entitlement, temporary exception, network server entitlement, shell execution plugin, or child process is used. Although the operating-system permission covers the selected folder, the Rust backend has an exact filename allowlist and does not enumerate or access other entries.
 
 `com.apple.security.files.user-selected.executable` exists only in `Entitlements.local.plist` for local ad-hoc sandbox testing. It is deliberately absent from the final `Entitlements.plist` after App Review flagged it as invalid for this Store submission. The Store configuration references only the final entitlement file.
 
@@ -246,16 +254,16 @@ The parser skips:
 - the reserved `easya` application shortcut
 - every alias inside the managed block
 
-The `.zshrc` is parsed as text and never sourced or executed.
+The startup files are parsed as text and never sourced or executed.
 
 Portable backup files receive the same defensive treatment: they are parsed as bounded JSON data, validated before the selection screen appears, and never executed. Deleted aliases remain recoverable for 30 days unless the user explicitly removes them permanently.
 
 ```mermaid
 flowchart TD
-  Scan["Read selected .zshrc as text"] --> Validate["Parse conservative aliases"]
+  Scan["Read three allowlisted startup files as text"] --> Validate["Parse conservative aliases"]
   Validate --> Review["User reviews candidates"]
   Review --> Confirm{"Confirmed?"}
-  Confirm -- "no" --> Unchanged["Leave .zshrc unchanged"]
+  Confirm -- "no" --> Unchanged["Leave startup files unchanged"]
   Confirm -- "yes" --> Backup["Write container backup"]
   Backup --> Replace["Replace selected lines with no-op markers"]
   Replace --> Block["Render aliases in managed block"]

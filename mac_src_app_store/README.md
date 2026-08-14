@@ -24,27 +24,26 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 
 | Homebrew/GitHub edition | Mac App Store edition |
 | --- | --- |
-| reads and updates `~/.zshrc` automatically | asks the user to select `.zshrc` |
+| reads and updates the supported shell startup files automatically | asks the user to select their Home folder once |
 | stores files under `~/.easyalias/` | stores app data and backups in the App Sandbox container |
-| generates `~/.easyalias/aliases.zsh` | writes a clearly marked managed block into the selected `.zshrc` |
+| generates `~/.easyalias/aliases.zsh` | writes a clearly marked managed block into `.zshrc`, `.bash_profile`, and `.bashrc` inside the selected Home folder |
 | installs the `easya` application alias | does not create an application-launch alias |
 | unrestricted local desktop build | sandboxed and signed App Store build |
 
-The Store edition never scans the home directory on its own. A standard macOS file picker grants initial access to one `.zshrc`, and the backend immediately persists that permission as an app-scoped security bookmark.
+The Store edition never chooses or scans the Home folder on its own. A standard macOS folder picker grants access to the folder selected by the user, and the backend immediately persists that permission as an app-scoped security bookmark. EasyAlias code then applies a fixed allowlist: it reads or changes only `.zshrc`, `.bash_profile`, and `.bashrc` directly inside that folder.
 
-When the user changes the connected file, EasyAlias first backs up the previous `.zshrc`, removes its managed block, and drops the old bookmark.
+When the user changes the connected Home folder, EasyAlias first backs up the existing supported startup files, removes its managed blocks, and drops the old bookmark.
 
 The Store edition otherwise shares the complete management workflow with the direct edition: favorites, 31 paginated suggestions, selective JSON export and restore, three-second dismissible status messages, and a 30-day Trash.
 
 ## First Start
 
 1. Open EasyAlias.
-2. Click **Choose .zshrc**.
-3. If hidden files are not visible, press `Command-Shift-.` in the picker.
-4. Select the `.zshrc` file.
-5. Review any existing aliases offered for import.
+2. Click **Choose Home Folder**.
+3. Select your Home folder, for example `/Users/your-name`.
+4. Review any existing aliases offered from `.zshrc`, `.bash_profile`, and `.bashrc`.
 
-EasyAlias then owns only this block:
+EasyAlias places the same managed alias block in each supported startup file:
 
 ```zsh
 # >>> EasyAlias managed aliases >>>
@@ -53,7 +52,7 @@ alias ll='ls -lah'
 # <<< EasyAlias managed aliases <<<
 ```
 
-All unrelated `.zshrc` content remains outside the block.
+All unrelated content remains outside the blocks. New zsh sessions load `.zshrc`, login Bash sessions load `.bash_profile`, and interactive non-login Bash sessions load `.bashrc`. After changing aliases, open a fresh terminal or run `source ~/.bashrc` in an existing Bash terminal.
 
 ## Local Data
 
@@ -62,12 +61,15 @@ The App Sandbox container stores:
 ```text
 config.json
 trash.json
-zshrc.bookmark
-.zshrc-import-v1
-backups/zshrc-<timestamp>.backup
+home.bookmark
+.shell-import-v2
+backups/
+  zshrc-<timestamp>.backup
+  bash_profile-<timestamp>.backup
+  bashrc-<timestamp>.backup
 ```
 
-The exact container path is resolved by Tauri at runtime and shown in the UI. The security-scoped bookmark contains the persistent permission for the selected `.zshrc`.
+The exact container path is resolved by Tauri at runtime and shown in the UI. The security-scoped bookmark contains the persistent permission for the selected Home folder. The bookmark grants folder access at the operating-system level, while the backend's fixed allowlist limits EasyAlias operations to the three documented startup files.
 
 ## Favorites, Suggestions, Backups, and Trash
 
@@ -81,7 +83,7 @@ Portable backups use a versioned EasyAlias JSON format shared with all other edi
 
 ![Selecting an EasyAlias backup for import](../docs/assets/v2/import.png)
 
-Deleting an alias moves it into the container's `trash.json` for 30 days. Trash can restore or permanently remove individual aliases, or empty all deleted entries immediately. Restoring an alias also updates the managed `.zshrc` block.
+Deleting an alias moves it into the container's `trash.json` for 30 days. Trash can restore or permanently remove individual aliases, or empty all deleted entries immediately. Restoring an alias also updates the managed blocks in all three startup files.
 
 ![Restoring or permanently deleting an alias](../docs/assets/v2/trash.png)
 
@@ -235,13 +237,14 @@ The final Store entitlement file deliberately does **not** include `com.apple.se
 Test the signed app before creating the installer:
 
 1. Start the app.
-2. Select a test `.zshrc`.
+2. Select a temporary test Home folder containing test `.zshrc`, `.bash_profile`, and `.bashrc` files.
 3. Create an alias.
 4. Quit and reopen EasyAlias.
-5. Edit the alias without selecting `.zshrc` again.
-6. Open a fresh terminal and verify the alias.
+5. Edit the alias without selecting the Home folder again.
+6. Verify that the managed block exists in all three startup files.
+7. Open fresh zsh and Bash sessions and verify the alias.
 
-Use a temporary macOS user account or a test `.zshrc` during this validation.
+Use a temporary macOS user account or a dedicated test Home folder during this validation.
 
 ## Create the Signed PKG
 
@@ -294,10 +297,11 @@ After Apple processes the package, test it through TestFlight before submitting 
 
 ## Safety Guarantees
 
-- no automatic home-directory scan
-- no `.zshrc` access before explicit user selection
-- persistent access uses an app-scoped security bookmark
-- security scope starts only around each file operation and always stops afterward
+- no automatic Home-folder selection or unrestricted scan
+- no shell startup file access before explicit Home-folder selection
+- persistent access uses an app-scoped security bookmark for the selected folder
+- EasyAlias code reads and changes only `.zshrc`, `.bash_profile`, and `.bashrc` directly inside that folder
+- security scope starts only around each bounded operation and always stops afterward
 - malformed or duplicate managed markers abort instead of rewriting the file
 - imports are parsed as text and never executed
 - an App Sandbox container backup is created before connection setup and imports
