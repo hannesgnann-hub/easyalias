@@ -68,6 +68,11 @@ After installation:
 3. Open a new `cmd.exe` window.
 4. Run `where easystoretest`.
 5. Run the alias and verify its output.
+6. Add one built-in suggestion and verify that its `.cmd` file is generated.
+7. Edit the alias and confirm that its `.cmd` file is regenerated.
+8. Delete the alias and confirm that its `.cmd` file is removed.
+
+The [shared feature tour](../../README.md#feature-tour) illustrates the newer workflow in the other EasyAlias variants. Those screenshots should not be used to claim favorites, portable backups, Trash, or paginated suggestions for this Microsoft Store build until those features are ported to this source tree.
 
 Also test silent uninstall using the uninstaller created in the EasyAlias
 installation directory:
@@ -140,6 +145,9 @@ assets for future package-based builds.
 - [ ] `/S` installs without an installer UI
 - [ ] EasyAlias starts and creates `.cmd` aliases
 - [ ] a new `cmd.exe` resolves generated aliases
+- [ ] built-in suggestions generate valid `.cmd` files
+- [ ] editing regenerates the matching `.cmd` file
+- [ ] deleting removes the matching `.cmd` file
 - [ ] `/S` uninstalls without an uninstaller UI
 - [ ] signed installer is hosted at an immutable HTTPS URL
 - [ ] EasyAlias 1:1 app tile icon and box art are uploaded

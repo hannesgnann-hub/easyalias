@@ -8,7 +8,7 @@ EasyAlias consists of a small frontend and a Tauri/Rust backend:
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | UI, form state, suggestions, first-start/manual import dialog, command preview |
+| Frontend | `src/main.ts` | UI, favorites, paged suggestions, legacy import, portable backups, Trash, command preview |
 | Styling | `src/styles.css` | layout and visual design |
 | Backend | `src-tauri/src/main.rs` | PATH setup, legacy command discovery, backup, and persistence |
 | Tauri Config | `src-tauri/tauri.conf.json` | app window, build, Windows installer |
@@ -95,6 +95,7 @@ flowchart TD
 | File | Content | Owner |
 | --- | --- | --- |
 | `~/.easyalias/config.json` | structured shortcut data for the UI | EasyAlias |
+| `~/.easyalias/trash.json` | deleted shortcuts retained for up to 30 days | EasyAlias |
 | `~/.easyalias/bin/*.cmd` | generated command files | EasyAlias |
 | `~/.easyalias/.cmd-import-v1` | records that the automatic first-start import prompt was handled | EasyAlias |
 | `~/.easyalias/import-backup-*` | copies of imported legacy command files | user backup |
@@ -140,8 +141,12 @@ Main responsibilities:
 - validate shortcut names
 - update the cmd command preview live
 - persist optional Windows shortcut suggestions with one click
+- paginate the 31 built-in Git, Docker, build, and utility suggestions
 - open the import scanner from the header and review safe legacy `.cmd`/`.bat` candidates
-- display, edit, and delete shortcuts
+- sort favorites before regular shortcuts
+- selectively export and restore portable JSON backups
+- restore or permanently remove shortcuts from the 30-day Trash
+- display, edit, and move shortcuts to Trash
 - call Tauri commands when the app runs natively
 
 The most important types:
@@ -162,6 +167,7 @@ type AliasEntry = {
   action: AliasAction;
   customCommand?: string;
   commandPreview: string;
+  favorite: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -189,11 +195,26 @@ stateDiagram-v2
 
 ## Backend
 
-The Tauri backend exposes five commands:
+The Tauri backend exposes commands in four groups:
 
 ```rust
+// Core persistence
 load_aliases()
 save_aliases(aliases)
+
+// Recoverable deletion
+list_trash()
+move_alias_to_trash(id)
+restore_trash_alias(id)
+permanently_delete_trash_alias(id)
+empty_trash()
+
+// Portable JSON backups
+export_alias_backup(selected_ids)
+inspect_alias_backup(path)
+import_alias_backup(path, selected_ids)
+
+// Legacy command-file migration
 scan_command_file_import()
 dismiss_command_file_import()
 import_command_files(selected_ids, timestamp)
@@ -215,6 +236,10 @@ import_command_files(selected_ids, timestamp)
 - one `.cmd` file per alias
 - removes stale `.cmd` files for deleted aliases
 - returns fresh PATH status for the UI
+
+Deletion uses `move_alias_to_trash`, which removes the active `.cmd` file and records the entry in `trash.json`. Restoring recreates the managed command file. Entries older than 30 days are purged when Trash is loaded; permanent deletion and `empty_trash` are explicit irreversible actions.
+
+Portable backup commands export selected entries to a versioned EasyAlias JSON file. Import validates and previews the file before merging only the selected entries; matching shortcut names are replaced only when selected.
 
 `scan_command_file_import` ignores the first-start marker, rescans user-owned `PATH` folders, filters case-insensitive command names already managed by EasyAlias, and returns the remaining candidates. It never scans system directories or EasyAlias' own command folder.
 
@@ -247,13 +272,22 @@ sequenceDiagram
   participant Config as config.json
   participant Bin as ~/.easyalias/bin/
 
-  UI->>UI: create/edit/delete AliasEntry
+  UI->>UI: create, edit, favorite, or use suggestion
   UI->>Rust: save_aliases(aliases)
   Rust->>Rust: validate shortcut names
   Rust->>Config: write pretty JSON
   Rust->>Bin: remove stale .cmd files
   Rust->>Bin: write generated .cmd files
   Rust-->>UI: updated AppState
+```
+
+```mermaid
+flowchart LR
+  Delete["Delete shortcut"] --> Trash["trash.json"]
+  Trash --> Restore["Restore shortcut"]
+  Trash --> Permanent["Delete permanently"]
+  Trash --> Expire["Automatic purge after 30 days"]
+  Restore --> Files["config.json + generated .cmd"]
 ```
 
 ## Command Generation
@@ -309,6 +343,8 @@ Important boundaries:
 - Import scanning is limited to directories below the user profile and never scans system PATH folders.
 - Only one-command scripts are imported; labels, multiline logic, duplicate names, and location-dependent `%~dp0`/`%0` scripts are skipped.
 - Selected originals are backed up before managed files are written or old files are removed.
+- Portable backup files are parsed as data and never executed.
+- Trash provides a 30-day recovery window unless the user explicitly removes an entry permanently or empties it.
 - Folder-changing aliases persist in `cmd.exe`; from PowerShell they run as external commands and cannot change the parent PowerShell location.
 
 ## Runtime Notes
@@ -339,5 +375,4 @@ Short term:
 Later:
 
 - settings window
-- optional export/backup mechanism
 - signed Windows release automation

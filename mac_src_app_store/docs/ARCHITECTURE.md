@@ -10,7 +10,7 @@ The Store edition therefore separates data into two ownership domains:
 
 | Domain | Data |
 | --- | --- |
-| EasyAlias App Sandbox container | structured alias JSON, bookmark data, import marker, backups |
+| EasyAlias App Sandbox container | structured alias JSON, Trash, bookmark data, import marker, backups |
 | user-selected file | one `.zshrc` containing the EasyAlias managed block |
 
 ```mermaid
@@ -27,7 +27,7 @@ flowchart LR
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | forms, suggestions, setup flow, import review, status |
+| Frontend | `src/main.ts` | forms, favorites, paged suggestions, setup, legacy import, portable backups, Trash, status |
 | Styling | `src/styles.css` | responsive desktop UI |
 | Backend | `src-tauri/src/main.rs` | container storage, bookmark lifecycle, parsing, backups, managed block |
 | Base config | `src-tauri/tauri.conf.json` | identity, version, window, category |
@@ -118,13 +118,21 @@ This avoids asking Terminal to read generated scripts from another app's sandbox
 
 ## Commands
 
-The backend exposes seven Tauri commands:
+The backend exposes commands for connection, active aliases, recovery, backups, and legacy migration:
 
 ```rust
 load_aliases()
 connect_zshrc(path)
 disconnect_zshrc()
 save_aliases(aliases)
+list_trash()
+move_alias_to_trash(id)
+restore_trash_alias(id)
+permanently_delete_trash_alias(id)
+empty_trash()
+export_alias_backup(selected_ids)
+inspect_alias_backup(path)
+import_alias_backup(path, selected_ids)
 scan_zshrc_import()
 dismiss_zshrc_import()
 import_zshrc_aliases(selected_ids, timestamp)
@@ -181,11 +189,26 @@ It does not scan or modify the home directory.
 - writes imported commands into the managed block
 - stores the updated structured config
 
+### Trash commands
+
+- move deleted aliases out of the active config and managed `.zshrc` block
+- retain deletion metadata in `trash.json` for up to 30 days
+- restore selected entries and regenerate the managed block
+- permanently delete one entry or empty the complete Trash on explicit request
+
+### Portable backup commands
+
+- export only the aliases selected in the review dialog
+- inspect a versioned EasyAlias JSON file without applying it
+- validate size, schema, names, and commands before import
+- merge only selected entries; matching names replace their existing EasyAlias entry
+
 ## Container Data
 
 ```text
 Application Support/
   config.json
+  trash.json
   zshrc.bookmark
   .zshrc-import-v1
   backups/
@@ -205,10 +228,11 @@ No Apple certificate, private key, API key, or provisioning profile belongs in t
 | `com.apple.application-identifier` | binds the app to Team ID and Bundle ID |
 | `com.apple.developer.team-identifier` | identifies the Apple Developer team |
 | `com.apple.security.files.user-selected.read-write` | permits `.zshrc` selected through `NSOpenPanel` |
-| `com.apple.security.files.user-selected.executable` | permits writing shell script content without command-line quarantine problems |
 | `com.apple.security.files.bookmarks.app-scope` | persists selected-file access between launches |
 
 No broad home-directory entitlement, temporary exception, network server entitlement, shell execution plugin, or child process is used.
+
+`com.apple.security.files.user-selected.executable` exists only in `Entitlements.local.plist` for local ad-hoc sandbox testing. It is deliberately absent from the final `Entitlements.plist` after App Review flagged it as invalid for this Store submission. The Store configuration references only the final entitlement file.
 
 ## Import Safety
 
@@ -223,6 +247,8 @@ The parser skips:
 - every alias inside the managed block
 
 The `.zshrc` is parsed as text and never sourced or executed.
+
+Portable backup files receive the same defensive treatment: they are parsed as bounded JSON data, validated before the selection screen appears, and never executed. Deleted aliases remain recoverable for 30 days unless the user explicitly removes them permanently.
 
 ```mermaid
 flowchart TD
@@ -259,6 +285,8 @@ Rust unit tests cover:
 - replacing one managed block without changing unrelated lines
 - rejecting malformed markers
 - replacing only confirmed import lines
+- portable backup validation and selective merging
+- Trash retention, restoration, and permanent removal
 
 The production checks are:
 

@@ -8,9 +8,9 @@ EasyAlias consists of a small frontend and a Tauri/Rust backend:
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | UI, form state, suggestions, first-start/manual import dialog, command preview |
+| Frontend | `src/main.ts` | UI, suggestions, legacy import, editing, deletion, command preview |
 | Styling | `src/styles.css` | layout and visual design |
-| Backend | `src-tauri/src/main.rs` | PATH setup, legacy command discovery, backup, and persistence |
+| Backend | `src-tauri/src/main.rs` | PATH setup, legacy command discovery, migration backups, and persistence |
 | Tauri Config | `src-tauri/tauri.conf.json` | app window, build, Windows installer |
 | Tauri Dialog Plugin | `@tauri-apps/plugin-dialog` | native file/folder picker |
 | Tauri Opener Plugin | `@tauri-apps/plugin-opener` | open GitHub and Reddit in the system browser |
@@ -140,6 +140,7 @@ Main responsibilities:
 - validate shortcut names
 - update the cmd command preview live
 - persist optional Windows shortcut suggestions with one click
+- offer built-in Windows shortcut suggestions
 - open the import scanner from the header and review safe legacy `.cmd`/`.bat` candidates
 - display, edit, and delete shortcuts
 - call Tauri commands when the app runs natively
@@ -189,11 +190,14 @@ stateDiagram-v2
 
 ## Backend
 
-The Tauri backend exposes five commands:
+The Tauri backend exposes five commands in two groups:
 
 ```rust
+// Core persistence
 load_aliases()
 save_aliases(aliases)
+
+// Legacy command-file migration
 scan_command_file_import()
 dismiss_command_file_import()
 import_command_files(selected_ids, timestamp)
@@ -247,7 +251,7 @@ sequenceDiagram
   participant Config as config.json
   participant Bin as ~/.easyalias/bin/
 
-  UI->>UI: create/edit/delete AliasEntry
+  UI->>UI: create, edit, delete, or use suggestion
   UI->>Rust: save_aliases(aliases)
   Rust->>Rust: validate shortcut names
   Rust->>Config: write pretty JSON
@@ -335,9 +339,9 @@ type "%USERPROFILE%\.easyalias\bin\beerv2.cmd"
 Short term:
 
 - tests for command generation
+- port favorites, paged suggestions, portable backups, timed messages, and Trash from `windows_src`
 
 Later:
 
 - settings window
-- optional export/backup mechanism
 - signed Windows release automation

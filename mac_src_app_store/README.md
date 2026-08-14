@@ -18,6 +18,8 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 
 [Become a GitHub Sponsor](https://github.com/sponsors/hannesgnann-hub)
 
+![EasyAlias Mac App Store edition](../docs/assets/v2/start.png)
+
 ## Store Edition Differences
 
 | Homebrew/GitHub edition | Mac App Store edition |
@@ -31,6 +33,8 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 The Store edition never scans the home directory on its own. A standard macOS file picker grants initial access to one `.zshrc`, and the backend immediately persists that permission as an app-scoped security bookmark.
 
 When the user changes the connected file, EasyAlias first backs up the previous `.zshrc`, removes its managed block, and drops the old bookmark.
+
+The Store edition otherwise shares the complete management workflow with the direct edition: favorites, 31 paginated suggestions, selective JSON export and restore, three-second dismissible status messages, and a 30-day Trash.
 
 ## First Start
 
@@ -57,12 +61,29 @@ The App Sandbox container stores:
 
 ```text
 config.json
+trash.json
 zshrc.bookmark
 .zshrc-import-v1
 backups/zshrc-<timestamp>.backup
 ```
 
 The exact container path is resolved by Tauri at runtime and shown in the UI. The security-scoped bookmark contains the persistent permission for the selected `.zshrc`.
+
+## Favorites, Suggestions, Backups, and Trash
+
+Favorites stay above regular aliases, with both groups sorted alphabetically. The optional suggestion catalog starts collapsed, contains 31 Git, Docker, shell, build-tool, networking, and filesystem shortcuts, and displays nine entries per page.
+
+![Paged EasyAlias suggestions](../docs/assets/v2/suggestions.png)
+
+Portable backups use a versioned EasyAlias JSON format shared with all other editions. Export can include all or selected aliases. Import accepts a file selected with the native picker or dropped into the dialog, validates it, and allows a selective restore. The sandbox grants access only to the user-selected backup file or destination.
+
+![Choosing aliases for a portable JSON export](../docs/assets/v2/export.png)
+
+![Selecting an EasyAlias backup for import](../docs/assets/v2/import.png)
+
+Deleting an alias moves it into the container's `trash.json` for 30 days. Trash can restore or permanently remove individual aliases, or empty all deleted entries immediately. Restoring an alias also updates the managed `.zshrc` block.
+
+![Restoring or permanently deleting an alias](../docs/assets/v2/trash.png)
 
 ## Development Setup
 
@@ -105,10 +126,9 @@ Bundle ID: dev.hannesgnann.easyalias
 Team ID:   ZAYL5AN372
 Category:  DeveloperTool
 Version:   1.0.0
-Build:     2
 ```
 
-The Bundle ID in Apple Developer and App Store Connect must match exactly.
+The Bundle ID in Apple Developer and App Store Connect must match exactly. Increment the App Store build number for every uploaded binary, even when the marketing version stays unchanged.
 
 Check installed signing identities:
 
@@ -210,6 +230,8 @@ com.apple.security.files.user-selected.read-write
 com.apple.security.files.bookmarks.app-scope
 ```
 
+The final Store entitlement file deliberately does **not** include `com.apple.security.files.user-selected.executable`. That entitlement is not needed for EasyAlias and must not be present in the uploaded binary.
+
 Test the signed app before creating the installer:
 
 1. Start the app.
@@ -279,6 +301,8 @@ After Apple processes the package, test it through TestFlight before submitting 
 - malformed or duplicate managed markers abort instead of rewriting the file
 - imports are parsed as text and never executed
 - an App Sandbox container backup is created before connection setup and imports
+- portable backups are validated before their entries are offered for selective restore
+- deleted aliases remain recoverable in the container Trash for 30 days
 - the `easya` application alias is not generated
 
 ## Architecture

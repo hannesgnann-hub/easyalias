@@ -16,7 +16,7 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 
 [Become a GitHub Sponsor](https://github.com/sponsors/hannesgnann-hub)
 
-![EasyAlias desktop UI](docs/assets/easyalias-ui.png)
+![EasyAlias alias manager with favorites and backup controls](docs/assets/v2/start.png)
 
 ## Install on macOS
 
@@ -66,13 +66,22 @@ flowchart LR
 
 ## Current Status
 
-EasyAlias has separate Tauri source projects for direct macOS distribution, the Mac App Store, direct Windows distribution, the Microsoft Store, and Linux. Each version keeps the same UI and data model while using the native terminal integration and security model for its platform.
+EasyAlias has separate Tauri source projects for direct macOS distribution, the Mac App Store, direct Windows distribution, the Microsoft Store, and Linux. They share the same product direction while using the native terminal integration and security model for each platform; release variants can temporarily differ while features are being ported.
+
+The direct macOS, direct Windows, Linux, and Mac App Store source trees share the current day-to-day management tools:
+
+- pin favorites above the regular alias list
+- browse 31 suggestions across paginated views and add one with a single click
+- export all or selected aliases to a portable, versioned JSON backup
+- validate and review all or selected entries before importing a backup
+- restore deleted aliases from Trash for 30 days, or remove them permanently
+- dismiss status messages manually or let them disappear after three seconds
 
 The macOS version can:
 
 - create aliases
 - edit existing aliases
-- delete aliases
+- move aliases to the 30-day Trash, then restore or permanently remove them
 - choose files and folders through the native macOS picker
 - show a preview of the generated command
 - detect and safely import selected existing `.zshrc` aliases on first start or from the header import button
@@ -107,6 +116,7 @@ The Microsoft Store version keeps the same unrestricted Win32 behavior and:
 - embeds the WebView2 offline installer required for Store certification
 - supports unattended installation through the `/S` argument
 - keeps Store signing and release instructions separate from direct Windows builds
+- currently remains on the earlier Windows feature set while the newer favorites, portable backups, Trash, and expanded suggestions are prepared for its next Store build
 
 The Linux version can:
 
@@ -118,6 +128,36 @@ The Linux version can:
 - generate `~/.easyalias/aliases.sh`
 - connect the generated file to `~/.bashrc` or `~/.zshrc`
 - build `.deb`, `.rpm`, and `.AppImage` packages
+
+## Feature Tour
+
+The screenshots show the macOS edition. Direct Windows, Linux, and the Mac App Store edition use the same management workflow with platform-specific terminal commands and storage locations. The Microsoft Store source still uses the earlier Windows workflow.
+
+### Favorites and Daily Management
+
+Click the star beside an alias to pin it above regular entries. Favorites and non-favorites are each sorted alphabetically.
+
+![Favorite aliases pinned at the top of the EasyAlias list](docs/assets/v2/start.png)
+
+### Paged Suggestions
+
+Suggestions start collapsed. Open the section to browse Git, Docker, build-tool, networking, and filesystem shortcuts. Nine suggestions are shown per page; **Use** saves one immediately.
+
+![Expanded EasyAlias suggestions with page navigation](docs/assets/v2/suggestions.png)
+
+### Selective Backup and Restore
+
+The export dialog writes only the selected aliases to a portable `.json` file. The import dialog accepts that file through the picker or drag and drop, validates it before showing its contents, and lets you choose exactly what to restore.
+
+![Selecting aliases for an EasyAlias JSON export](docs/assets/v2/export.png)
+
+![Dropping an EasyAlias JSON backup into the import dialog](docs/assets/v2/import.png)
+
+### Recoverable Deletion
+
+Deleting an alias moves it to Trash instead of removing it immediately. Deleted aliases remain recoverable for 30 days and can be restored, permanently deleted, or cleared together.
+
+![EasyAlias Trash with restore and permanent delete controls](docs/assets/v2/trash.png)
 
 ## Folder Structure
 
@@ -411,6 +451,23 @@ flowchart TD
   Backup --> Import["Store managed aliases"]
 ```
 
+This legacy-import flow is separate from portable backup import. The legacy scanner migrates aliases already present in platform configuration files; the backup dialog restores EasyAlias JSON files created with the export button.
+
+## Portable Backups
+
+Portable backups use the same versioned JSON envelope in the direct macOS, direct Windows, Linux, and Mac App Store editions. This makes it possible to move selected aliases between those EasyAlias installations while reviewing every entry before it changes the destination configuration. The Microsoft Store source does not support this format yet.
+
+```mermaid
+flowchart LR
+  Managed["Managed EasyAlias aliases"] --> SelectExport["Select aliases to export"]
+  SelectExport --> Json["Versioned EasyAlias JSON backup"]
+  Json --> Validate["Validate and inspect backup"]
+  Validate --> SelectImport["Select aliases to import"]
+  SelectImport --> Merge["Replace matching names and add new aliases"]
+```
+
+The importer rejects unsupported formats, malformed entries, duplicate ids or names, and files larger than 5 MB. Unselected aliases remain unchanged.
+
 ## Alias Actions
 
 | Action | macOS/zsh | Windows/cmd | Linux/bash or zsh |
@@ -443,14 +500,17 @@ mindmap
     UI
       Create
       Edit
-      Delete
+      Favorite
+      Recover deleted aliases
       File picker
+      Paged suggestions
     Shell
       zsh on macOS
       cmd on Windows
       bash or zsh on Linux
       Generated files
     Export
+      Portable JSON backup
       macOS app
       Windows installer
       Linux packages

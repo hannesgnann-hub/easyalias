@@ -6,7 +6,7 @@ EasyAlias Linux combines a TypeScript/Vite interface with a Tauri 2 Rust backend
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | forms, suggestions, first-start/manual import, validation, previews, Tauri calls |
+| Frontend | `src/main.ts` | forms, favorites, paged suggestions, imports, portable backups, Trash, validation, previews, Tauri calls |
 | Styling | `src/styles.css` | responsive desktop interface |
 | Backend | `src-tauri/src/main.rs` | shell detection, startup-file import, backup, and persistence |
 | Bundle config | `src-tauri/tauri.conf.json` | Linux window, permissions, package targets |
@@ -66,6 +66,7 @@ Each alias is persisted as structured JSON:
   "path": "~/Desktop/projects/example",
   "action": "navigate",
   "commandPreview": "cd \"$HOME/Desktop/projects/example\"",
+  "favorite": true,
   "createdAt": "2026-07-17T10:00:00.000Z",
   "updatedAt": "2026-07-17T10:00:00.000Z"
 }
@@ -75,11 +76,11 @@ Each alias is persisted as structured JSON:
 
 ## Save Flow
 
-Create, edit, delete, and one-click suggestion operations all end in `save_aliases()`. First-start and manually requested migrations use `import_shell_aliases()` so backup, managed files, and selected startup-file changes stay coordinated.
+Create, edit, favorite, and one-click suggestion operations end in `save_aliases()`. Deletion uses `move_alias_to_trash()` so the entry remains recoverable. First-start and manually requested migrations use `import_shell_aliases()` so backup, managed files, and selected startup-file changes stay coordinated.
 
 ```mermaid
 flowchart TD
-  Change["Create, edit, delete, or use suggestion"] --> Validate["Frontend validation"]
+  Change["Create, edit, favorite, or use suggestion"] --> Validate["Frontend validation"]
   Validate --> Preview["Build Linux command preview"]
   Preview --> Invoke["save_aliases entries"]
   Invoke --> BackendValidate["Rust validation"]
@@ -99,19 +100,29 @@ alias project='cd "$HOME/Desktop/projects/example"'
 alias notes='xdg-open "$HOME/Documents/notes.txt"'
 ```
 
-Suggestions use the same `AliasEntry` model and command-preview generator as manually entered aliases. Already-used names are filtered out in the frontend, and clicking `Use` persists a complete entry immediately.
+Suggestions use the same `AliasEntry` model and command-preview generator as manually entered aliases. The 31 suggestions are shown nine per page, already-used names are filtered out, and clicking `Use` persists a complete entry immediately. Favorites are sorted before regular aliases while preserving stable name order inside each group.
 
-## Import Flow
+## Backend Commands
 
-The backend exposes five commands to the frontend:
+The backend command groups are:
 
 ```rust
 load_aliases()
 save_aliases(aliases)
+list_trash()
+move_alias_to_trash(id)
+restore_trash_alias(id)
+permanently_delete_trash_alias(id)
+empty_trash()
+export_alias_backup(selected_ids)
+inspect_alias_backup(path)
+import_alias_backup(path, selected_ids)
 scan_shell_import()
 dismiss_shell_import()
 import_shell_aliases(selected_ids, timestamp)
 ```
+
+## Import Flow
 
 `load_aliases` performs the automatic first-start detection. `scan_shell_import` ignores the handled marker when the header import button is clicked, rescans the startup file selected from `$SHELL`, and filters aliases already managed by EasyAlias. The scan only returns candidates; `import_shell_aliases` owns backup creation and source changes.
 
@@ -135,9 +146,15 @@ sequenceDiagram
   Rust-->>UI: updated AppState
 ```
 
+## Portable Backups And Trash
+
+EasyAlias can export selected aliases to a versioned JSON backup and inspect that file before importing selected entries. Matching names replace their current EasyAlias entry only when the user includes them. Backup files are size-limited, schema-validated, and treated strictly as data.
+
+Deleted aliases move to `~/.easyalias/trash.json`. They can be restored, deleted permanently, or removed together with `Empty Trash`; entries are also purged automatically after 30 days. Restoring or deleting an entry regenerates `config.json` and `aliases.sh` so shell output stays synchronized.
+
 ## Shell Safety Boundaries
 
-- EasyAlias owns only `~/.easyalias/config.json` and `~/.easyalias/aliases.sh`.
+- EasyAlias owns `~/.easyalias/config.json`, `~/.easyalias/aliases.sh`, and `~/.easyalias/trash.json`.
 - `~/.easyalias/.shell-import-v1` records that the automatic first-start migration prompt was handled; it does not disable manual rescans.
 - A timestamped startup-file backup is created before confirmed alias lines are changed.
 - The active startup file receives only a source line and the detached `easya` shortcut.
@@ -147,6 +164,7 @@ sequenceDiagram
 - Custom commands remain intentionally unrestricted because their purpose is to run user-provided shell code.
 - Import detection parses text without sourcing the startup file and skips nested, repeated, multiline, or option-based aliases.
 - The generated aliases file should be edited through the app, not manually.
+- Portable backup files are parsed as JSON and never sourced or executed.
 
 ## Browser Preview
 

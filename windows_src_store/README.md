@@ -22,7 +22,7 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 
 - create, edit, and delete shortcuts through a UI
 - detect simple existing `.cmd`/`.bat` aliases in user-owned `PATH` folders on first start and rescan them later from the header import button
-- expand optional Windows suggestions and add them with one click
+- add built-in Windows suggestions with one click
 - choose an action from a dropdown
 - preview the generated `cmd.exe` command before saving
 - choose files and folders through the native Windows picker
@@ -30,7 +30,9 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 - keep shortcut data as structured JSON
 - automatically generate `.cmd` files for `cmd.exe`
 - connect `~\.easyalias\bin` to the user's `PATH` on first Tauri startup
-- link to the GitHub repository and EasyAlias subreddit from the footer
+- link to the website, GitHub repository, and EasyAlias subreddit from the footer
+
+The [shared feature tour](../README.md#feature-tour) shows the newer workflow already available in the other source variants. Favorites, paged suggestions, portable backups, Trash, timed messages, and the sponsor banner still need to be ported to this Microsoft Store source tree before they can be advertised for its next build.
 
 ## Quickstart
 
@@ -277,6 +279,10 @@ call mvnw.cmd %*
 
 `%*` forwards additional arguments, so `gw clean` runs `gradlew.bat clean`.
 
+## Feature Parity Status
+
+This Microsoft Store source tree currently uses the earlier Windows workflow. The direct Windows edition already includes favorites, paged suggestions, portable JSON backups, timed status messages, the sponsor banner, and 30-day Trash. Those features must be ported and verified here before the next Store installer can advertise them.
+
 ## Documentation Layout
 
 EasyAlias keeps a shared project overview plus platform-specific usage and architecture documents:
@@ -294,9 +300,9 @@ EasyAlias keeps a shared project overview plus platform-specific usage and archi
 
 ## Roadmap
 
+- port the current direct-Windows management features to the Store source tree
 - search and filter for large shortcut lists
 - automated Windows signing and Store release pipeline
-- optional structured config export and restore
 
 ## License
 

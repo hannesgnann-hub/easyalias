@@ -18,9 +18,11 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 
 ## Highlights
 
-- create, edit, and delete aliases through a UI
+- create and edit aliases through a UI, with 30-day recovery after deletion
+- pin favorites above the regular alias list
+- selectively export aliases to a portable JSON backup and restore selected entries through file selection or drag and drop
 - detect existing simple aliases in `~/.zshrc` on first start and rescan them later from the header import button
-- expand optional macOS alias suggestions and add them with one click
+- browse 31 paginated macOS alias suggestions and add them with one click
 - choose an action from a dropdown
 - preview the generated shell command before saving
 - choose files and folders through the native macOS picker
@@ -28,7 +30,10 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 - keep alias data as structured JSON
 - automatically generate an `aliases.zsh` file for your terminal
 - connect itself to `~/.zshrc` on first Tauri startup
-- link to the GitHub repository and EasyAlias subreddit from the footer
+- dismiss status messages manually or let them close automatically after three seconds
+- link to the website, GitHub repository, EasyAlias subreddit, and sponsor page from the footer
+
+![EasyAlias macOS alias manager](../docs/assets/v2/start.png)
 
 ## Install
 
@@ -93,6 +98,7 @@ EasyAlias intentionally manages its own files and does not directly rewrite your
 ~/.easyalias/config.json
 ~/.easyalias/aliases.zsh
 ~/.easyalias/.zshrc-import-v1
+~/.easyalias/trash.json
 ```
 
 On first Tauri startup, EasyAlias appends this line to `~/.zshrc` if it is missing:
@@ -151,7 +157,23 @@ For safety, the automatic scanner skips:
 
 The optional Suggestions section starts collapsed. Clicking `Use` immediately saves the selected suggestion as a real alias; no second click on `Add` is required. Suggestions whose names are already managed disappear from the available list.
 
-The built-in set includes common shell, Git, Gradle Wrapper, Maven Wrapper, Docker, networking, and folder shortcuts such as `ll`, `gs`, `gw`, `gwb`, and `reloadzsh`.
+The 31-entry catalog includes common shell, Git, Gradle Wrapper, Maven Wrapper, Docker, networking, and folder shortcuts. Nine suggestions appear per page. Examples include `ll`, `gs`, `gaa`, `gcm`, `gw`, `mw`, `dcu`, `dcd`, `dcub`, `ports`, and `downloads`.
+
+![Paged Git and Docker alias suggestions](../docs/assets/v2/suggestions.png)
+
+## Favorites, Backups, and Trash
+
+The star button toggles an alias as a favorite. Favorites are sorted before regular aliases, while each group remains alphabetical.
+
+The export button opens a review dialog where all aliases are selected by default. Choose any subset and save it as a versioned `EasyAlias-backup-YYYY-MM-DD.json` file. The neighboring import button accepts an EasyAlias backup through the native picker or drag and drop, validates it, and lets you select which entries to restore. A selected alias with an existing name replaces that managed entry; unselected aliases do not change.
+
+![Choosing aliases for a portable JSON backup](../docs/assets/v2/export.png)
+
+![Selecting or dropping an EasyAlias backup for restore](../docs/assets/v2/import.png)
+
+Deleting an alias moves it to `~/.easyalias/trash.json`. Trash entries are retained for 30 days and are purged when Trash is loaded after their retention period. The Trash dialog can restore one alias, permanently delete one alias, or empty all deleted entries.
+
+![Recovering or permanently deleting a macOS alias](../docs/assets/v2/trash.png)
 
 ## Development
 
@@ -204,7 +226,8 @@ An alias is stored like this:
   "action": "navigate",
   "commandPreview": "cd \"$HOME/Desktop/projects/beerv2_app\"",
   "createdAt": "2026-07-08T16:35:00.000Z",
-  "updatedAt": "2026-07-08T16:35:00.000Z"
+  "updatedAt": "2026-07-08T16:35:00.000Z",
+  "favorite": true
 }
 ```
 
@@ -223,7 +246,6 @@ An alias is stored like this:
 
 - search and filter for large alias lists
 - signed and notarized release automation
-- optional structured config export and restore
 
 ## Documentation Layout
 

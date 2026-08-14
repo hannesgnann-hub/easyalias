@@ -18,9 +18,11 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 
 ## Highlights
 
-- create, edit, and delete shortcuts through a UI
+- create and edit shortcuts through a UI, with 30-day recovery after deletion
+- pin favorites above the regular shortcut list
+- export all or selected shortcuts to a portable JSON backup and restore selected entries
 - detect simple existing `.cmd`/`.bat` aliases in user-owned `PATH` folders on first start and rescan them later from the header import button
-- expand optional Windows suggestions and add them with one click
+- browse 31 paginated Windows suggestions and add them with one click
 - choose an action from a dropdown
 - preview the generated `cmd.exe` command before saving
 - choose files and folders through the native Windows picker
@@ -28,7 +30,10 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 - keep shortcut data as structured JSON
 - automatically generate `.cmd` files for `cmd.exe`
 - connect `~\.easyalias\bin` to the user's `PATH` on first Tauri startup
-- link to the GitHub repository and EasyAlias subreddit from the footer
+- dismiss status messages manually or let them disappear after three seconds
+- link to the website, GitHub repository, EasyAlias subreddit, and sponsor page from the footer
+
+The [shared feature tour](../README.md#feature-tour) illustrates favorites, paged suggestions, portable backups, and Trash. Its screenshots use macOS window chrome, but the workflow is the same on Windows.
 
 ## Quickstart
 
@@ -80,6 +85,7 @@ EasyAlias intentionally manages its own files and does not directly rewrite shel
 ~\.easyalias\bin\
 ~\.easyalias\.cmd-import-v1
 ~\.easyalias\import-backup-*\
+~\.easyalias\trash.json
 ```
 
 Each alias becomes one command file:
@@ -236,7 +242,8 @@ A shortcut is stored like this:
   "action": "navigate",
   "commandPreview": "cd /d \"%USERPROFILE%\\Desktop\\projects\\beerv2_app\"",
   "createdAt": "2026-07-08T16:35:00.000Z",
-  "updatedAt": "2026-07-08T16:35:00.000Z"
+  "updatedAt": "2026-07-08T16:35:00.000Z",
+  "favorite": true
 }
 ```
 
@@ -255,7 +262,7 @@ A shortcut is stored like this:
 
 The optional Suggestions section starts collapsed. Clicking `Use` immediately creates the matching `.cmd` shortcut and removes that name from the available suggestions.
 
-Suggestions include common cmd, Git, Gradle Wrapper, Maven Wrapper, Docker, networking, and folder commands. Wrapper suggestions use Windows batch syntax such as:
+The catalog contains 31 cmd, Git, Gradle Wrapper, Maven Wrapper, Docker, networking, and folder commands, displayed nine per page. Wrapper suggestions use Windows batch syntax such as:
 
 ```cmd
 call gradlew.bat %*
@@ -263,6 +270,12 @@ call mvnw.cmd %*
 ```
 
 `%*` forwards additional arguments, so `gw clean` runs `gradlew.bat clean`.
+
+## Favorites, Backups, and Trash
+
+Favorites stay above regular shortcuts, with both groups sorted alphabetically. The header export button writes all or selected shortcuts to a versioned EasyAlias JSON backup. Import accepts that backup through the native picker or drag and drop, validates it, and allows a selective restore. Selected matching names replace current managed entries; unselected shortcuts stay unchanged.
+
+Deleted shortcuts move to `~\.easyalias\trash.json` for 30 days. Trash can restore or permanently remove an individual entry, or empty all deleted entries immediately. Restoring also regenerates the matching `.cmd` file.
 
 ## Documentation Layout
 

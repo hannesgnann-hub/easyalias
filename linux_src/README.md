@@ -18,9 +18,11 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 
 ## Highlights
 
-- create, edit, and delete aliases through a UI
+- create and edit aliases through a UI, with 30-day recovery after deletion
+- pin favorites above the regular alias list
+- export all or selected aliases to a portable JSON backup and restore selected entries
 - detect existing aliases in the active shell startup file on first start and rescan them later from the header import button
-- expand optional Linux suggestions and add them with one click
+- browse 31 paginated Linux suggestions and add them with one click
 - choose files and folders with the native Linux picker
 - preview the generated shell command before saving
 - store `createdAt` and `updatedAt` for every alias
@@ -29,7 +31,10 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 - connect the generated file to `~/.bashrc` or `~/.zshrc`
 - add the `easya` shortcut for opening the installed application
 - build `.deb`, `.rpm`, and `.AppImage` packages
-- link to the GitHub repository and EasyAlias subreddit from the footer
+- dismiss status messages manually or let them disappear after three seconds
+- link to the website, GitHub repository, EasyAlias subreddit, and sponsor page from the footer
+
+The [shared feature tour](../README.md#feature-tour) illustrates favorites, paged suggestions, portable backups, and Trash. Its screenshots use macOS window chrome, but the workflow is the same on Linux.
 
 ## Install with Homebrew
 
@@ -135,6 +140,7 @@ The app manages these files:
 ~/.easyalias/config.json
 ~/.easyalias/aliases.sh
 ~/.easyalias/.shell-import-v1
+~/.easyalias/trash.json
 ```
 
 On first native startup it appends the missing lines to the detected startup file:
@@ -195,9 +201,15 @@ chmod +x /path/to/script.sh
 
 The optional Suggestions section starts collapsed. Clicking `Use` immediately saves the alias and removes that name from the available suggestions.
 
-Suggestions include common shell, Git, Gradle Wrapper, Maven Wrapper, Docker, networking, and folder commands. Examples include `ll`, `gs`, `gw`, `mw`, `glog`, `dcu`, `ports`, and `downloads`.
+The catalog contains 31 shell, Git, Gradle Wrapper, Maven Wrapper, Docker, networking, and folder commands, displayed nine per page. Examples include `ll`, `gs`, `gaa`, `gcm`, `gw`, `mw`, `dcu`, `dcd`, `dcub`, `ports`, and `downloads`.
 
 Wrapper aliases still accept additional arguments from bash or zsh. For example, `gw build` expands to `./gradlew build`, while `mw test` expands to `./mvnw test`.
+
+## Favorites, Backups, and Trash
+
+Favorites stay above regular aliases, with both groups sorted alphabetically. The header export button writes all or selected aliases to a versioned EasyAlias JSON backup. Import accepts that backup through the native picker or drag and drop, validates it, and allows a selective restore. Selected matching names replace current managed entries; unselected aliases stay unchanged.
+
+Deleted aliases move to `~/.easyalias/trash.json` for 30 days. Trash can restore or permanently remove an individual entry, or empty all deleted entries immediately.
 
 ## Build And Export
 

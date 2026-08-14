@@ -8,7 +8,7 @@ EasyAlias consists of a small frontend and a Tauri/Rust backend:
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | UI, form state, suggestions, first-start/manual import dialog, command preview |
+| Frontend | `src/main.ts` | UI, form state, favorites, paged suggestions, imports, portable backups, Trash, command preview |
 | Styling | `src/styles.css` | layout and visual design |
 | Backend | `src-tauri/src/main.rs` | `.zshrc` detection, backup, migration, and local file writes |
 | Tauri Config | `src-tauri/tauri.conf.json` | app window, build, bundle |
@@ -91,6 +91,7 @@ flowchart TD
 | File | Content | Owner |
 | --- | --- | --- |
 | `~/.easyalias/config.json` | structured alias data for the UI | EasyAlias |
+| `~/.easyalias/trash.json` | deleted aliases retained for up to 30 days | EasyAlias |
 | `~/.easyalias/aliases.zsh` | generated zsh aliases | EasyAlias |
 | `~/.easyalias/.zshrc-import-v1` | records that the automatic first-start import prompt was handled | EasyAlias |
 | `~/.zshrc.easyalias-backup-*` | timestamped copy created before an import | user backup |
@@ -137,8 +138,12 @@ Main responsibilities:
 - validate alias names
 - update the command preview live
 - persist safe macOS suggestions directly with one click
+- paginate the 31 built-in Git, Docker, build, and utility suggestions
 - open the import scanner from the header and review `.zshrc` candidates
-- display, edit, and delete aliases
+- sort favorites before regular aliases
+- selectively export and restore portable JSON backups
+- restore or permanently remove aliases from the 30-day Trash
+- display, edit, and move aliases to Trash
 - call Tauri commands when the app runs natively
 
 The most important types:
@@ -159,6 +164,7 @@ type AliasEntry = {
   action: AliasAction;
   customCommand?: string;
   commandPreview: string;
+  favorite: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -186,11 +192,26 @@ stateDiagram-v2
 
 ## Backend
 
-The Tauri backend exposes five commands:
+The Tauri backend exposes commands in four groups:
 
 ```rust
+// Core persistence
 load_aliases()
 save_aliases(aliases)
+
+// Recoverable deletion
+list_trash()
+move_alias_to_trash(id)
+restore_trash_alias(id)
+permanently_delete_trash_alias(id)
+empty_trash()
+
+// Portable JSON backups
+export_alias_backup(selected_ids)
+inspect_alias_backup(path)
+import_alias_backup(path, selected_ids)
+
+// Legacy .zshrc migration
 scan_zshrc_import()
 dismiss_zshrc_import()
 import_zshrc_aliases(selected_ids, timestamp)
@@ -208,6 +229,10 @@ import_zshrc_aliases(selected_ids, timestamp)
 
 - `config.json` as the data source for the UI
 - `aliases.zsh` as the generated shell file
+
+Deleting an alias calls `move_alias_to_trash`. The backend removes it from the active config and generated shell file, records its deletion time in `trash.json`, and purges entries older than 30 days whenever Trash is loaded. Restore regenerates the active files; permanent deletion and `empty_trash` cannot be undone.
+
+Portable backup commands use a versioned EasyAlias JSON format. Export includes only selected aliases. Import first validates the file, rejects unsupported or oversized input, then lets the user choose which entries to merge. Matching alias names are replaced only when selected.
 
 `scan_zshrc_import` ignores the first-start marker, scans `~/.zshrc` again, filters names already managed by EasyAlias, and returns the remaining candidates for the header import dialog. It does not modify alias lines.
 
@@ -240,12 +265,21 @@ sequenceDiagram
   participant Config as config.json
   participant Zsh as aliases.zsh
 
-  UI->>UI: create/edit/delete AliasEntry
+  UI->>UI: create, edit, favorite, or use suggestion
   UI->>Rust: save_aliases(aliases)
   Rust->>Rust: validate alias names
   Rust->>Config: write pretty JSON
   Rust->>Zsh: write generated zsh aliases
   Rust-->>UI: updated AppState
+```
+
+```mermaid
+flowchart LR
+  Delete["Delete alias"] --> Trash["trash.json"]
+  Trash --> Restore["Restore to active aliases"]
+  Trash --> Permanent["Delete permanently"]
+  Trash --> Expire["Automatic purge after 30 days"]
+  Restore --> Config["config.json + aliases.zsh"]
 ```
 
 ## Shell Generation
@@ -305,6 +339,8 @@ Important boundaries:
 - Import scanning handles only unindented, one-line aliases with one assignment.
 - Alias options, nested declarations, repeated names, malformed lines, and multiple assignments are skipped.
 - A backup is written before any selected source line is changed.
+- Portable backup files are parsed as data and never executed.
+- Trash provides a 30-day recovery window unless the user explicitly deletes an entry permanently or empties it.
 
 ## Roadmap
 
@@ -315,5 +351,4 @@ Short term:
 Later:
 
 - settings window
-- optional export/backup mechanism
 - signed and notarized release automation
