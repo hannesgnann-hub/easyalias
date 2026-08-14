@@ -1845,7 +1845,7 @@ function renderBackupDialog() {
 
         <div class="modal-actions import-actions">
           <button class="ghost-button" type="button" data-action="close-backup" ${backupBusy ? "disabled" : ""}>Cancel</button>
-          <button class="primary-button" type="submit" ${selectedBackupIds.size && !backupBusy ? "" : "disabled"}>
+          <button class="primary-button" type="submit" data-backup-submit ${selectedBackupIds.size && !backupBusy ? "" : "disabled"}>
             ${backupBusy ? "Working..." : `${isExport ? "Export" : "Import"} Selected (${selectedBackupIds.size})`}
           </button>
         </div>
@@ -2068,6 +2068,25 @@ function renderEditModal() {
   `;
 }
 
+// Keep backup controls in sync without rebuilding the modal. Re-rendering would
+// replace the scroll container and jump the user back to the beginning.
+function syncBackupSelectionControls() {
+  const selectedCount = backupCandidates.filter((alias) => selectedBackupIds.has(alias.id)).length;
+  const selectAll = document.querySelector<HTMLInputElement>('input[name="backup-all"]');
+
+  if (selectAll) {
+    selectAll.checked = backupCandidates.length > 0 && selectedCount === backupCandidates.length;
+    selectAll.indeterminate = selectedCount > 0 && selectedCount < backupCandidates.length;
+  }
+
+  const submitButton = document.querySelector<HTMLButtonElement>("[data-backup-submit]");
+  if (submitButton) {
+    const actionLabel = backupDialogMode === "export" ? "Export" : "Import";
+    submitButton.disabled = selectedCount === 0 || backupBusy;
+    submitButton.textContent = backupBusy ? "Working..." : `${actionLabel} Selected (${selectedCount})`;
+  }
+}
+
 // Because render() replaces the DOM, event listeners are reattached after every render.
 // Small live-preview updates skip render(), so their listeners stay intact.
 function bindEvents() {
@@ -2132,10 +2151,15 @@ function bindEvents() {
   });
 
   document.querySelector<HTMLInputElement>('input[name="backup-all"]')?.addEventListener("change", (event) => {
-    selectedBackupIds = (event.target as HTMLInputElement).checked
+    const checked = (event.target as HTMLInputElement).checked;
+    selectedBackupIds = checked
       ? new Set(backupCandidates.map((alias) => alias.id))
       : new Set();
-    render();
+
+    document.querySelectorAll<HTMLInputElement>('input[name="backup-candidate"]').forEach((checkbox) => {
+      checkbox.checked = checked;
+    });
+    syncBackupSelectionControls();
   });
 
   document.querySelectorAll<HTMLInputElement>('input[name="backup-candidate"]').forEach((checkbox) => {
@@ -2145,9 +2169,13 @@ function bindEvents() {
       } else {
         selectedBackupIds.delete(checkbox.value);
       }
-      render();
+      syncBackupSelectionControls();
     });
   });
+
+  if (backupDialogMode) {
+    syncBackupSelectionControls();
+  }
 
   document.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((button) => {
     button.addEventListener("click", () => {
