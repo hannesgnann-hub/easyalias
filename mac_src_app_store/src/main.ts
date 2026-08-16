@@ -483,7 +483,6 @@ const appElement = app;
 const repoUrl = "https://github.com/hannesgnann-hub/easyalias";
 const redditUrl = "https://www.reddit.com/r/easyalias/";
 const websiteUrl = "https://easyalias.org";
-const sponsorUrl = "https://github.com/sponsors/hannesgnann-hub";
 
 // Tauri injects this marker only inside the native desktop runtime.
 // Browser preview mode uses localStorage and skips native-only features.
@@ -1781,13 +1780,6 @@ function render() {
       ${renderBackupDialog()}
       ${renderTrashDialog()}
       ${renderEditModal()}
-
-      <aside class="support-banner" aria-label="Support EasyAlias">
-        <span>Support EasyAlias development</span>
-        <a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>
-          Become a sponsor
-        </a>
-      </aside>
 
       <footer class="app-footer">
         <a href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>

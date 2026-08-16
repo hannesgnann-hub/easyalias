@@ -1,6 +1,6 @@
 [package]
 name = "easyalias"
-version = "1.0.0"
+version = "1.0.2"
 description = "Sandboxed macOS alias manager for Mac App Store distribution"
 authors = ["Hannes Gnann"]
 edition = "2021"
