@@ -1798,13 +1798,13 @@ function render() {
 
           <label>
             Command Name
-            <input name="name" value="${escapeHtml(form.name)}" placeholder="beerv2" autocomplete="off" />
+            <input name="name" value="${escapeHtml(form.name)}" placeholder="myproject" autocomplete="off" />
           </label>
 
           <label>
             Location / File / Command
             <span class="path-picker-row">
-              <input name="path" value="${escapeHtml(form.path)}" placeholder="~/Desktop/projects/beerv2_app" autocomplete="off" />
+              <input name="path" value="${escapeHtml(form.path)}" placeholder="~/Projects/my-app" autocomplete="off" />
               <button class="picker-button" type="button" title="Choose file" data-action="pick-path" data-target="create" data-kind="file">File</button>
               <button class="picker-button" type="button" title="Choose folder" data-action="pick-path" data-target="create" data-kind="folder">Folder</button>
             </span>
@@ -2205,13 +2205,13 @@ function renderEditModal() {
 
         <label>
           Command Name
-          <input name="edit-name" value="${escapeHtml(editForm.name)}" placeholder="beerv2" autocomplete="off" />
+          <input name="edit-name" value="${escapeHtml(editForm.name)}" placeholder="myproject" autocomplete="off" />
         </label>
 
         <label>
           Location / File / Command
           <span class="path-picker-row">
-            <input name="edit-path" value="${escapeHtml(editForm.path)}" placeholder="~/Desktop/projects/beerv2_app" autocomplete="off" />
+            <input name="edit-path" value="${escapeHtml(editForm.path)}" placeholder="~/Projects/my-app" autocomplete="off" />
             <button class="picker-button" type="button" title="Choose file" data-action="pick-path" data-target="edit" data-kind="file">File</button>
             <button class="picker-button" type="button" title="Choose folder" data-action="pick-path" data-target="edit" data-kind="folder">Folder</button>
           </span>
