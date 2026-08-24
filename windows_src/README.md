@@ -31,6 +31,7 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 - automatically generate `.cmd` files for `cmd.exe`
 - connect `~\.easyalias\bin` to the user's `PATH` on first Tauri startup
 - dismiss status messages manually or let them disappear after three seconds
+- build and run multi-step Automations (cmd.exe commands and timed waits) in a chosen working directory
 - link to the website, GitHub repository, EasyAlias subreddit, and sponsor page from the footer
 
 The [shared feature tour](../README.md#feature-tour) illustrates favorites, paged suggestions, portable backups, and Trash. Its screenshots use macOS window chrome, but the workflow is the same on Windows.
@@ -86,6 +87,7 @@ EasyAlias intentionally manages its own files and does not directly rewrite shel
 ~\.easyalias\.cmd-import-v1
 ~\.easyalias\import-backup-*\
 ~\.easyalias\trash.json
+~\.easyalias\automations.json
 ```
 
 Each alias becomes one command file:
@@ -258,6 +260,26 @@ A shortcut is stored like this:
 | Maven Build | `cd /d "<path>" && call mvn clean package` |
 | Custom Command | user-provided cmd/batch command |
 
+## Automation Data Model
+
+An automation is stored like this:
+
+```json
+{
+  "id": "uuid",
+  "name": "DevStart",
+  "path": "~/Projects/nava",
+  "steps": [
+    { "id": "uuid", "kind": "command", "command": "npm run dev", "seconds": 0, "behavior": "wait" },
+    { "id": "uuid", "kind": "wait", "command": "", "seconds": 10, "behavior": "wait" }
+  ],
+  "createdAt": "2026-08-24T18:00:00.000Z",
+  "updatedAt": "2026-08-24T18:00:00.000Z"
+}
+```
+
+Up to 200 automations with up to 100 steps each are supported; commands are limited to 16 KB and captured output is truncated at 20,000 characters.
+
 ## Suggested Shortcuts
 
 The optional Suggestions section starts collapsed. Clicking `Use` immediately creates the matching `.cmd` shortcut and removes that name from the available suggestions.
@@ -276,6 +298,21 @@ call mvnw.cmd %*
 Favorites stay above regular shortcuts, with both groups sorted alphabetically. The header export button writes all or selected shortcuts to a versioned EasyAlias JSON backup. Import accepts that backup through the native picker or drag and drop, validates it, and allows a selective restore. Selected matching names replace current managed entries; unselected shortcuts stay unchanged.
 
 Deleted shortcuts move to `~\.easyalias\trash.json` for 30 days. Trash can restore or permanently remove an individual entry, or empty all deleted entries immediately. Restoring also regenerates the matching `.cmd` file.
+
+## Automations
+
+The automations view (top-right play icon) is a separate workspace for repeatable, multi-step workflows, independent from the shortcut list.
+
+An automation has a name, a working directory, and an ordered list of steps. Each step is either:
+
+- **Command** – a command that runs through `cmd.exe` in the automation's working directory. Choose whether the next step waits for the command to finish, or starts as soon as the process begins (useful for long-running dev servers, started with `start /B`).
+- **Wait** – a pause of 1 second to 24 hours before the next step runs.
+
+All command steps in one run share a single `cmd.exe` session started in the automation's working directory, so it behaves like one continuous Command Prompt window: a `cd` or a `set` variable in one step is still in effect for every step after it, not just the one it was written in.
+
+Steps run top to bottom. Running an automation opens a progress dialog showing each step's status and captured output; a **Stop** button ends the session immediately, interrupting a command that is still running (a background process started with `start /B` keeps running on its own — Windows has no simple single-line way to report its PID, so background steps always show "Started in background." without one). If any foreground command exits with a non-zero status, the run stops and later steps are marked skipped.
+
+Automations are stored separately from shortcuts in `~\.easyalias\automations.json` and are only available in the real desktop app; the browser preview keeps its automations in `localStorage` and cannot execute commands.
 
 ## Documentation Layout
 

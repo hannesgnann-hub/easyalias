@@ -287,7 +287,7 @@ Up to 200 automations with up to 100 steps each are supported; commands are limi
 ## Roadmap
 
 - signed and notarized release automation
-- port Automations to the Mac App Store, Windows, and Linux editions
+- port Automations to Linux (Windows already has it; the sandboxed Mac App Store edition is intentionally excluded, see its architecture doc)
 
 ## Documentation Layout
 

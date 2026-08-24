@@ -407,4 +407,4 @@ Later:
 
 - settings window
 - signed and notarized release automation
-- port Automations to the other platform source trees
+- port Automations to Linux (Windows already has it; the sandboxed Mac App Store edition is intentionally excluded, see its architecture doc)

@@ -110,6 +110,7 @@ The Windows version can:
 - choose files and folders through the native Windows picker
 - generate `.cmd` files under `~/.easyalias/bin`
 - connect the command folder to the user `PATH`, so aliases work in `cmd.exe`
+- build and run multi-step Automations (cmd.exe commands and timed waits) in a chosen working directory
 - build as a Windows installer target through Tauri/NSIS
 
 The Microsoft Store version keeps the same unrestricted Win32 behavior and:

@@ -242,6 +242,14 @@ No broad home-directory entitlement, temporary exception, network server entitle
 
 `com.apple.security.files.user-selected.executable` exists only in `Entitlements.local.plist` for local ad-hoc sandbox testing. It is deliberately absent from the final `Entitlements.plist` after App Review flagged it as invalid for this Store submission. The Store configuration references only the final entitlement file.
 
+## Automations (Not Included)
+
+The direct macOS and Windows editions have an Automations feature: user-defined, multi-step workflows where the app itself spawns a persistent shell (`/bin/zsh` or `cmd.exe`) and runs arbitrary commands the user typed in, so tools like `npm`, `docker`, or `git` can be chained in one working directory.
+
+This Store edition deliberately does not include it. Running arbitrary child-process commands is a different capability than anything else in this app: every other feature here either edits the user's own `.zshrc` text or reads/writes inside the sandboxed container — nothing else spawns a process. Under App Sandbox, a child process inherits the parent's sandbox, so most commands (git, docker, network tools reaching outside the container, project directories never explicitly picked by the user) would fail unless every working directory were re-granted through the native folder picker with its own security-scoped bookmark, similar to the existing `.zshrc` bookmark in the Connection Flow above. Even with that limitation solved, a Store app whose primary new feature is "run whatever shell command the user types" is a meaningfully higher-risk App Review surface than the conservative, allowlisted file edits this edition already relies on (see Entitlements and Import Safety below).
+
+If this changes in the future, the working directory would need to go through the same picker-plus-bookmark pattern as `.zshrc`, not a free-text path field like the direct macOS/Windows editions use.
+
 ## Import Safety
 
 The parser skips:

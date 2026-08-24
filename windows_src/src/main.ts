@@ -1,13 +1,24 @@
 import "./styles.css";
 import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
   ChevronLeft,
   ChevronRight,
+  CircleStop,
+  Clock3,
   createIcons,
   FileDown,
   FileUp,
+  FolderOpen,
+  Pencil,
+  Play,
+  Plus,
   RotateCcw,
+  Save,
   SquareTerminal,
   Star,
+  Terminal,
   Trash2,
   X
 } from "lucide";
@@ -106,9 +117,52 @@ type AliasSuggestion = AliasForm & {
   description: string;
 };
 
-type PickerTarget = "create" | "edit";
+type PickerTarget = "create" | "edit" | "automation";
 type PickerKind = "file" | "folder";
 type BackupDialogMode = "export" | "import";
+type AppView = "aliases" | "automations";
+type AutomationStepKind = "command" | "wait";
+type AutomationCommandBehavior = "wait" | "background";
+type AutomationRunStepStatus = "pending" | "running" | "success" | "error" | "skipped";
+
+type AutomationStep = {
+  id: string;
+  kind: AutomationStepKind;
+  command: string;
+  seconds: number;
+  behavior: AutomationCommandBehavior;
+};
+
+type Automation = {
+  id: string;
+  name: string;
+  path: string;
+  steps: AutomationStep[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AutomationCommandResult = {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  processId: number | null;
+};
+
+type AutomationRunStep = {
+  status: AutomationRunStepStatus;
+  output: string;
+};
+
+type AutomationRunState = {
+  automationId: string;
+  sessionId: string;
+  running: boolean;
+  cancelRequested: boolean;
+  currentStep: number;
+  error: string;
+  steps: AutomationRunStep[];
+};
 
 const actionLabels: Record<AliasAction, string> = {
   navigate: "Go to Folder",
@@ -464,6 +518,14 @@ let trashEntries: TrashEntry[] = [];
 let trashOpen = false;
 let trashBusy = false;
 let trashError = "";
+// Automations have their own view and storage. The editor keeps a detached
+// draft so cancelling never mutates a saved workflow.
+let currentView: AppView = "aliases";
+let automations: Automation[] = [];
+let automationEditor: Automation | null = null;
+let automationBusy = false;
+let automationError = "";
+let automationRun: AutomationRunState | null = null;
 
 const trashRetentionSeconds = 30 * 24 * 60 * 60;
 
@@ -520,12 +582,23 @@ async function openPathPicker(target: PickerTarget, kind: PickerKind) {
       return;
     }
 
-    updateEditForm("path", selected);
-    const input = document.querySelector<HTMLInputElement>('input[name="edit-path"]');
-    if (input) input.value = selected;
+    if (target === "edit") {
+      updateEditForm("path", selected);
+      const input = document.querySelector<HTMLInputElement>('input[name="edit-path"]');
+      if (input) input.value = selected;
+      return;
+    }
+
+    if (automationEditor) {
+      automationEditor = { ...automationEditor, path: selected };
+      const input = document.querySelector<HTMLInputElement>('input[name="automation-path"]');
+      if (input) input.value = selected;
+    }
   } catch (pickerError) {
     const message = `Picker could not be opened: ${String(pickerError)}`;
-    if (target === "edit") {
+    if (target === "automation") {
+      automationError = message;
+    } else if (target === "edit") {
       editError = message;
     } else {
       error = message;
@@ -658,6 +731,12 @@ async function loadState() {
         trashEntries = [];
         error = `Trash could not be loaded: ${String(trashLoadError)}`;
       }
+      try {
+        automations = await invokeCommand<Automation[]>("load_automations");
+      } catch (automationLoadError) {
+        automations = [];
+        error = `Automations could not be loaded: ${String(automationLoadError)}`;
+      }
       selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
       render();
       return;
@@ -683,6 +762,10 @@ async function loadState() {
       .filter((entry) => entry.deletedAt > cutoff)
       .sort((left, right) => right.deletedAt - left.deletedAt);
     localStorage.setItem("easyalias-trash", JSON.stringify(trashEntries));
+  }
+  const savedAutomations = localStorage.getItem("easyalias-automations");
+  if (savedAutomations) {
+    automations = JSON.parse(savedAutomations) as Automation[];
   }
 
   render();
@@ -1426,9 +1509,597 @@ function clearRenderedEditError() {
   document.querySelector(".modal-error")?.remove();
 }
 
+function createAutomationStep(kind: AutomationStepKind): AutomationStep {
+  return {
+    id: createId(),
+    kind,
+    command: "",
+    seconds: kind === "wait" ? 10 : 0,
+    behavior: "wait"
+  };
+}
+
+function openAutomationsView() {
+  clearMessages();
+  automationError = "";
+  currentView = "automations";
+  render();
+}
+
+function closeAutomationsView() {
+  if (automationRun?.running) return;
+  automationEditor = null;
+  automationError = "";
+  automationRun = null;
+  currentView = "aliases";
+  render();
+}
+
+function openAutomationEditor(id?: string) {
+  const existing = id ? automations.find((automation) => automation.id === id) : null;
+  const timestamp = nowIso();
+  automationEditor = existing
+    ? {
+        ...existing,
+        steps: existing.steps.map((step) => ({ ...step }))
+      }
+    : {
+        id: createId(),
+        name: "",
+        path: "~/Projects",
+        steps: [createAutomationStep("command")],
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+  automationError = "";
+  render();
+}
+
+function closeAutomationEditor() {
+  if (automationBusy) return;
+  automationEditor = null;
+  automationError = "";
+  render();
+}
+
+function updateAutomationEditor<K extends "name" | "path">(key: K, value: Automation[K]) {
+  if (!automationEditor) return;
+  automationEditor = { ...automationEditor, [key]: value };
+  automationError = "";
+  document.querySelector(".automation-editor .modal-error")?.remove();
+}
+
+function updateAutomationStep<K extends keyof AutomationStep>(
+  index: number,
+  key: K,
+  value: AutomationStep[K],
+  rerender = false
+) {
+  if (!automationEditor || !automationEditor.steps[index]) return;
+  const steps = automationEditor.steps.map((step, stepIndex) =>
+    stepIndex === index ? { ...step, [key]: value } : step
+  );
+  automationEditor = { ...automationEditor, steps };
+  automationError = "";
+  if (rerender) render();
+}
+
+function addAutomationStep(kind: AutomationStepKind) {
+  if (!automationEditor) return;
+  automationEditor = {
+    ...automationEditor,
+    steps: [...automationEditor.steps, createAutomationStep(kind)]
+  };
+  automationError = "";
+  render();
+}
+
+function moveAutomationStep(index: number, offset: number) {
+  if (!automationEditor) return;
+  const target = index + offset;
+  if (target < 0 || target >= automationEditor.steps.length) return;
+  const steps = [...automationEditor.steps];
+  [steps[index], steps[target]] = [steps[target], steps[index]];
+  automationEditor = { ...automationEditor, steps };
+  render();
+}
+
+function removeAutomationStep(index: number) {
+  if (!automationEditor || automationEditor.steps.length === 1) {
+    automationError = "An automation needs at least one step.";
+    render();
+    return;
+  }
+  automationEditor = {
+    ...automationEditor,
+    steps: automationEditor.steps.filter((_, stepIndex) => stepIndex !== index)
+  };
+  automationError = "";
+  render();
+}
+
+function validateAutomation(automation: Automation) {
+  if (!automation.name.trim()) return "Enter a name for the automation.";
+  if (!automation.path.trim()) return "Choose a working directory.";
+  if (!automation.steps.length) return "Add at least one step.";
+
+  for (const [index, step] of automation.steps.entries()) {
+    if (step.kind === "command" && !step.command.trim()) {
+      return `Step ${index + 1} needs a command.`;
+    }
+    if (step.kind === "wait" && (!Number.isFinite(step.seconds) || step.seconds < 1 || step.seconds > 86400)) {
+      return `Step ${index + 1} must wait between 1 second and 24 hours.`;
+    }
+  }
+
+  return "";
+}
+
+async function persistAutomations(next: Automation[]) {
+  if (isTauriRuntime()) {
+    automations = await invokeCommand<Automation[]>("save_automations", { automations: next });
+    return;
+  }
+  automations = next;
+  localStorage.setItem("easyalias-automations", JSON.stringify(next));
+}
+
+async function saveAutomation(event: SubmitEvent) {
+  event.preventDefault();
+  if (!automationEditor || automationBusy) return;
+
+  automationError = validateAutomation(automationEditor);
+  if (automationError) {
+    render();
+    return;
+  }
+  const duplicate = automations.find(
+    (automation) =>
+      automation.id !== automationEditor?.id &&
+      automation.name.trim().toLocaleLowerCase() === automationEditor?.name.trim().toLocaleLowerCase()
+  );
+  if (duplicate) {
+    automationError = `Automation "${automationEditor.name.trim()}" already exists.`;
+    render();
+    return;
+  }
+
+  automationBusy = true;
+  render();
+  const savedAutomation: Automation = {
+    ...automationEditor,
+    name: automationEditor.name.trim(),
+    path: automationEditor.path.trim(),
+    steps: automationEditor.steps.map((step) => ({
+      ...step,
+      command: step.kind === "command" ? step.command.trim() : "",
+      seconds: step.kind === "wait" ? Math.floor(step.seconds) : 0
+    })),
+    updatedAt: nowIso()
+  };
+  const exists = automations.some((automation) => automation.id === savedAutomation.id);
+  const next = exists
+    ? automations.map((automation) =>
+        automation.id === savedAutomation.id ? savedAutomation : automation
+      )
+    : [...automations, savedAutomation];
+
+  try {
+    await persistAutomations(next);
+    automationEditor = null;
+    notice = `Automation "${savedAutomation.name}" saved.`;
+  } catch (saveError) {
+    automationError = String(saveError);
+  } finally {
+    automationBusy = false;
+    render();
+  }
+}
+
+async function deleteAutomation(id: string) {
+  if (automationBusy || automationRun?.running) return;
+  const automation = automations.find((item) => item.id === id);
+  if (!automation || !window.confirm(`Delete automation "${automation.name}"?`)) return;
+  automationBusy = true;
+  try {
+    await persistAutomations(automations.filter((item) => item.id !== id));
+    notice = `Automation "${automation.name}" deleted.`;
+  } catch (deleteError) {
+    error = String(deleteError);
+  } finally {
+    automationBusy = false;
+    render();
+  }
+}
+
+async function stopAutomation() {
+  if (!automationRun?.running || automationRun.cancelRequested) return;
+  automationRun.cancelRequested = true;
+  render();
+  // Killing the session immediately interrupts a command that is still
+  // running; without this, Stop would only take effect once that command
+  // finished on its own and the loop reached its next cancellation check.
+  try {
+    await invokeCommand<void>("stop_automation_session", { sessionId: automationRun.sessionId });
+  } catch {
+    // The run loop's own cleanup will report the failure if the session is gone.
+  }
+}
+
+function closeAutomationRun() {
+  if (automationRun?.running) return;
+  automationRun = null;
+  render();
+}
+
+async function waitForAutomation(seconds: number, state: AutomationRunState) {
+  const end = Date.now() + seconds * 1000;
+  while (Date.now() < end) {
+    if (state.cancelRequested) return false;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(250, end - Date.now())));
+  }
+  return !state.cancelRequested;
+}
+
+async function runAutomation(id: string) {
+  if (automationRun?.running || automationBusy) return;
+  const automation = automations.find((item) => item.id === id);
+  if (!automation) return;
+  if (!isTauriRuntime()) {
+    error = "Automations can only run inside the EasyAlias desktop app.";
+    render();
+    return;
+  }
+
+  const runState: AutomationRunState = {
+    automationId: id,
+    sessionId: createId(),
+    running: true,
+    cancelRequested: false,
+    currentStep: 0,
+    error: "",
+    steps: automation.steps.map(() => ({ status: "pending", output: "" }))
+  };
+  automationRun = runState;
+  render();
+
+  // All command steps share this one shell session, so `cd` and exported
+  // variables from an earlier step are still in effect for later ones -
+  // the whole run behaves like one continuous terminal, not isolated calls.
+  try {
+    await invokeCommand<void>("start_automation_session", { sessionId: runState.sessionId, path: automation.path });
+  } catch (sessionError) {
+    runState.error = `Automation session could not be started: ${String(sessionError)}`;
+    runState.steps = runState.steps.map((step) => ({ ...step, status: "skipped" }));
+    runState.running = false;
+    render();
+    return;
+  }
+
+  for (const [index, step] of automation.steps.entries()) {
+    if (runState.cancelRequested) break;
+    runState.currentStep = index;
+    runState.steps[index].status = "running";
+    render();
+
+    try {
+      if (step.kind === "wait") {
+        const completed = await waitForAutomation(step.seconds, runState);
+        if (!completed) break;
+        runState.steps[index] = {
+          status: "success",
+          output: `Waited ${step.seconds} ${step.seconds === 1 ? "second" : "seconds"}.`
+        };
+      } else {
+        const result = await invokeCommand<AutomationCommandResult>("run_session_command", {
+          sessionId: runState.sessionId,
+          command: step.command,
+          background: step.behavior === "background"
+        });
+        const output = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n");
+        if (step.behavior === "background") {
+          runState.steps[index] = {
+            status: "success",
+            output: result.processId ? `Started in background (PID ${result.processId}).` : "Started in background."
+          };
+        } else if (result.exitCode === 0) {
+          runState.steps[index] = { status: "success", output: output || "Command completed." };
+        } else {
+          runState.steps[index] = {
+            status: "error",
+            output: output || `Command exited with code ${result.exitCode ?? "unknown"}.`
+          };
+          runState.error = `Step ${index + 1} failed. Remaining steps were not started.`;
+          break;
+        }
+      }
+    } catch (runError) {
+      runState.steps[index] = { status: "error", output: String(runError) };
+      runState.error = `Step ${index + 1} could not be completed.`;
+      break;
+    }
+  }
+
+  if (runState.cancelRequested) {
+    runState.error = "Automation stopped. A background process that already started keeps running.";
+  }
+  try {
+    await invokeCommand<void>("stop_automation_session", { sessionId: runState.sessionId });
+  } catch {
+    // The session's own process already exited; nothing left to clean up.
+  }
+  runState.steps = runState.steps.map((step) =>
+    step.status === "pending" ? { ...step, status: "skipped" } : step
+  );
+  runState.running = false;
+  render();
+}
+
+function automationStepLabel(step: AutomationStep) {
+  if (step.kind === "wait") return `Wait ${step.seconds}s`;
+  return step.command || "Command not configured";
+}
+
+function renderAutomationEditor() {
+  if (!automationEditor) return "";
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <form class="modal-card automation-editor" id="automation-form" role="dialog" aria-modal="true" aria-labelledby="automation-editor-title">
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">Workflow</p>
+            <h2 id="automation-editor-title">${escapeHtml(automationEditor.name || "New automation")}</h2>
+          </div>
+          <button class="ghost-button modal-close" type="button" data-automation-action="close-editor" ${automationBusy ? "disabled" : ""}>Close</button>
+        </div>
+
+        <p class="automation-intro">Commands run from top to bottom in the same working directory. Background commands let long-running development servers start without blocking the next step.</p>
+        ${automationError ? `<p class="modal-error">${escapeHtml(automationError)}</p>` : ""}
+
+        <div class="automation-form-grid">
+          <label>
+            Name
+            <input name="automation-name" value="${escapeHtml(automationEditor.name)}" placeholder="Development workflow" autocomplete="off" />
+          </label>
+          <label>
+            Working Directory
+            <span class="automation-path-row">
+              <input name="automation-path" value="${escapeHtml(automationEditor.path)}" placeholder="~/Projects/my-app" autocomplete="off" />
+              <button class="picker-button automation-folder-button" type="button" title="Choose working directory" aria-label="Choose working directory" data-automation-action="pick-folder"><i data-lucide="folder-open"></i></button>
+            </span>
+          </label>
+        </div>
+
+        <div class="automation-step-heading">
+          <div>
+            <h3>Steps</h3>
+            <span>${automationEditor.steps.length} configured</span>
+          </div>
+          <div class="automation-add-actions">
+            <button class="ghost-button" type="button" data-automation-action="add-command"><i data-lucide="terminal"></i><span>Add command</span></button>
+            <button class="ghost-button" type="button" data-automation-action="add-wait"><i data-lucide="clock-3"></i><span>Add wait</span></button>
+          </div>
+        </div>
+
+        <div class="automation-step-list">
+          ${automationEditor.steps
+            .map(
+              (step, index) => `
+                <article class="automation-step-editor" data-step-index="${index}">
+                  <div class="automation-step-number">${index + 1}</div>
+                  <div class="automation-step-fields">
+                    <label>
+                      Step Type
+                      <select name="automation-step-kind" data-step-index="${index}">
+                        <option value="command" ${step.kind === "command" ? "selected" : ""}>Command</option>
+                        <option value="wait" ${step.kind === "wait" ? "selected" : ""}>Wait</option>
+                      </select>
+                    </label>
+                    ${
+                      step.kind === "command"
+                        ? `<label class="automation-command-field">
+                            Command
+                            <textarea name="automation-step-command" data-step-index="${index}" rows="2" placeholder="npm run dev">${escapeHtml(step.command)}</textarea>
+                          </label>
+                          <label>
+                            Continue When
+                            <select name="automation-step-behavior" data-step-index="${index}">
+                              <option value="wait" ${step.behavior === "wait" ? "selected" : ""}>Command finishes</option>
+                              <option value="background" ${step.behavior === "background" ? "selected" : ""}>Process starts</option>
+                            </select>
+                          </label>`
+                        : `<label class="automation-wait-field">
+                            Seconds
+                            <input name="automation-step-seconds" data-step-index="${index}" type="number" min="1" max="86400" step="1" value="${step.seconds}" />
+                          </label>`
+                    }
+                  </div>
+                  <div class="automation-step-controls">
+                    <button type="button" title="Move step up" aria-label="Move step ${index + 1} up" data-automation-action="move-step" data-step-index="${index}" data-offset="-1" ${index === 0 ? "disabled" : ""}><i data-lucide="arrow-up"></i></button>
+                    <button type="button" title="Move step down" aria-label="Move step ${index + 1} down" data-automation-action="move-step" data-step-index="${index}" data-offset="1" ${index === automationEditor!.steps.length - 1 ? "disabled" : ""}><i data-lucide="arrow-down"></i></button>
+                    <button class="danger" type="button" title="Remove step" aria-label="Remove step ${index + 1}" data-automation-action="remove-step" data-step-index="${index}"><i data-lucide="trash-2"></i></button>
+                  </div>
+                </article>`
+            )
+            .join("")}
+        </div>
+
+        <div class="modal-actions">
+          <button class="ghost-button" type="button" data-automation-action="close-editor" ${automationBusy ? "disabled" : ""}>Cancel</button>
+          <button class="primary-button" type="submit" ${automationBusy ? "disabled" : ""}><i data-lucide="save"></i><span>${automationBusy ? "Saving..." : "Save automation"}</span></button>
+        </div>
+      </form>
+    </section>`;
+}
+
+function renderAutomationRun() {
+  if (!automationRun) return "";
+  const automation = automations.find((item) => item.id === automationRun?.automationId);
+  if (!automation) return "";
+  const successful = automationRun.steps.filter((step) => step.status === "success").length;
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <section class="modal-card automation-runner" role="dialog" aria-modal="true" aria-labelledby="automation-run-title">
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">${automationRun.running ? "Running" : automationRun.error ? "Run stopped" : "Completed"}</p>
+            <h2 id="automation-run-title">${escapeHtml(automation.name)}</h2>
+          </div>
+          <span class="automation-progress">${successful} / ${automation.steps.length}</span>
+        </div>
+        <p class="automation-run-path"><i data-lucide="folder-open"></i><code>${escapeHtml(automation.path)}</code></p>
+        ${automationRun.error ? `<p class="modal-error">${escapeHtml(automationRun.error)}</p>` : ""}
+        <div class="automation-run-list">
+          ${automation.steps
+            .map((step, index) => {
+              const result = automationRun!.steps[index];
+              return `<article class="automation-run-step is-${result.status}">
+                <div class="run-step-marker">${index + 1}</div>
+                <div class="run-step-copy">
+                  <div><strong>${step.kind === "wait" ? "Wait" : "Command"}</strong><span>${result.status}</span></div>
+                  <code>${escapeHtml(automationStepLabel(step))}</code>
+                  ${result.output ? `<pre>${escapeHtml(result.output)}</pre>` : ""}
+                </div>
+              </article>`;
+            })
+            .join("")}
+        </div>
+        <div class="modal-actions">
+          ${
+            automationRun.running
+              ? `<button class="danger-button" type="button" data-automation-action="stop-run" ${automationRun.cancelRequested ? "disabled" : ""}><i data-lucide="circle-stop"></i><span>${automationRun.cancelRequested ? "Stopping..." : "Stop"}</span></button>`
+              : `<button class="ghost-button" type="button" data-automation-action="close-run">Close</button>
+                 <button class="primary-button" type="button" data-automation-action="run" data-id="${escapeHtml(automation.id)}"><i data-lucide="play"></i><span>Run again</span></button>`
+          }
+        </div>
+      </section>
+    </section>`;
+}
+
+function renderAutomationsView() {
+  const sortedAutomations = [...automations].sort((left, right) => left.name.localeCompare(right.name));
+  appElement.innerHTML = `
+    <section class="shell automation-shell">
+      <header class="topbar automation-topbar">
+        <div>
+          <p class="eyebrow">Windows Workflow Runner</p>
+          <h1>Automations</h1>
+        </div>
+        <div class="topbar-actions">
+          <button class="header-icon-button" type="button" title="Back to aliases" aria-label="Back to aliases" data-automation-action="back" ${automationRun?.running ? "disabled" : ""}><i data-lucide="arrow-left"></i></button>
+          <button class="header-icon-button automation-create-button" type="button" title="Create automation" aria-label="Create automation" data-automation-action="new" ${automationRun?.running ? "disabled" : ""}><i data-lucide="plus"></i></button>
+        </div>
+      </header>
+
+      <section class="automation-summary">
+        <div><span>Automations</span><strong>${automations.length}</strong></div>
+        <div><span>Execution</span><strong>Sequential</strong></div>
+        <div><span>Shell</span><strong>cmd.exe</strong></div>
+      </section>
+
+      ${
+        notice
+          ? `<div class="message-banner notice" role="status"><span>${escapeHtml(notice)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-automation-action="dismiss-message"><i data-lucide="x"></i></button></div>`
+          : ""
+      }
+      ${
+        error
+          ? `<div class="message-banner error" role="alert"><span>${escapeHtml(error)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-automation-action="dismiss-message"><i data-lucide="x"></i></button></div>`
+          : ""
+      }
+
+      <section class="automation-overview">
+        <div class="automation-overview-header">
+          <div><h2>Your Automations</h2><span>Run repeatable project workflows from one place.</span></div>
+          <button class="primary-button" type="button" data-automation-action="new" ${automationRun?.running ? "disabled" : ""}><i data-lucide="plus"></i><span>New automation</span></button>
+        </div>
+        ${
+          sortedAutomations.length
+            ? `<div class="automation-grid">
+                ${sortedAutomations
+                  .map(
+                    (automation) => `<article class="automation-card">
+                      <div class="automation-card-header">
+                        <div><strong>${escapeHtml(automation.name)}</strong><code>${escapeHtml(automation.path)}</code></div>
+                        <span>${automation.steps.length} ${automation.steps.length === 1 ? "step" : "steps"}</span>
+                      </div>
+                      <ol class="automation-preview-list">
+                        ${automation.steps
+                          .slice(0, 4)
+                          .map((step) => `<li><span>${step.kind === "wait" ? "Wait" : step.behavior === "background" ? "Start" : "Run"}</span><code>${escapeHtml(automationStepLabel(step))}</code></li>`)
+                          .join("")}
+                        ${automation.steps.length > 4 ? `<li class="automation-more">+ ${automation.steps.length - 4} more</li>` : ""}
+                      </ol>
+                      <div class="automation-card-actions">
+                        <button class="primary-button automation-run-button" type="button" data-automation-action="run" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="play"></i><span>Run</span></button>
+                        <button class="header-icon-button" type="button" title="Edit ${escapeHtml(automation.name)}" aria-label="Edit ${escapeHtml(automation.name)}" data-automation-action="edit" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="pencil"></i></button>
+                        <button class="header-icon-button automation-delete-button" type="button" title="Delete ${escapeHtml(automation.name)}" aria-label="Delete ${escapeHtml(automation.name)}" data-automation-action="delete" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="trash-2"></i></button>
+                      </div>
+                    </article>`
+                  )
+                  .join("")}
+              </div>`
+            : `<div class="automation-empty"><div class="automation-empty-icon"><i data-lucide="play"></i></div><strong>No automations yet</strong><span>Combine project commands and waits into a repeatable workflow.</span><button class="primary-button" type="button" data-automation-action="new"><i data-lucide="plus"></i><span>Create automation</span></button></div>`
+        }
+      </section>
+
+      ${renderAutomationEditor()}
+      ${renderAutomationRun()}
+
+      <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>Become a sponsor</a></aside>
+      <footer class="app-footer"><a href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>© Hannes Gnann</a><span aria-hidden="true">-</span><a href="${redditUrl}" target="_blank" rel="noreferrer" data-external-link>Reddit</a><span aria-hidden="true">-</span><a href="${websiteUrl}" target="_blank" rel="noreferrer" data-external-link>Website</a></footer>
+    </section>`;
+
+  createIcons({
+    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, FolderOpen, Pencil, Play, Plus, Save, Terminal, Trash2, X },
+    attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
+  });
+  scheduleMessageDismissal();
+  bindAutomationEvents();
+}
+
+function bindAutomationEvents() {
+  document.querySelector<HTMLFormElement>("#automation-form")?.addEventListener("submit", saveAutomation);
+  document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => link.addEventListener("click", openExternalLink));
+  document.querySelector<HTMLInputElement>('input[name="automation-name"]')?.addEventListener("input", (event) => updateAutomationEditor("name", (event.target as HTMLInputElement).value));
+  document.querySelector<HTMLInputElement>('input[name="automation-path"]')?.addEventListener("input", (event) => updateAutomationEditor("path", (event.target as HTMLInputElement).value));
+  document.querySelectorAll<HTMLSelectElement>('select[name="automation-step-kind"]').forEach((select) => select.addEventListener("change", () => updateAutomationStep(Number(select.dataset.stepIndex), "kind", select.value as AutomationStepKind, true)));
+  document.querySelectorAll<HTMLTextAreaElement>('textarea[name="automation-step-command"]').forEach((input) => input.addEventListener("input", () => updateAutomationStep(Number(input.dataset.stepIndex), "command", input.value)));
+  document.querySelectorAll<HTMLSelectElement>('select[name="automation-step-behavior"]').forEach((select) => select.addEventListener("change", () => updateAutomationStep(Number(select.dataset.stepIndex), "behavior", select.value as AutomationCommandBehavior)));
+  document.querySelectorAll<HTMLInputElement>('input[name="automation-step-seconds"]').forEach((input) => input.addEventListener("input", () => updateAutomationStep(Number(input.dataset.stepIndex), "seconds", Number(input.value))));
+
+  document.querySelectorAll<HTMLButtonElement>("[data-automation-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.automationAction;
+      const id = button.dataset.id;
+      const index = Number(button.dataset.stepIndex);
+      if (action === "back") closeAutomationsView();
+      if (action === "new") openAutomationEditor();
+      if (action === "edit" && id) openAutomationEditor(id);
+      if (action === "delete" && id) void deleteAutomation(id);
+      if (action === "run" && id) void runAutomation(id);
+      if (action === "close-editor") closeAutomationEditor();
+      if (action === "pick-folder") void openPathPicker("automation", "folder");
+      if (action === "add-command") addAutomationStep("command");
+      if (action === "add-wait") addAutomationStep("wait");
+      if (action === "move-step") moveAutomationStep(index, Number(button.dataset.offset));
+      if (action === "remove-step") removeAutomationStep(index);
+      if (action === "stop-run") void stopAutomation();
+      if (action === "close-run") closeAutomationRun();
+      if (action === "dismiss-message") dismissMessage();
+    });
+  });
+}
+
 // Main render function. This replaces the app HTML from state and then calls bindEvents().
 // For a larger app, this would be a good candidate to split into smaller render helpers.
 function render() {
+  if (currentView === "automations") {
+    renderAutomationsView();
+    return;
+  }
   const aliases = [...appState.aliases].sort(compareAliases);
   const existingNames = new Set(aliases.map((alias) => alias.name.toLowerCase()));
   const availableSuggestions = aliasSuggestions.filter(
@@ -1453,6 +2124,13 @@ function render() {
           <h1>EasyAlias</h1>
         </div>
         <div class="topbar-actions">
+          <button
+            class="header-icon-button"
+            type="button"
+            title="Open automations"
+            aria-label="Open automations"
+            data-action="open-automations"
+          ><i data-lucide="play"></i></button>
           <button
             class="header-icon-button"
             type="button"
@@ -1747,6 +2425,7 @@ function render() {
       SquareTerminal,
       FileDown,
       FileUp,
+      Play,
       RotateCcw,
       Star,
       Trash2,
@@ -2191,6 +2870,7 @@ function bindEvents() {
       const action = button.dataset.action;
       const id = button.dataset.id;
 
+      if (action === "open-automations") openAutomationsView();
       if (action === "open-import") void openCommandFileImport();
       if (action === "open-backup-export") openBackupExport();
       if (action === "open-backup-import") openBackupImport();

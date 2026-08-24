@@ -99,6 +99,7 @@ flowchart TD
 | `~/.easyalias/bin/*.cmd` | generated command files | EasyAlias |
 | `~/.easyalias/.cmd-import-v1` | records that the automatic first-start import prompt was handled | EasyAlias |
 | `~/.easyalias/import-backup-*` | copies of imported legacy command files | user backup |
+| `~/.easyalias/automations.json` | saved multi-step automations | EasyAlias |
 | User `PATH` | contains `~/.easyalias/bin` | user + EasyAlias setup |
 
 On first Tauri startup, the backend ensures:
@@ -147,6 +148,7 @@ Main responsibilities:
 - selectively export and restore portable JSON backups
 - restore or permanently remove shortcuts from the 30-day Trash
 - display, edit, and move shortcuts to Trash
+- build, save, and run multi-step Automations in a separate view
 - call Tauri commands when the app runs natively
 
 The most important types:
@@ -168,6 +170,23 @@ type AliasEntry = {
   customCommand?: string;
   commandPreview: string;
   favorite: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AutomationStep = {
+  id: string;
+  kind: "command" | "wait";
+  command: string;
+  seconds: number;
+  behavior: "wait" | "background";
+};
+
+type Automation = {
+  id: string;
+  name: string;
+  path: string;
+  steps: AutomationStep[];
   createdAt: string;
   updatedAt: string;
 };
@@ -218,6 +237,13 @@ import_alias_backup(path, selected_ids)
 scan_command_file_import()
 dismiss_command_file_import()
 import_command_files(selected_ids, timestamp)
+
+// Automations
+load_automations()
+save_automations(automations)
+start_automation_session(session_id, path)
+run_session_command(session_id, command, background)
+stop_automation_session(session_id)
 ```
 
 `load_aliases` handles startup setup:
@@ -290,6 +316,33 @@ flowchart LR
   Restore --> Files["config.json + generated .cmd"]
 ```
 
+Automations are stored independently of shortcuts in `~/.easyalias/automations.json` and validated on every load and save: up to `MAX_AUTOMATIONS` (200) automations, each with 1-`MAX_AUTOMATION_STEPS` (100) steps, unique automation and step ids, command steps under `MAX_AUTOMATION_COMMAND_BYTES` (16 KB), and wait steps between 1 second and `MAX_WAIT_SECONDS` (24 hours).
+
+Each run gets one persistent `cmd.exe /Q` process (an `AutomationSessionHandle`, keyed by a frontend-generated `session_id` in the `AutomationSessions` Tauri-managed state) instead of a fresh process per step. This is what lets `cd` and `set` environment variables from one step carry over to the next, the same way they would in a real Command Prompt window. `/Q` suppresses cmd.exe echoing each line it reads back from stdin.
+
+- `start_automation_session` resolves the working directory (expanding a leading `~`, matching the tilde convention already used for alias paths) and spawns the shell with piped stdin/stdout. It deliberately skips `canonicalize()`: on Windows that can return an extended-length `\\?\` path, and cmd.exe's handling of that prefix for a process's working directory is unreliable across Windows versions. A background thread streams output lines into an `mpsc` channel.
+- `run_session_command` writes the step's command to the session's stdin followed by a unique echoed sentinel, then reads from the channel until that sentinel appears. Foreground commands are wrapped as `(command) 2>&1` so stderr merges into the captured output and the whole command line (including any internal `&&`/`|`) is redirected, with the sentinel carrying `%ERRORLEVEL%`; background commands run as `start "" /B cmd /C "command"` and the sentinel fires as soon as the job has started rather than waiting for it to finish. `start /B` has no simple single-line way to report a PID, so background steps always report `process_id: None`. Captured output is truncated to `MAX_AUTOMATION_OUTPUT_CHARS` (20,000 characters).
+- `stop_automation_session` kills the session's cmd.exe process specifically, so it can interrupt a stuck foreground command without touching background jobs that process already started with `start /B` — those keep running detached. It is called both when the user clicks Stop and automatically once a run finishes.
+
+```mermaid
+sequenceDiagram
+  participant UI as Frontend
+  participant Rust as Rust Backend
+  participant Shell as Persistent cmd.exe /Q
+
+  UI->>Rust: start_automation_session(sessionId, path)
+  Rust->>Shell: spawn once in working directory
+  loop each step
+    UI->>Rust: run_session_command(sessionId, command, background)
+    Rust->>Shell: write command + sentinel to stdin
+    Shell-->>Rust: output lines until sentinel
+    Rust-->>UI: AutomationCommandResult
+    UI->>UI: mark step success/error, advance or stop
+  end
+  UI->>Rust: stop_automation_session(sessionId)
+  Rust->>Shell: kill (background jobs already started keep running)
+```
+
 ## Command Generation
 
 An alias entry becomes a small `.cmd` file:
@@ -346,6 +399,7 @@ Important boundaries:
 - Portable backup files are parsed as data and never executed.
 - Trash provides a 30-day recovery window unless the user explicitly removes an entry permanently or empties it.
 - Folder-changing aliases persist in `cmd.exe`; from PowerShell they run as external commands and cannot change the parent PowerShell location.
+- Automation commands run only when the user explicitly clicks Run, execute in the automation's own cmd.exe session, and are rejected outright in browser preview mode (no `start_automation_session`/`run_session_command` backend to call).
 
 ## Runtime Notes
 
@@ -371,6 +425,7 @@ type "%USERPROFILE%\.easyalias\bin\beerv2.cmd"
 Short term:
 
 - tests for command generation
+- verify the automation session (persistent `cmd.exe`, `cd`/`set` carrying across steps, `start /B` background steps) on an actual Windows machine — it was built and code-reviewed on macOS, where `cmd.exe` cannot be spawned, so the two session-behavior tests in `main.rs` are gated to `#[cfg(target_os = "windows")]` and have not been run yet
 
 Later:
 
