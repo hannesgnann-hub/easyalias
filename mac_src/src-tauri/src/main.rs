@@ -2,11 +2,14 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
-    io::ErrorKind,
+    io::{BufRead, BufReader, ErrorKind, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
+    sync::{mpsc, Mutex},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tauri::Manager;
 
 // Must match the frontend AliasEntry shape. serde's camelCase conversion keeps
 // Rust idiomatic while still producing JSON fields like customCommand/createdAt.
@@ -140,6 +143,23 @@ struct AutomationCommandResult {
     stderr: String,
     process_id: Option<u32>,
 }
+
+// One automation run gets one persistent /bin/zsh process, so `cd` and
+// exported environment variables carry over between steps exactly as they
+// would in a real terminal. A background thread streams its merged
+// stdout/stderr line by line into `output_rx`; commands are matched to their
+// output by writing a unique sentinel after each one.
+struct AutomationSessionHandle {
+    child: Child,
+    stdin: ChildStdin,
+    output_rx: mpsc::Receiver<String>,
+}
+
+#[derive(Default)]
+struct AutomationSessions(Mutex<HashMap<String, AutomationSessionHandle>>);
+
+const AUTOMATION_DONE_MARKER: &str = "__EASYALIAS_AUTOMATION_DONE__";
+const AUTOMATION_BG_MARKER: &str = "__EASYALIAS_AUTOMATION_BG__";
 
 // Keep the established aliases.zsh path for backwards compatibility. The file
 // contains syntax understood by both zsh and Bash, regardless of its extension.
@@ -872,14 +892,125 @@ fn save_automations(automations: Vec<Automation>) -> Result<Vec<Automation>, Str
     Ok(automations)
 }
 
-// Commands run in the selected directory through the user's normal macOS zsh
-// environment. Foreground commands return their output and exit status;
-// background commands detach stdin/stdout and return immediately with a PID.
+// Spawns the one persistent shell an automation run drives its steps
+// through, with a background thread streaming its merged stdout/stderr into
+// a channel so `execute_in_session` can read command output synchronously.
+fn spawn_automation_session(working_directory: &Path) -> Result<AutomationSessionHandle, String> {
+    let mut child = Command::new("/bin/zsh")
+        .arg("-l")
+        .current_dir(working_directory)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("Shell session could not be started: {}", error))?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Shell session has no input stream.".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Shell session has no output stream.".to_string())?;
+
+    let (sender, receiver) = mpsc::channel::<String>();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            match line {
+                Ok(text) => {
+                    if sender.send(text).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    Ok(AutomationSessionHandle {
+        child,
+        stdin,
+        output_rx: receiver,
+    })
+}
+
+// Runs one command inside an already-running automation session, so `cd`
+// and exported variables from earlier steps are still in effect. Foreground
+// commands wait for a completion sentinel carrying the exit code; background
+// commands only wait for confirmation that the job was started, so a
+// long-running dev server does not block the next step.
+fn execute_in_session(
+    session: &mut AutomationSessionHandle,
+    command: &str,
+    background: bool,
+) -> Result<AutomationCommandResult, String> {
+    let send_error = |error: std::io::Error| format!("Command could not be sent: {}", error);
+    let recv_error = || "Automation session ended unexpectedly.".to_string();
+
+    if background {
+        writeln!(session.stdin, "{{ {} ; }} >/dev/null 2>&1 &", command).map_err(send_error)?;
+        writeln!(session.stdin, "echo \"{}$!\"", AUTOMATION_BG_MARKER).map_err(send_error)?;
+        session.stdin.flush().map_err(send_error)?;
+
+        loop {
+            let line = session.output_rx.recv().map_err(|_| recv_error())?;
+            if let Some(pid) = line.strip_prefix(AUTOMATION_BG_MARKER) {
+                return Ok(AutomationCommandResult {
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    process_id: pid.trim().parse::<u32>().ok(),
+                });
+            }
+        }
+    }
+
+    writeln!(session.stdin, "{{ {} ; }} 2>&1", command).map_err(send_error)?;
+    writeln!(session.stdin, "echo \"{}$?\"", AUTOMATION_DONE_MARKER).map_err(send_error)?;
+    session.stdin.flush().map_err(send_error)?;
+
+    let mut collected = String::new();
+    loop {
+        let line = session.output_rx.recv().map_err(|_| recv_error())?;
+        if let Some(code) = line.strip_prefix(AUTOMATION_DONE_MARKER) {
+            return Ok(AutomationCommandResult {
+                exit_code: code.trim().parse::<i32>().ok(),
+                stdout: limited_output(collected.trim_end().as_bytes()),
+                stderr: String::new(),
+                process_id: None,
+            });
+        }
+        collected.push_str(&line);
+        collected.push('\n');
+    }
+}
+
+// The frontend generates `session_id` (mirrors how entity ids are created
+// elsewhere) and passes it back into every later call for this run.
 #[tauri::command]
-async fn run_automation_command(
+fn start_automation_session(
+    session_id: String,
     path: String,
+    sessions: tauri::State<AutomationSessions>,
+) -> Result<(), String> {
+    let working_directory = automation_working_directory(&path)?;
+    let session = spawn_automation_session(&working_directory)?;
+
+    let mut registry = sessions
+        .0
+        .lock()
+        .map_err(|_| "Automation session lock was poisoned.".to_string())?;
+    registry.insert(session_id, session);
+    Ok(())
+}
+
+#[tauri::command]
+async fn run_session_command(
+    session_id: String,
     command: String,
     background: bool,
+    app: tauri::AppHandle,
 ) -> Result<AutomationCommandResult, String> {
     if command.trim().is_empty() || command.len() > MAX_AUTOMATION_COMMAND_BYTES {
         return Err(format!(
@@ -887,42 +1018,40 @@ async fn run_automation_command(
             MAX_AUTOMATION_COMMAND_BYTES
         ));
     }
-    let working_directory = automation_working_directory(&path)?;
 
     tauri::async_runtime::spawn_blocking(move || {
-        let mut process = Command::new("/bin/zsh");
-        process
-            .arg("-lc")
-            .arg(command)
-            .current_dir(working_directory)
-            .stdin(Stdio::null());
-
-        if background {
-            let child = process
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|error| format!("Background command could not be started: {}", error))?;
-            return Ok(AutomationCommandResult {
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                process_id: Some(child.id()),
-            });
-        }
-
-        let output = process
-            .output()
-            .map_err(|error| format!("Command could not be executed: {}", error))?;
-        Ok(AutomationCommandResult {
-            exit_code: output.status.code(),
-            stdout: limited_output(&output.stdout),
-            stderr: limited_output(&output.stderr),
-            process_id: None,
-        })
+        let sessions = app.state::<AutomationSessions>();
+        let mut registry = sessions
+            .0
+            .lock()
+            .map_err(|_| "Automation session lock was poisoned.".to_string())?;
+        let session = registry
+            .get_mut(&session_id)
+            .ok_or_else(|| "Automation session is no longer running.".to_string())?;
+        execute_in_session(session, &command, background)
     })
     .await
     .map_err(|error| format!("Automation worker failed: {}", error))?
+}
+
+// Ends an automation run's shell session, either because the run finished or
+// because the user clicked Stop. Killing this specific process (not its
+// process group) interrupts a stuck foreground command without touching
+// background jobs it already started with `&`, which keep running detached.
+#[tauri::command]
+fn stop_automation_session(
+    session_id: String,
+    sessions: tauri::State<AutomationSessions>,
+) -> Result<(), String> {
+    let mut registry = sessions
+        .0
+        .lock()
+        .map_err(|_| "Automation session lock was poisoned.".to_string())?;
+    if let Some(mut session) = registry.remove(&session_id) {
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1252,12 +1381,15 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .manage(AutomationSessions::default())
         .invoke_handler(tauri::generate_handler![
             load_aliases,
             save_aliases,
             load_automations,
             save_automations,
-            run_automation_command,
+            start_automation_session,
+            run_session_command,
+            stop_automation_session,
             list_trash,
             move_alias_to_trash,
             restore_trash_alias,
@@ -1664,5 +1796,55 @@ mod tests {
 
         let validation_error = validate_automations(&[automation]).unwrap_err();
         assert!(validation_error.contains("between 1 second and 24 hours"));
+    }
+
+    // Reproduces the reported bug: a "cd mac_src" step followed by a command
+    // that only succeeds from inside that subdirectory. Each step used to run
+    // in its own fresh shell, so the `cd` had no effect on the next step.
+    #[test]
+    fn automation_session_keeps_directory_change_across_steps() {
+        let base = env::temp_dir().join(format!(
+            "easyalias-automation-session-test-{}",
+            unix_timestamp().unwrap()
+        ));
+        let subdir = base.join("mac_src");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let mut session = spawn_automation_session(&base).unwrap();
+
+        let cd_result = execute_in_session(&mut session, "cd mac_src", false).unwrap();
+        assert_eq!(cd_result.exit_code, Some(0));
+
+        let pwd_result = execute_in_session(&mut session, "pwd", false).unwrap();
+        assert_eq!(pwd_result.exit_code, Some(0));
+        assert!(
+            pwd_result.stdout.trim().ends_with("/mac_src"),
+            "expected pwd to report the subdirectory, got: {:?}",
+            pwd_result.stdout
+        );
+
+        let _ = session.child.kill();
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn automation_session_background_command_does_not_block_next_step() {
+        let base = env::temp_dir().join(format!(
+            "easyalias-automation-session-bg-test-{}",
+            unix_timestamp().unwrap()
+        ));
+        fs::create_dir_all(&base).unwrap();
+
+        let mut session = spawn_automation_session(&base).unwrap();
+
+        let bg_result = execute_in_session(&mut session, "sleep 5", true).unwrap();
+        assert!(bg_result.process_id.is_some());
+
+        let echo_result = execute_in_session(&mut session, "echo still-here", false).unwrap();
+        assert_eq!(echo_result.exit_code, Some(0));
+        assert_eq!(echo_result.stdout.trim(), "still-here");
+
+        let _ = session.child.kill();
+        let _ = fs::remove_dir_all(&base);
     }
 }

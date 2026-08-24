@@ -157,6 +157,7 @@ type AutomationRunStep = {
 
 type AutomationRunState = {
   automationId: string;
+  sessionId: string;
   running: boolean;
   cancelRequested: boolean;
   currentStep: number;
@@ -1878,10 +1879,18 @@ async function deleteAutomation(id: string) {
   }
 }
 
-function stopAutomation() {
-  if (!automationRun?.running) return;
+async function stopAutomation() {
+  if (!automationRun?.running || automationRun.cancelRequested) return;
   automationRun.cancelRequested = true;
   render();
+  // Killing the session immediately interrupts a command that is still
+  // running; without this, Stop would only take effect once that command
+  // finished on its own and the loop reached its next cancellation check.
+  try {
+    await invokeCommand<void>("stop_automation_session", { sessionId: automationRun.sessionId });
+  } catch {
+    // The run loop's own cleanup will report the failure if the session is gone.
+  }
 }
 
 function closeAutomationRun() {
@@ -1911,6 +1920,7 @@ async function runAutomation(id: string) {
 
   const runState: AutomationRunState = {
     automationId: id,
+    sessionId: createId(),
     running: true,
     cancelRequested: false,
     currentStep: 0,
@@ -1919,6 +1929,19 @@ async function runAutomation(id: string) {
   };
   automationRun = runState;
   render();
+
+  // All command steps share this one shell session, so `cd` and exported
+  // variables from an earlier step are still in effect for later ones -
+  // the whole run behaves like one continuous terminal, not isolated calls.
+  try {
+    await invokeCommand<void>("start_automation_session", { sessionId: runState.sessionId, path: automation.path });
+  } catch (sessionError) {
+    runState.error = `Automation session could not be started: ${String(sessionError)}`;
+    runState.steps = runState.steps.map((step) => ({ ...step, status: "skipped" }));
+    runState.running = false;
+    render();
+    return;
+  }
 
   for (const [index, step] of automation.steps.entries()) {
     if (runState.cancelRequested) break;
@@ -1935,8 +1958,8 @@ async function runAutomation(id: string) {
           output: `Waited ${step.seconds} ${step.seconds === 1 ? "second" : "seconds"}.`
         };
       } else {
-        const result = await invokeCommand<AutomationCommandResult>("run_automation_command", {
-          path: automation.path,
+        const result = await invokeCommand<AutomationCommandResult>("run_session_command", {
+          sessionId: runState.sessionId,
           command: step.command,
           background: step.behavior === "background"
         });
@@ -1966,6 +1989,11 @@ async function runAutomation(id: string) {
 
   if (runState.cancelRequested) {
     runState.error = "Automation stopped. A background process that already started keeps running.";
+  }
+  try {
+    await invokeCommand<void>("stop_automation_session", { sessionId: runState.sessionId });
+  } catch {
+    // The session's own process already exited; nothing left to clean up.
   }
   runState.steps = runState.steps.map((step) =>
     step.status === "pending" ? { ...step, status: "skipped" } : step
@@ -2225,7 +2253,7 @@ function bindAutomationEvents() {
       if (action === "add-wait") addAutomationStep("wait");
       if (action === "move-step") moveAutomationStep(index, Number(button.dataset.offset));
       if (action === "remove-step") removeAutomationStep(index);
-      if (action === "stop-run") stopAutomation();
+      if (action === "stop-run") void stopAutomation();
       if (action === "close-run") closeAutomationRun();
       if (action === "dismiss-message") dismissMessage();
     });

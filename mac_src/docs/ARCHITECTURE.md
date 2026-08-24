@@ -239,7 +239,9 @@ import_zshrc_aliases(selected_ids, timestamp)
 // Automations
 load_automations()
 save_automations(automations)
-run_automation_command(path, command, background)
+start_automation_session(session_id, path)
+run_session_command(session_id, command, background)
+stop_automation_session(session_id)
 ```
 
 `load_aliases` handles startup setup:
@@ -285,26 +287,29 @@ sequenceDiagram
 
 Automations are stored independently of aliases in `~/.easyalias/automations.json` and validated on every load and save: up to `MAX_AUTOMATIONS` (200) automations, each with 1-`MAX_AUTOMATION_STEPS` (100) steps, unique automation and step ids, command steps under `MAX_AUTOMATION_COMMAND_BYTES` (16 KB), and wait steps between 1 second and `MAX_WAIT_SECONDS` (24 hours).
 
-`run_automation_command` resolves the automation's working directory (expanding a leading `~`, then `canonicalize`-ing and requiring it to exist) and runs the command through `/bin/zsh -lc` with stdin closed. Foreground commands run via `spawn_blocking` and return captured stdout/stderr (each truncated to `MAX_AUTOMATION_OUTPUT_CHARS`, 20,000 characters) plus the exit code; background commands detach stdout/stderr, `spawn()` immediately, and return only the child process id. The frontend drives one step at a time and stops the run on the first non-zero exit code or on user cancellation.
+Each run gets one persistent `/bin/zsh -l` process (an `AutomationSessionHandle`, keyed by a frontend-generated `session_id` in the `AutomationSessions` Tauri-managed state) instead of a fresh process per step. This is what lets `cd` and exported environment variables from one step carry over to the next, the same way they would in a real terminal.
+
+- `start_automation_session` resolves the working directory (expanding a leading `~`, then `canonicalize`-ing and requiring it to exist), spawns the shell with piped stdin/stdout, and starts a background thread that streams output lines into an `mpsc` channel.
+- `run_session_command` writes the step's command to the session's stdin followed by a unique echoed sentinel, then reads from the channel until that sentinel appears. Foreground commands are wrapped as `{ command ; } 2>&1` so stderr merges into the captured output, and the sentinel carries `$?`; background commands are wrapped as `{ command ; } >/dev/null 2>&1 &` and the sentinel carries `$!`, so the step returns as soon as the job has started rather than waiting for it to finish. Captured output is truncated to `MAX_AUTOMATION_OUTPUT_CHARS` (20,000 characters).
+- `stop_automation_session` kills the session's shell process specifically (not its process group), so it can interrupt a stuck foreground command without touching background jobs that process already started with `&` — those keep running detached, reparented once the shell exits. It is called both when the user clicks Stop and automatically once a run finishes.
 
 ```mermaid
 sequenceDiagram
   participant UI as Frontend
   participant Rust as Rust Backend
-  participant Dir as Working Directory
-  participant Shell as /bin/zsh -lc
+  participant Shell as Persistent /bin/zsh -l
 
-  UI->>Rust: run_automation_command(path, command, background)
-  Rust->>Dir: resolve and canonicalize path
-  Rust->>Shell: spawn command in working directory
-  alt background
-    Shell-->>Rust: process id
-    Rust-->>UI: processId (no wait)
-  else foreground
-    Shell-->>Rust: exit code, stdout, stderr
+  UI->>Rust: start_automation_session(sessionId, path)
+  Rust->>Shell: spawn once in working directory
+  loop each step
+    UI->>Rust: run_session_command(sessionId, command, background)
+    Rust->>Shell: write command + sentinel to stdin
+    Shell-->>Rust: output lines until sentinel
     Rust-->>UI: AutomationCommandResult
+    UI->>UI: mark step success/error, advance or stop
   end
-  UI->>UI: mark step success/error, advance or stop
+  UI->>Rust: stop_automation_session(sessionId)
+  Rust->>Shell: kill (background jobs already started keep running)
 ```
 
 ```mermaid
@@ -390,7 +395,7 @@ Important boundaries:
 - A backup is written before any selected source line is changed.
 - Portable backup files are parsed as data and never executed.
 - Trash provides a 30-day recovery window unless the user explicitly deletes an entry permanently or empties it.
-- Automation commands run only when the user explicitly clicks Run, execute in the automation's own working directory, and are rejected outright in browser preview mode (no `run_automation_command` backend to call).
+- Automation commands run only when the user explicitly clicks Run, execute in the automation's own shell session, and are rejected outright in browser preview mode (no `start_automation_session`/`run_session_command` backend to call).
 
 ## Roadmap
 

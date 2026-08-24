@@ -188,10 +188,12 @@ The automations view (top-right play icon) is a separate workspace for repeatabl
 
 An automation has a name, a working directory, and an ordered list of steps. Each step is either:
 
-- **Command** – a shell command that runs through `/bin/zsh -lc` in the automation's working directory. Choose whether the next step waits for the command to finish, or starts as soon as the process begins (useful for long-running dev servers).
+- **Command** – a shell command. Choose whether the next step waits for the command to finish, or starts as soon as the process begins (useful for long-running dev servers).
 - **Wait** – a pause of 1 second to 24 hours before the next step runs.
 
-Steps run top to bottom. Running an automation opens a progress dialog showing each step's status and captured output; a **Stop** button cancels before the next step starts (a background process that already launched keeps running). If any foreground command exits with a non-zero status, the run stops and later steps are marked skipped.
+All command steps in one run share a single shell session started in the automation's working directory, so it behaves like one continuous terminal: a `cd` or an exported variable in one step is still in effect for every step after it, not just the one it was written in.
+
+Steps run top to bottom. Running an automation opens a progress dialog showing each step's status and captured output; a **Stop** button ends the session immediately, interrupting a command that is still running (a background process that already launched keeps running on its own). If any foreground command exits with a non-zero status, the run stops and later steps are marked skipped.
 
 Automations are stored separately from aliases in `~/.easyalias/automations.json` and are only available in the real desktop app; the browser preview keeps its automations in `localStorage` and cannot execute commands.
 
