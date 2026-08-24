@@ -440,6 +440,10 @@ let suggestionsExpanded = false;
 // Nine cards fill the three-column layout and keep every page the same height.
 const suggestionPageSize = 9;
 let suggestionPage = 1;
+// Keep long alias collections compact without changing their vertical layout.
+// Favorites are sorted first across the full collection before pages are cut.
+const aliasPageSize = 7;
+let aliasPage = 1;
 // Import candidates are selected by default so the common first-run path is a
 // review followed by one confirmation, while every alias can still be excluded.
 let selectedImportIds = new Set<string>();
@@ -760,6 +764,12 @@ function toggleSuggestions() {
 function showSuggestionPage(page: number) {
   if (!Number.isFinite(page)) return;
   suggestionPage = Math.max(1, Math.floor(page));
+  render();
+}
+
+function showAliasPage(page: number) {
+  if (!Number.isFinite(page)) return;
+  aliasPage = Math.max(1, Math.floor(page));
   render();
 }
 
@@ -1417,6 +1427,10 @@ function clearRenderedEditError() {
 // For a larger app, this would be a good candidate to split into smaller render helpers.
 function render() {
   const aliases = [...appState.aliases].sort(compareAliases);
+  const aliasPageCount = Math.max(1, Math.ceil(aliases.length / aliasPageSize));
+  aliasPage = Math.min(aliasPage, aliasPageCount);
+  const aliasPageStart = (aliasPage - 1) * aliasPageSize;
+  const visibleAliases = aliases.slice(aliasPageStart, aliasPageStart + aliasPageSize);
   const existingNames = new Set(aliases.map((alias) => alias.name));
   const availableSuggestions = aliasSuggestions.filter(
     (suggestion) => !existingNames.has(suggestion.name)
@@ -1664,7 +1678,7 @@ function render() {
 
           ${
             aliases.length
-              ? aliases
+              ? visibleAliases
                   .map(
                     (alias) => `
                       <article class="alias-row ${alias.id === editingId ? "selected" : ""}">
@@ -1693,6 +1707,43 @@ function render() {
                   <strong>No aliases yet</strong>
                   <span>Create your first command on the left.</span>
                 </div>`
+          }
+
+          ${
+            aliasPageCount > 1
+              ? `<nav class="alias-pagination" aria-label="Alias pages">
+                  <button
+                    class="alias-page-button alias-page-arrow"
+                    type="button"
+                    title="Previous alias page"
+                    aria-label="Previous alias page"
+                    data-action="alias-page"
+                    data-page="${aliasPage - 1}"
+                    ${aliasPage === 1 ? "disabled" : ""}
+                  ><i data-lucide="chevron-left"></i></button>
+                  ${Array.from({ length: aliasPageCount }, (_, index) => index + 1)
+                    .map(
+                      (page) => `<button
+                        class="alias-page-button${page === aliasPage ? " is-current" : ""}"
+                        type="button"
+                        aria-label="Show alias page ${page}"
+                        ${page === aliasPage ? 'aria-current="page"' : ""}
+                        data-action="alias-page"
+                        data-page="${page}"
+                      >${page}</button>`
+                    )
+                    .join("")}
+                  <button
+                    class="alias-page-button alias-page-arrow"
+                    type="button"
+                    title="Next alias page"
+                    aria-label="Next alias page"
+                    data-action="alias-page"
+                    data-page="${aliasPage + 1}"
+                    ${aliasPage === aliasPageCount ? "disabled" : ""}
+                  ><i data-lucide="chevron-right"></i></button>
+                </nav>`
+              : ""
           }
         </section>
       </section>
@@ -2201,6 +2252,9 @@ function bindEvents() {
       if (action === "toggle-suggestions") toggleSuggestions();
       if (action === "suggestion-page") {
         showSuggestionPage(Number(button.dataset.page));
+      }
+      if (action === "alias-page") {
+        showAliasPage(Number(button.dataset.page));
       }
       if (action === "use-suggestion") {
         const suggestionId = button.dataset.suggestionId;

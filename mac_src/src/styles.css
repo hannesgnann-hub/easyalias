@@ -525,6 +525,60 @@ textarea:focus {
   pointer-events: none;
 }
 
+.alias-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 6px;
+}
+
+.alias-page-button {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: #17423d;
+  background: transparent;
+  font-size: 0.9rem;
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.alias-page-button:hover:not(:disabled):not(.is-current) {
+  background: rgba(23, 66, 61, 0.08);
+}
+
+.alias-page-button.is-current {
+  color: #fff;
+  background: #17423d;
+  text-decoration: none;
+}
+
+.alias-page-button.alias-page-arrow {
+  color: #17423d;
+  background: #dfe8e4;
+  text-decoration: none;
+}
+
+.alias-page-button:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.24);
+  outline-offset: 2px;
+}
+
+.alias-page-button svg {
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
 .preview {
   display: grid;
   gap: 8px;
