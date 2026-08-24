@@ -5,7 +5,9 @@ import {
   createIcons,
   FileDown,
   FileUp,
+  Filter,
   RotateCcw,
+  Search,
   SquareTerminal,
   Star,
   Trash2,
@@ -107,6 +109,7 @@ type AliasSuggestion = AliasForm & {
 type PickerTarget = "create" | "edit";
 type PickerKind = "file" | "folder";
 type BackupDialogMode = "export" | "import";
+type AliasFilter = "all" | "favorites" | "git" | "docker" | "navigation" | "build";
 
 const actionLabels: Record<AliasAction, string> = {
   navigate: "Go to Folder",
@@ -115,6 +118,15 @@ const actionLabels: Record<AliasAction, string> = {
   compile_gradle: "Gradle Build",
   compile_maven: "Maven Build",
   custom: "Custom Command"
+};
+
+const aliasFilterLabels: Record<AliasFilter, string> = {
+  all: "All aliases",
+  favorites: "Favorites",
+  git: "Git",
+  docker: "Docker",
+  navigation: "Navigation",
+  build: "Build"
 };
 
 const emptyForm: AliasForm = {
@@ -444,6 +456,13 @@ let suggestionPage = 1;
 // Favorites are sorted first across the full collection before pages are cut.
 const aliasPageSize = 7;
 let aliasPage = 1;
+// The search term is kept outside the persisted app state because it only
+// controls the current view. Matching is case-insensitive and covers both the
+// alias name and the complete generated shell command.
+let aliasSearchQuery = "";
+// Filters are inferred from the generated command and action, so existing
+// backups stay compatible and aliases do not need manually assigned tags.
+let aliasFilter: AliasFilter = "all";
 // Import candidates are selected by default so the common first-run path is a
 // review followed by one confirmation, while every alias can still be excluded.
 let selectedImportIds = new Set<string>();
@@ -770,7 +789,7 @@ function showSuggestionPage(page: number) {
 function showAliasPage(page: number) {
   if (!Number.isFinite(page)) return;
   aliasPage = Math.max(1, Math.floor(page));
-  render();
+  refreshAliasResults();
 }
 
 // The header import button requests a fresh backend scan even after the
@@ -1397,6 +1416,157 @@ function compareAliases(left: AliasEntry, right: AliasEntry) {
   return favoriteDifference || left.name.localeCompare(right.name);
 }
 
+function matchesAliasFilter(alias: AliasEntry) {
+  const command = alias.commandPreview.trim().toLocaleLowerCase();
+
+  switch (aliasFilter) {
+    case "favorites":
+      return Boolean(alias.favorite);
+    case "git":
+      return /(^|[\s;&|])git(?=\s|$)/.test(command);
+    case "docker":
+      return /(^|[\s;&|])docker(?:-compose)?(?=\s|$)/.test(command);
+    case "navigation":
+      return alias.action === "navigate";
+    case "build":
+      return (
+        alias.action === "compile_gradle" ||
+        alias.action === "compile_maven" ||
+        /(^|[\s;&|])(?:\.\/)?(?:gradle|gradlew|mvn|mvnw|make)(?=\s|$)/.test(command) ||
+        /(^|[\s;&|])cargo\s+build(?=\s|$)/.test(command) ||
+        /(^|[\s;&|])(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+build(?=\s|$)/.test(command)
+      );
+    case "all":
+    default:
+      return true;
+  }
+}
+
+function filterAliases(aliases: AliasEntry[]) {
+  const query = aliasSearchQuery.trim().toLocaleLowerCase();
+
+  return aliases.filter(
+    (alias) =>
+      matchesAliasFilter(alias) &&
+      (!query ||
+        alias.name.toLocaleLowerCase().includes(query) ||
+        alias.commandPreview.toLocaleLowerCase().includes(query))
+  );
+}
+
+function aliasCountLabel(total: number, filtered: number) {
+  const suffix = total === 1 ? "entry" : "entries";
+  const hasActiveFilter = aliasSearchQuery.trim() || aliasFilter !== "all";
+  return hasActiveFilter ? `${filtered} of ${total} ${suffix}` : `${total} ${suffix}`;
+}
+
+function renderAliasResults(aliases: AliasEntry[]) {
+  const filteredAliases = filterAliases(aliases);
+  const aliasPageCount = Math.max(1, Math.ceil(filteredAliases.length / aliasPageSize));
+  aliasPage = Math.min(aliasPage, aliasPageCount);
+  const aliasPageStart = (aliasPage - 1) * aliasPageSize;
+  const visibleAliases = filteredAliases.slice(aliasPageStart, aliasPageStart + aliasPageSize);
+
+  if (!aliases.length) {
+    return `<div class="empty-state">
+      <strong>No aliases yet</strong>
+      <span>Create your first command on the left.</span>
+    </div>`;
+  }
+
+  if (!filteredAliases.length) {
+    return `<div class="empty-state alias-search-empty">
+      <strong>No matching aliases</strong>
+      <span>Try another search or filter.</span>
+    </div>`;
+  }
+
+  return `${visibleAliases
+    .map(
+      (alias) => `
+        <article class="alias-row ${alias.id === editingId ? "selected" : ""}">
+          <button
+            class="favorite-button ${alias.favorite ? "active" : ""}"
+            type="button"
+            title="${alias.favorite ? "Remove from favorites" : "Add to favorites"}"
+            aria-label="${alias.favorite ? "Remove" : "Add"} ${escapeHtml(alias.name)} ${alias.favorite ? "from" : "to"} favorites"
+            aria-pressed="${Boolean(alias.favorite)}"
+            data-action="toggle-favorite"
+            data-id="${alias.id}"
+          ><i data-lucide="star"></i></button>
+          <div class="row-main">
+            <span class="alias-name">${escapeHtml(alias.name)}</span>
+            <span class="alias-action">${actionLabels[alias.action]}</span>
+            <code>${escapeHtml(alias.commandPreview)}</code>
+            <span class="created">Created ${formatDate(alias.createdAt)}</span>
+          </div>
+          <button class="edit-button" title="Edit" data-action="edit" data-id="${alias.id}">Edit</button>
+          <button class="icon-button" title="Delete" data-action="delete" data-id="${alias.id}">×</button>
+        </article>
+      `
+    )
+    .join("")}
+    ${
+      aliasPageCount > 1
+        ? `<nav class="alias-pagination" aria-label="Alias pages">
+            <button
+              class="alias-page-button alias-page-arrow"
+              type="button"
+              title="Previous alias page"
+              aria-label="Previous alias page"
+              data-action="alias-page"
+              data-page="${aliasPage - 1}"
+              ${aliasPage === 1 ? "disabled" : ""}
+            ><i data-lucide="chevron-left"></i></button>
+            ${Array.from({ length: aliasPageCount }, (_, index) => index + 1)
+              .map(
+                (page) => `<button
+                  class="alias-page-button${page === aliasPage ? " is-current" : ""}"
+                  type="button"
+                  aria-label="Show alias page ${page}"
+                  ${page === aliasPage ? 'aria-current="page"' : ""}
+                  data-action="alias-page"
+                  data-page="${page}"
+                >${page}</button>`
+              )
+              .join("")}
+            <button
+              class="alias-page-button alias-page-arrow"
+              type="button"
+              title="Next alias page"
+              aria-label="Next alias page"
+              data-action="alias-page"
+              data-page="${aliasPage + 1}"
+              ${aliasPage === aliasPageCount ? "disabled" : ""}
+            ><i data-lucide="chevron-right"></i></button>
+          </nav>`
+        : ""
+    }`;
+}
+
+// Search input stays mounted while only the result area is replaced. This
+// avoids losing focus or jumping the caret while someone types quickly.
+function refreshAliasResults() {
+  const aliases = [...appState.aliases].sort(compareAliases);
+  const filteredAliases = filterAliases(aliases);
+  const count = document.querySelector<HTMLElement>("[data-alias-count]");
+  const results = document.querySelector<HTMLElement>("[data-alias-results]");
+
+  if (count) count.textContent = aliasCountLabel(aliases.length, filteredAliases.length);
+  if (!results) return;
+
+  results.innerHTML = renderAliasResults(aliases);
+  createIcons({
+    icons: { ChevronLeft, ChevronRight, Star },
+    attrs: {
+      "aria-hidden": "true",
+      width: "20",
+      height: "20",
+      "stroke-width": "2"
+    }
+  });
+}
+
 function formPreview() {
   return buildCommandPreview(form) || "No command generated yet";
 }
@@ -1427,10 +1597,7 @@ function clearRenderedEditError() {
 // For a larger app, this would be a good candidate to split into smaller render helpers.
 function render() {
   const aliases = [...appState.aliases].sort(compareAliases);
-  const aliasPageCount = Math.max(1, Math.ceil(aliases.length / aliasPageSize));
-  aliasPage = Math.min(aliasPage, aliasPageCount);
-  const aliasPageStart = (aliasPage - 1) * aliasPageSize;
-  const visibleAliases = aliases.slice(aliasPageStart, aliasPageStart + aliasPageSize);
+  const filteredAliasCount = filterAliases(aliases).length;
   const existingNames = new Set(aliases.map((alias) => alias.name));
   const availableSuggestions = aliasSuggestions.filter(
     (suggestion) => !existingNames.has(suggestion.name)
@@ -1673,78 +1840,42 @@ function render() {
         <section class="list" aria-label="Aliases">
           <div class="list-header">
             <h2>Your Aliases</h2>
-            <span>${aliases.length} entries</span>
+            <span data-alias-count>${aliasCountLabel(aliases.length, filteredAliasCount)}</span>
           </div>
-
-          ${
-            aliases.length
-              ? visibleAliases
+          <div class="alias-tools">
+            <div class="alias-search" role="search">
+              <i data-lucide="search"></i>
+              <input
+                type="search"
+                name="alias-search"
+                value="${escapeHtml(aliasSearchQuery)}"
+                placeholder="Search aliases or commands"
+                aria-label="Search aliases by name or command"
+                autocomplete="off"
+                ${aliases.length ? "" : "disabled"}
+              />
+            </div>
+            <label class="alias-filter ${aliasFilter !== "all" ? "is-active" : ""} ${aliases.length ? "" : "is-disabled"}">
+              <span class="visually-hidden">Filter aliases</span>
+              <i data-lucide="filter"></i>
+              <select
+                name="alias-filter"
+                aria-label="Filter aliases"
+                title="Filter: ${aliasFilterLabels[aliasFilter]}"
+                ${aliases.length ? "" : "disabled"}
+              >
+                ${Object.entries(aliasFilterLabels)
                   .map(
-                    (alias) => `
-                      <article class="alias-row ${alias.id === editingId ? "selected" : ""}">
-                        <button
-                          class="favorite-button ${alias.favorite ? "active" : ""}"
-                          type="button"
-                          title="${alias.favorite ? "Remove from favorites" : "Add to favorites"}"
-                          aria-label="${alias.favorite ? "Remove" : "Add"} ${escapeHtml(alias.name)} ${alias.favorite ? "from" : "to"} favorites"
-                          aria-pressed="${Boolean(alias.favorite)}"
-                          data-action="toggle-favorite"
-                          data-id="${alias.id}"
-                        ><i data-lucide="star"></i></button>
-                        <div class="row-main">
-                          <span class="alias-name">${escapeHtml(alias.name)}</span>
-                          <span class="alias-action">${actionLabels[alias.action]}</span>
-                          <code>${escapeHtml(alias.commandPreview)}</code>
-                          <span class="created">Created ${formatDate(alias.createdAt)}</span>
-                        </div>
-                        <button class="edit-button" title="Edit" data-action="edit" data-id="${alias.id}">Edit</button>
-                        <button class="icon-button" title="Delete" data-action="delete" data-id="${alias.id}">×</button>
-                      </article>
-                    `
+                    ([value, label]) =>
+                      `<option value="${value}" ${aliasFilter === value ? "selected" : ""}>${label}</option>`
                   )
-                  .join("")
-              : `<div class="empty-state">
-                  <strong>No aliases yet</strong>
-                  <span>Create your first command on the left.</span>
-                </div>`
-          }
-
-          ${
-            aliasPageCount > 1
-              ? `<nav class="alias-pagination" aria-label="Alias pages">
-                  <button
-                    class="alias-page-button alias-page-arrow"
-                    type="button"
-                    title="Previous alias page"
-                    aria-label="Previous alias page"
-                    data-action="alias-page"
-                    data-page="${aliasPage - 1}"
-                    ${aliasPage === 1 ? "disabled" : ""}
-                  ><i data-lucide="chevron-left"></i></button>
-                  ${Array.from({ length: aliasPageCount }, (_, index) => index + 1)
-                    .map(
-                      (page) => `<button
-                        class="alias-page-button${page === aliasPage ? " is-current" : ""}"
-                        type="button"
-                        aria-label="Show alias page ${page}"
-                        ${page === aliasPage ? 'aria-current="page"' : ""}
-                        data-action="alias-page"
-                        data-page="${page}"
-                      >${page}</button>`
-                    )
-                    .join("")}
-                  <button
-                    class="alias-page-button alias-page-arrow"
-                    type="button"
-                    title="Next alias page"
-                    aria-label="Next alias page"
-                    data-action="alias-page"
-                    data-page="${aliasPage + 1}"
-                    ${aliasPage === aliasPageCount ? "disabled" : ""}
-                  ><i data-lucide="chevron-right"></i></button>
-                </nav>`
-              : ""
-          }
+                  .join("")}
+              </select>
+            </label>
+          </div>
+          <div class="alias-results" data-alias-results>
+            ${renderAliasResults(aliases)}
+          </div>
         </section>
       </section>
 
@@ -1785,7 +1916,9 @@ function render() {
       SquareTerminal,
       FileDown,
       FileUp,
+      Filter,
       RotateCcw,
+      Search,
       Star,
       Trash2,
       X
@@ -2150,6 +2283,32 @@ function bindEvents() {
     link.addEventListener("click", openExternalLink);
   });
 
+  document.querySelector<HTMLInputElement>('input[name="alias-search"]')?.addEventListener("input", (event) => {
+    aliasSearchQuery = (event.target as HTMLInputElement).value;
+    aliasPage = 1;
+    refreshAliasResults();
+  });
+
+  document.querySelector<HTMLSelectElement>('select[name="alias-filter"]')?.addEventListener("change", (event) => {
+    aliasFilter = (event.target as HTMLSelectElement).value as AliasFilter;
+    aliasPage = 1;
+    refreshAliasResults();
+  });
+
+  // Alias actions use delegation so pagination and live search can replace the
+  // result rows without rebinding handlers or disturbing the search field.
+  document.querySelector<HTMLElement>(".list")?.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-action]");
+    if (!button) return;
+
+    const action = button.dataset.action;
+    const id = button.dataset.id;
+    if (action === "toggle-favorite" && id) void toggleFavorite(id);
+    if (action === "edit" && id) openEditModal(id);
+    if (action === "delete" && id) void deleteAlias(id);
+    if (action === "alias-page") showAliasPage(Number(button.dataset.page));
+  });
+
   document.querySelector<HTMLInputElement>('input[name="name"]')?.addEventListener("input", (event) => {
     updateForm("name", (event.target as HTMLInputElement).value);
   });
@@ -2229,6 +2388,8 @@ function bindEvents() {
   }
 
   document.querySelectorAll<HTMLButtonElement>("[data-action]").forEach((button) => {
+    if (button.closest(".list")) return;
+
     button.addEventListener("click", () => {
       const action = button.dataset.action;
       const id = button.dataset.id;
@@ -2242,19 +2403,14 @@ function bindEvents() {
       if (action === "permanently-delete-trash" && id) void permanentlyDeleteTrashAlias(id);
       if (action === "empty-trash") void emptyTrash();
       if (action === "dismiss-message") dismissMessage();
-      if (action === "toggle-favorite" && id) void toggleFavorite(id);
       if (action === "close-backup") closeBackupDialog();
       if (action === "choose-backup-file") void chooseBackupFile();
       if (action === "close-import") closeManualImport();
       if (action === "dismiss-import") void dismissShellImport();
-      if (action === "edit" && id) openEditModal(id);
       if (action === "close-edit") closeEditModal();
       if (action === "toggle-suggestions") toggleSuggestions();
       if (action === "suggestion-page") {
         showSuggestionPage(Number(button.dataset.page));
-      }
-      if (action === "alias-page") {
-        showAliasPage(Number(button.dataset.page));
       }
       if (action === "use-suggestion") {
         const suggestionId = button.dataset.suggestionId;
@@ -2267,7 +2423,6 @@ function bindEvents() {
           void openPathPicker(target, kind);
         }
       }
-      if (action === "delete" && id) void deleteAlias(id);
     });
   });
 }
