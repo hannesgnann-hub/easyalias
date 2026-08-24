@@ -89,6 +89,8 @@ The macOS version can:
 - store `createdAt` and `updatedAt`
 - automatically connect `~/.easyalias/aliases.zsh` to `~/.zshrc`
 - start from the terminal through `easya` if the app is installed at `/Applications/EasyAlias.app`
+- search and filter the alias list by name, command, or category (Favorites, Git, Docker, Navigation, Build)
+- build and run multi-step Automations (shell commands and timed waits) in a chosen working directory
 
 The Mac App Store version can:
 

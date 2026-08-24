@@ -92,6 +92,7 @@ flowchart TD
 | --- | --- | --- |
 | `~/.easyalias/config.json` | structured alias data for the UI | EasyAlias |
 | `~/.easyalias/trash.json` | deleted aliases retained for up to 30 days | EasyAlias |
+| `~/.easyalias/automations.json` | saved multi-step automations | EasyAlias |
 | `~/.easyalias/aliases.zsh` | generated zsh aliases | EasyAlias |
 | `~/.easyalias/.zshrc-import-v1` | records that the automatic first-start import prompt was handled | EasyAlias |
 | `~/.zshrc.easyalias-backup-*` | timestamped copy created before an import | user backup |
@@ -141,9 +142,11 @@ Main responsibilities:
 - paginate the 31 built-in Git, Docker, build, and utility suggestions
 - open the import scanner from the header and review `.zshrc` candidates
 - sort favorites before regular aliases
+- search aliases by name/command and filter by favorites, Git, Docker, navigation, or build
 - selectively export and restore portable JSON backups
 - restore or permanently remove aliases from the 30-day Trash
 - display, edit, and move aliases to Trash
+- build, save, and run multi-step Automations in a separate view
 - call Tauri commands when the app runs natively
 
 The most important types:
@@ -165,6 +168,23 @@ type AliasEntry = {
   customCommand?: string;
   commandPreview: string;
   favorite: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AutomationStep = {
+  id: string;
+  kind: "command" | "wait";
+  command: string;
+  seconds: number;
+  behavior: "wait" | "background";
+};
+
+type Automation = {
+  id: string;
+  name: string;
+  path: string;
+  steps: AutomationStep[];
   createdAt: string;
   updatedAt: string;
 };
@@ -215,6 +235,11 @@ import_alias_backup(path, selected_ids)
 scan_zshrc_import()
 dismiss_zshrc_import()
 import_zshrc_aliases(selected_ids, timestamp)
+
+// Automations
+load_automations()
+save_automations(automations)
+run_automation_command(path, command, background)
 ```
 
 `load_aliases` handles startup setup:
@@ -256,6 +281,30 @@ sequenceDiagram
   Rust->>Managed: write config.json and aliases.zsh
   Rust->>Zshrc: replace confirmed source lines
   Rust-->>UI: updated AppState
+```
+
+Automations are stored independently of aliases in `~/.easyalias/automations.json` and validated on every load and save: up to `MAX_AUTOMATIONS` (200) automations, each with 1-`MAX_AUTOMATION_STEPS` (100) steps, unique automation and step ids, command steps under `MAX_AUTOMATION_COMMAND_BYTES` (16 KB), and wait steps between 1 second and `MAX_WAIT_SECONDS` (24 hours).
+
+`run_automation_command` resolves the automation's working directory (expanding a leading `~`, then `canonicalize`-ing and requiring it to exist) and runs the command through `/bin/zsh -lc` with stdin closed. Foreground commands run via `spawn_blocking` and return captured stdout/stderr (each truncated to `MAX_AUTOMATION_OUTPUT_CHARS`, 20,000 characters) plus the exit code; background commands detach stdout/stderr, `spawn()` immediately, and return only the child process id. The frontend drives one step at a time and stops the run on the first non-zero exit code or on user cancellation.
+
+```mermaid
+sequenceDiagram
+  participant UI as Frontend
+  participant Rust as Rust Backend
+  participant Dir as Working Directory
+  participant Shell as /bin/zsh -lc
+
+  UI->>Rust: run_automation_command(path, command, background)
+  Rust->>Dir: resolve and canonicalize path
+  Rust->>Shell: spawn command in working directory
+  alt background
+    Shell-->>Rust: process id
+    Rust-->>UI: processId (no wait)
+  else foreground
+    Shell-->>Rust: exit code, stdout, stderr
+    Rust-->>UI: AutomationCommandResult
+  end
+  UI->>UI: mark step success/error, advance or stop
 ```
 
 ```mermaid
@@ -341,6 +390,7 @@ Important boundaries:
 - A backup is written before any selected source line is changed.
 - Portable backup files are parsed as data and never executed.
 - Trash provides a 30-day recovery window unless the user explicitly deletes an entry permanently or empties it.
+- Automation commands run only when the user explicitly clicks Run, execute in the automation's own working directory, and are rejected outright in browser preview mode (no `run_automation_command` backend to call).
 
 ## Roadmap
 
@@ -352,3 +402,4 @@ Later:
 
 - settings window
 - signed and notarized release automation
+- port Automations to the other platform source trees

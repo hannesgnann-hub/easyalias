@@ -20,6 +20,7 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 
 - create and edit aliases through a UI, with 30-day recovery after deletion
 - pin favorites above the regular alias list
+- search aliases by name or command and filter by favorites, Git, Docker, navigation, or build
 - selectively export aliases to a portable JSON backup and restore selected entries through file selection or drag and drop
 - detect existing simple aliases in `~/.zshrc` on first start and rescan them later from the header import button
 - browse 31 paginated macOS alias suggestions and add them with one click
@@ -31,6 +32,7 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 - automatically generate an `aliases.zsh` file for your terminal
 - connect itself to `~/.zshrc` on first Tauri startup
 - dismiss status messages manually or let them close automatically after three seconds
+- build and run multi-step Automations (shell commands and timed waits) in a chosen working directory
 - link to the website, GitHub repository, EasyAlias subreddit, and sponsor page from the footer
 
 ![EasyAlias macOS alias manager](../docs/assets/v2/start.png)
@@ -99,6 +101,7 @@ EasyAlias intentionally manages its own files and does not directly rewrite your
 ~/.easyalias/aliases.zsh
 ~/.easyalias/.zshrc-import-v1
 ~/.easyalias/trash.json
+~/.easyalias/automations.json
 ```
 
 On first Tauri startup, EasyAlias appends this line to `~/.zshrc` if it is missing:
@@ -175,6 +178,23 @@ Deleting an alias moves it to `~/.easyalias/trash.json`. Trash entries are retai
 
 ![Recovering or permanently deleting a macOS alias](../docs/assets/v2/trash.png)
 
+## Search and Filter
+
+The search field matches an alias's name or generated command. The filter dropdown next to it narrows the list to Favorites, Git, Docker, Navigation (Go to Folder actions), or Build (Gradle/Maven actions plus common build commands such as `make`, `cargo build`, or `npm run build`). Search and filter combine, and the alias count shows how many entries match out of the total.
+
+## Automations
+
+The automations view (top-right play icon) is a separate workspace for repeatable, multi-step workflows, independent from the alias list.
+
+An automation has a name, a working directory, and an ordered list of steps. Each step is either:
+
+- **Command** – a shell command that runs through `/bin/zsh -lc` in the automation's working directory. Choose whether the next step waits for the command to finish, or starts as soon as the process begins (useful for long-running dev servers).
+- **Wait** – a pause of 1 second to 24 hours before the next step runs.
+
+Steps run top to bottom. Running an automation opens a progress dialog showing each step's status and captured output; a **Stop** button cancels before the next step starts (a background process that already launched keeps running). If any foreground command exits with a non-zero status, the run stops and later steps are marked skipped.
+
+Automations are stored separately from aliases in `~/.easyalias/automations.json` and are only available in the real desktop app; the browser preview keeps its automations in `localStorage` and cannot execute commands.
+
 ## Development
 
 | Command | Effect |
@@ -242,10 +262,30 @@ An alias is stored like this:
 | Maven Build | `cd "<path>" && mvn clean package` |
 | Custom Command | user-provided shell command |
 
+## Automation Data Model
+
+An automation is stored like this:
+
+```json
+{
+  "id": "uuid",
+  "name": "DevStart",
+  "path": "~/Projects/nava",
+  "steps": [
+    { "id": "uuid", "kind": "command", "command": "docker compose up -d", "seconds": 0, "behavior": "wait" },
+    { "id": "uuid", "kind": "wait", "command": "", "seconds": 10, "behavior": "wait" }
+  ],
+  "createdAt": "2026-08-24T18:00:00.000Z",
+  "updatedAt": "2026-08-24T18:00:00.000Z"
+}
+```
+
+Up to 200 automations with up to 100 steps each are supported; commands are limited to 16 KB and captured output is truncated at 20,000 characters.
+
 ## Roadmap
 
-- search and filter for large alias lists
 - signed and notarized release automation
+- port Automations to the Mac App Store, Windows, and Linux editions
 
 ## Documentation Layout
 
