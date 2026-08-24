@@ -12,6 +12,7 @@ import {
   FileUp,
   Filter,
   FolderOpen,
+  LoaderCircle,
   Pencil,
   Play,
   Plus,
@@ -139,6 +140,7 @@ type Automation = {
   name: string;
   path: string;
   steps: AutomationStep[];
+  favorite: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -772,7 +774,10 @@ async function loadState() {
   }
   const savedAutomations = localStorage.getItem("easyalias-automations");
   if (savedAutomations) {
-    automations = JSON.parse(savedAutomations) as Automation[];
+    automations = (JSON.parse(savedAutomations) as Automation[]).map((automation) => ({
+      ...automation,
+      favorite: Boolean(automation.favorite)
+    }));
   }
 
   render();
@@ -1715,6 +1720,7 @@ function openAutomationEditor(id?: string) {
         name: "",
         path: "~/Projects",
         steps: [createAutomationStep("command")],
+        favorite: false,
         createdAt: timestamp,
         updatedAt: timestamp
       };
@@ -1873,6 +1879,28 @@ async function deleteAutomation(id: string) {
     notice = `Automation "${automation.name}" deleted.`;
   } catch (deleteError) {
     error = String(deleteError);
+  } finally {
+    automationBusy = false;
+    render();
+  }
+}
+
+async function toggleAutomationFavorite(id: string) {
+  if (automationBusy || automationRun?.running) return;
+  const automation = automations.find((item) => item.id === id);
+  if (!automation) return;
+
+  automationBusy = true;
+  try {
+    await persistAutomations(
+      automations.map((item) =>
+        item.id === id
+          ? { ...item, favorite: !Boolean(item.favorite), updatedAt: nowIso() }
+          : item
+      )
+    );
+  } catch (favoriteError) {
+    error = String(favoriteError);
   } finally {
     automationBusy = false;
     render();
@@ -2111,12 +2139,20 @@ function renderAutomationRun() {
       <section class="modal-card automation-runner" role="dialog" aria-modal="true" aria-labelledby="automation-run-title">
         <div class="modal-title">
           <div>
-            <p class="eyebrow">${automationRun.running ? "Running" : automationRun.error ? "Run stopped" : "Completed"}</p>
+            <p class="eyebrow automation-run-state">${automationRun.running ? '<i class="automation-spinner" data-lucide="loader-circle"></i><span>Running...</span>' : automationRun.error ? "Run stopped" : "Completed"}</p>
             <h2 id="automation-run-title">${escapeHtml(automation.name)}</h2>
           </div>
           <span class="automation-progress">${successful} / ${automation.steps.length}</span>
         </div>
         <p class="automation-run-path"><i data-lucide="folder-open"></i><code>${escapeHtml(automation.path)}</code></p>
+        ${
+          automationRun.running
+            ? `<div class="automation-running-banner" role="status">
+                <span>Step ${automationRun.currentStep + 1} is running. EasyAlias is waiting for it to finish.</span>
+                <span class="automation-running-track" aria-hidden="true"><span></span></span>
+              </div>`
+            : ""
+        }
         ${automationRun.error ? `<p class="modal-error">${escapeHtml(automationRun.error)}</p>` : ""}
         <div class="automation-run-list">
           ${automation.steps
@@ -2125,7 +2161,7 @@ function renderAutomationRun() {
               return `<article class="automation-run-step is-${result.status}">
                 <div class="run-step-marker">${index + 1}</div>
                 <div class="run-step-copy">
-                  <div><strong>${step.kind === "wait" ? "Wait" : "Command"}</strong><span>${result.status}</span></div>
+                  <div><strong>${step.kind === "wait" ? "Wait" : "Command"}</strong><span>${result.status === "running" ? '<i class="automation-spinner" data-lucide="loader-circle"></i>Running...' : result.status}</span></div>
                   <code>${escapeHtml(automationStepLabel(step))}</code>
                   ${result.output ? `<pre>${escapeHtml(result.output)}</pre>` : ""}
                 </div>
@@ -2146,7 +2182,10 @@ function renderAutomationRun() {
 }
 
 function renderAutomationsView() {
-  const sortedAutomations = [...automations].sort((left, right) => left.name.localeCompare(right.name));
+  const sortedAutomations = [...automations].sort((left, right) => {
+    const favoriteDifference = Number(Boolean(right.favorite)) - Number(Boolean(left.favorite));
+    return favoriteDifference || left.name.localeCompare(right.name);
+  });
   appElement.innerHTML = `
     <section class="shell automation-shell">
       <header class="topbar automation-topbar">
@@ -2189,7 +2228,19 @@ function renderAutomationsView() {
                   .map(
                     (automation) => `<article class="automation-card">
                       <div class="automation-card-header">
-                        <div><strong>${escapeHtml(automation.name)}</strong><code>${escapeHtml(automation.path)}</code></div>
+                        <div class="automation-card-title">
+                          <button
+                            class="automation-favorite-button ${automation.favorite ? "active" : ""}"
+                            type="button"
+                            title="${automation.favorite ? "Remove from favorites" : "Add to favorites"}"
+                            aria-label="${automation.favorite ? "Remove" : "Add"} ${escapeHtml(automation.name)} ${automation.favorite ? "from" : "to"} favorites"
+                            aria-pressed="${Boolean(automation.favorite)}"
+                            data-automation-action="toggle-favorite"
+                            data-id="${escapeHtml(automation.id)}"
+                            ${automationRun?.running ? "disabled" : ""}
+                          ><i data-lucide="star"></i></button>
+                          <div><strong>${escapeHtml(automation.name)}</strong><code>${escapeHtml(automation.path)}</code></div>
+                        </div>
                         <span>${automation.steps.length} ${automation.steps.length === 1 ? "step" : "steps"}</span>
                       </div>
                       <ol class="automation-preview-list">
@@ -2220,7 +2271,7 @@ function renderAutomationsView() {
     </section>`;
 
   createIcons({
-    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, FolderOpen, Pencil, Play, Plus, Save, Terminal, Trash2, X },
+    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, FolderOpen, LoaderCircle, Pencil, Play, Plus, Save, Star, Terminal, Trash2, X },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
   scheduleMessageDismissal();
@@ -2246,6 +2297,7 @@ function bindAutomationEvents() {
       if (action === "new") openAutomationEditor();
       if (action === "edit" && id) openAutomationEditor(id);
       if (action === "delete" && id) void deleteAutomation(id);
+      if (action === "toggle-favorite" && id) void toggleAutomationFavorite(id);
       if (action === "run" && id) void runAutomation(id);
       if (action === "close-editor") closeAutomationEditor();
       if (action === "pick-folder") void openPathPicker("automation", "folder");

@@ -6,3 +6,4 @@ src-tauri/gen/
 .env
 .env.local
 npm-debug.log*
+target/

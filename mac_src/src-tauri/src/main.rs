@@ -131,6 +131,8 @@ struct Automation {
     name: String,
     path: String,
     steps: Vec<AutomationStep>,
+    #[serde(default)]
+    favorite: bool,
     created_at: String,
     updated_at: String,
 }
@@ -1770,6 +1772,7 @@ mod tests {
                     behavior: "wait".to_string(),
                 },
             ],
+            favorite: false,
             created_at: "2026-08-24T18:00:00.000Z".to_string(),
             updated_at: "2026-08-24T18:00:00.000Z".to_string(),
         };
@@ -1790,6 +1793,7 @@ mod tests {
                 seconds: 0,
                 behavior: "background".to_string(),
             }],
+            favorite: false,
             created_at: "2026-08-24T18:00:00.000Z".to_string(),
             updated_at: "2026-08-24T18:00:00.000Z".to_string(),
         };
