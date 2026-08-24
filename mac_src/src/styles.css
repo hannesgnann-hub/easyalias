@@ -1132,6 +1132,442 @@ textarea:focus {
   justify-content: flex-end;
 }
 
+.automation-shell {
+  width: min(1180px, calc(100vw - 32px));
+}
+
+.automation-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid #c9d6d1;
+  border-radius: 8px;
+  background: #c9d6d1;
+}
+
+.automation-summary div {
+  min-width: 0;
+  padding: 14px 16px;
+  background: #fff;
+}
+
+.automation-summary span,
+.automation-step-heading span,
+.automation-card-header span {
+  display: block;
+  color: #66736f;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.automation-summary strong {
+  display: block;
+  margin-top: 5px;
+}
+
+.automation-overview {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid #d5dfdb;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.automation-overview-header,
+.automation-card-header,
+.automation-step-heading,
+.automation-card-actions,
+.automation-add-actions,
+.automation-run-path,
+.run-step-copy > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.automation-overview-header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.automation-overview-header > div span {
+  color: #66736f;
+  font-size: 0.8rem;
+}
+
+.automation-overview .primary-button,
+.automation-editor .primary-button,
+.automation-runner .primary-button,
+.automation-editor .ghost-button,
+.automation-runner .danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.automation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.automation-card {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid #dce5e1;
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.automation-card-header {
+  align-items: flex-start;
+}
+
+.automation-card-header > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.automation-card-header strong {
+  font-size: 1rem;
+}
+
+.automation-card-header code {
+  overflow: hidden;
+  color: #60706b;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-card-header span {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 6px;
+  color: #31554e;
+  background: #e7f3ef;
+}
+
+.automation-preview-list {
+  display: grid;
+  gap: 7px;
+  min-height: 104px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.automation-preview-list li {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.automation-preview-list span {
+  color: #60706b;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.automation-preview-list code {
+  overflow: hidden;
+  color: #29413b;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-preview-list .automation-more {
+  display: block;
+  color: #66736f;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.automation-card-actions {
+  justify-content: flex-end;
+  padding-top: 12px;
+  border-top: 1px solid #e0e8e5;
+}
+
+.automation-run-button {
+  margin-right: auto;
+}
+
+.automation-delete-button {
+  color: #8a302b;
+  border-color: #edd0cd;
+  background: #fff4f3;
+}
+
+.automation-empty {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-height: 320px;
+  margin-top: 16px;
+  color: #66736f;
+  text-align: center;
+}
+
+.automation-empty strong {
+  color: #1d2528;
+  font-size: 1rem;
+}
+
+.automation-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  color: #0f766e;
+  background: #d9f4ef;
+}
+
+.automation-editor,
+.automation-runner {
+  width: min(940px, 100%);
+}
+
+.automation-intro {
+  margin: 0;
+  padding: 11px 12px;
+  border-left: 3px solid #8dc7b7;
+  color: #4f605b;
+  background: #f4faf7;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.automation-form-grid {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.7fr) minmax(280px, 1.3fr);
+  gap: 14px;
+}
+
+.automation-form-grid label,
+.automation-step-fields label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  color: #45534f;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.automation-path-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  gap: 8px;
+}
+
+.automation-folder-button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
+}
+
+.automation-step-heading {
+  align-items: flex-end;
+  padding-top: 2px;
+}
+
+.automation-step-heading > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.automation-step-heading h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.automation-add-actions .ghost-button {
+  min-height: 38px;
+  padding: 0 12px;
+}
+
+.automation-step-list,
+.automation-run-list {
+  display: grid;
+  gap: 10px;
+}
+
+.automation-step-editor {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 36px;
+  gap: 12px;
+  align-items: start;
+  padding: 13px;
+  border: 1px solid #dce5e1;
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.automation-step-number,
+.run-step-marker {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: #17423d;
+  background: #d9f4ef;
+  font-weight: 900;
+}
+
+.automation-step-fields {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.55fr) minmax(150px, 0.8fr) minmax(230px, 1.65fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.automation-command-field {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.automation-step-fields textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+
+.automation-wait-field {
+  grid-column: 2 / 4;
+}
+
+.automation-step-controls {
+  display: grid;
+  gap: 5px;
+}
+
+.automation-step-controls button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid #d7e1dd;
+  border-radius: 7px;
+  color: #31554e;
+  background: #fff;
+}
+
+.automation-step-controls button:hover:not(:disabled) {
+  color: #0f766e;
+  border-color: #8fb8ad;
+  background: #e8f5f1;
+}
+
+.automation-step-controls .danger {
+  color: #8a302b;
+  border-color: #edd0cd;
+  background: #fff4f3;
+}
+
+.automation-progress {
+  align-self: start;
+  padding: 5px 8px;
+  border-radius: 6px;
+  color: #17423d;
+  background: #d9f4ef;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.automation-run-path {
+  justify-content: flex-start;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #dce5e1;
+  border-radius: 8px;
+  color: #31554e;
+  background: #f6faf8;
+}
+
+.automation-run-path code {
+  min-width: 0;
+}
+
+.automation-run-step {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #dce5e1;
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.automation-run-step.is-running {
+  border-color: #64bbae;
+  background: #eefaf7;
+}
+
+.automation-run-step.is-success .run-step-marker {
+  color: #155b45;
+  background: #d8f1e5;
+}
+
+.automation-run-step.is-error {
+  border-color: #e3aaa5;
+  background: #fff5f4;
+}
+
+.automation-run-step.is-error .run-step-marker {
+  color: #812626;
+  background: #fbe0de;
+}
+
+.automation-run-step.is-skipped {
+  opacity: 0.58;
+}
+
+.run-step-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.run-step-copy > div span {
+  color: #66736f;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: capitalize;
+}
+
+.run-step-copy code {
+  color: #29413b;
+  font-size: 0.82rem;
+}
+
+.run-step-copy pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 2px 0 0;
+  padding: 10px;
+  border-radius: 7px;
+  color: #dff7ef;
+  background: #10241f;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .support-banner {
   position: fixed;
   right: 0;
@@ -1206,9 +1642,43 @@ textarea:focus {
   }
 
   .status-grid,
+  .automation-summary,
   .workspace,
   .suggestion-grid {
     grid-template-columns: 1fr;
+  }
+
+  .automation-grid,
+  .automation-form-grid,
+  .automation-step-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .automation-overview-header,
+  .automation-step-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .automation-command-field,
+  .automation-wait-field {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .automation-add-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .automation-step-editor {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .automation-step-controls {
+    grid-column: 2;
+    display: flex;
+    justify-content: flex-end;
   }
 
   .primary-button,

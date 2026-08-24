@@ -4,6 +4,7 @@ use std::{
     env, fs,
     io::ErrorKind,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -105,6 +106,41 @@ struct TrashMutationResult {
     trash: Vec<TrashEntry>,
 }
 
+// Automations are intentionally stored separately from aliases. Each workflow
+// has one working directory and an ordered list of commands or timed pauses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationStep {
+    id: String,
+    kind: String,
+    #[serde(default)]
+    command: String,
+    #[serde(default)]
+    seconds: u64,
+    #[serde(default = "default_command_behavior")]
+    behavior: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Automation {
+    id: String,
+    name: String,
+    path: String,
+    steps: Vec<AutomationStep>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationCommandResult {
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    process_id: Option<u32>,
+}
+
 // Keep the established aliases.zsh path for backwards compatibility. The file
 // contains syntax understood by both zsh and Bash, regardless of its extension.
 const SOURCE_LINE: &str = "source ~/.easyalias/aliases.zsh";
@@ -116,6 +152,15 @@ const BACKUP_VERSION: u32 = 1;
 const MAX_BACKUP_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_BACKUP_ALIASES: usize = 5000;
 const TRASH_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
+const MAX_AUTOMATIONS: usize = 200;
+const MAX_AUTOMATION_STEPS: usize = 100;
+const MAX_AUTOMATION_COMMAND_BYTES: usize = 16 * 1024;
+const MAX_AUTOMATION_OUTPUT_CHARS: usize = 20_000;
+const MAX_WAIT_SECONDS: u64 = 24 * 60 * 60;
+
+fn default_command_behavior() -> String {
+    "wait".to_string()
+}
 
 #[derive(Debug)]
 struct ShellSetup {
@@ -161,6 +206,10 @@ fn aliases_file() -> Result<PathBuf, String> {
 
 fn trash_file() -> Result<PathBuf, String> {
     Ok(app_dir()?.join("trash.json"))
+}
+
+fn automations_file() -> Result<PathBuf, String> {
+    Ok(app_dir()?.join("automations.json"))
 }
 
 fn import_marker_file(_setup: &ShellSetup) -> Result<PathBuf, String> {
@@ -616,6 +665,131 @@ fn write_trash_entries(entries: &[TrashEntry]) -> Result<(), String> {
         .map_err(|error| format!("{} could not be written: {}", path.display(), error))
 }
 
+fn validate_automations(automations: &[Automation]) -> Result<(), String> {
+    if automations.len() > MAX_AUTOMATIONS {
+        return Err(format!(
+            "EasyAlias supports up to {} automations.",
+            MAX_AUTOMATIONS
+        ));
+    }
+
+    let mut automation_ids = HashSet::new();
+    for automation in automations {
+        let name = automation.name.trim();
+        if name.is_empty() || name.chars().count() > 120 {
+            return Err("Every automation needs a name with at most 120 characters.".to_string());
+        }
+        if automation.id.trim().is_empty() || !automation_ids.insert(automation.id.as_str()) {
+            return Err("Every automation needs a unique id.".to_string());
+        }
+        if automation.path.trim().is_empty() || automation.path.chars().count() > 4096 {
+            return Err(format!(
+                "Automation \"{}\" needs a valid working directory.",
+                name
+            ));
+        }
+        if automation.steps.is_empty() || automation.steps.len() > MAX_AUTOMATION_STEPS {
+            return Err(format!(
+                "Automation \"{}\" needs between 1 and {} steps.",
+                name, MAX_AUTOMATION_STEPS
+            ));
+        }
+
+        let mut step_ids = HashSet::new();
+        for step in &automation.steps {
+            if step.id.trim().is_empty() || !step_ids.insert(step.id.as_str()) {
+                return Err(format!(
+                    "Automation \"{}\" contains a duplicate step id.",
+                    name
+                ));
+            }
+
+            match step.kind.as_str() {
+                "command" => {
+                    if step.command.trim().is_empty()
+                        || step.command.len() > MAX_AUTOMATION_COMMAND_BYTES
+                    {
+                        return Err(format!(
+                            "Every command in \"{}\" must contain at most {} bytes.",
+                            name, MAX_AUTOMATION_COMMAND_BYTES
+                        ));
+                    }
+                    if !matches!(step.behavior.as_str(), "wait" | "background") {
+                        return Err(format!(
+                            "Automation \"{}\" has an invalid command mode.",
+                            name
+                        ));
+                    }
+                }
+                "wait" => {
+                    if step.seconds == 0 || step.seconds > MAX_WAIT_SECONDS {
+                        return Err(format!(
+                            "Wait steps in \"{}\" must be between 1 second and 24 hours.",
+                            name
+                        ));
+                    }
+                }
+                _ => return Err(format!("Automation \"{}\" has an unknown step type.", name)),
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn load_automation_entries() -> Result<Vec<Automation>, String> {
+    ensure_app_files()?;
+    let path = automations_file()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let automations: Vec<Automation> = serde_json::from_str(&content)
+        .map_err(|error| format!("automations.json is not valid EasyAlias JSON: {}", error))?;
+    validate_automations(&automations)?;
+    Ok(automations)
+}
+
+fn write_automation_entries(automations: &[Automation]) -> Result<(), String> {
+    validate_automations(automations)?;
+    ensure_app_files()?;
+    let json = serde_json::to_string_pretty(automations)
+        .map_err(|error| format!("Automations could not be serialized: {}", error))?;
+    let path = automations_file()?;
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))
+}
+
+fn automation_working_directory(value: &str) -> Result<PathBuf, String> {
+    let trimmed = value.trim();
+    let path = if trimmed == "~" {
+        home_dir()?
+    } else if let Some(relative) = trimmed.strip_prefix("~/") {
+        home_dir()?.join(relative)
+    } else {
+        PathBuf::from(trimmed)
+    };
+
+    if !path.is_dir() {
+        return Err(format!(
+            "Working directory does not exist: {}",
+            path.display()
+        ));
+    }
+
+    path.canonicalize()
+        .map_err(|error| format!("Working directory could not be opened: {}", error))
+}
+
+fn limited_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .chars()
+        .take(MAX_AUTOMATION_OUTPUT_CHARS)
+        .collect()
+}
+
 // Reading the trash also enforces retention. Expired entries are removed from
 // disk immediately, so they cannot reappear after an app restart.
 fn load_trash_entries() -> Result<Vec<TrashEntry>, String> {
@@ -685,6 +859,70 @@ fn save_aliases(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
 
     write_alias_files(&aliases)?;
     app_state(aliases, &setup, Vec::new())
+}
+
+#[tauri::command]
+fn load_automations() -> Result<Vec<Automation>, String> {
+    load_automation_entries()
+}
+
+#[tauri::command]
+fn save_automations(automations: Vec<Automation>) -> Result<Vec<Automation>, String> {
+    write_automation_entries(&automations)?;
+    Ok(automations)
+}
+
+// Commands run in the selected directory through the user's normal macOS zsh
+// environment. Foreground commands return their output and exit status;
+// background commands detach stdin/stdout and return immediately with a PID.
+#[tauri::command]
+async fn run_automation_command(
+    path: String,
+    command: String,
+    background: bool,
+) -> Result<AutomationCommandResult, String> {
+    if command.trim().is_empty() || command.len() > MAX_AUTOMATION_COMMAND_BYTES {
+        return Err(format!(
+            "Command must contain at most {} bytes.",
+            MAX_AUTOMATION_COMMAND_BYTES
+        ));
+    }
+    let working_directory = automation_working_directory(&path)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut process = Command::new("/bin/zsh");
+        process
+            .arg("-lc")
+            .arg(command)
+            .current_dir(working_directory)
+            .stdin(Stdio::null());
+
+        if background {
+            let child = process
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|error| format!("Background command could not be started: {}", error))?;
+            return Ok(AutomationCommandResult {
+                exit_code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                process_id: Some(child.id()),
+            });
+        }
+
+        let output = process
+            .output()
+            .map_err(|error| format!("Command could not be executed: {}", error))?;
+        Ok(AutomationCommandResult {
+            exit_code: output.status.code(),
+            stdout: limited_output(&output.stdout),
+            stderr: limited_output(&output.stderr),
+            process_id: None,
+        })
+    })
+    .await
+    .map_err(|error| format!("Automation worker failed: {}", error))?
 }
 
 #[tauri::command]
@@ -1017,6 +1255,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_aliases,
             save_aliases,
+            load_automations,
+            save_automations,
+            run_automation_command,
             list_trash,
             move_alias_to_trash,
             restore_trash_alias,
@@ -1373,5 +1614,55 @@ mod tests {
             .any(|alias| alias.name == "ll" && alias.command_preview == "ls -lah"));
         assert!(result.state.aliases.iter().any(|alias| alias.name == "gs"));
         assert!(result.state.aliases.iter().any(|alias| alias.name == "dcu"));
+    }
+
+    #[test]
+    fn accepts_a_valid_sequential_automation() {
+        let automation = Automation {
+            id: "devstart".to_string(),
+            name: "DevStart".to_string(),
+            path: "~/Projects/nava".to_string(),
+            steps: vec![
+                AutomationStep {
+                    id: "compose".to_string(),
+                    kind: "command".to_string(),
+                    command: "docker compose up -d".to_string(),
+                    seconds: 0,
+                    behavior: "wait".to_string(),
+                },
+                AutomationStep {
+                    id: "settle".to_string(),
+                    kind: "wait".to_string(),
+                    command: String::new(),
+                    seconds: 10,
+                    behavior: "wait".to_string(),
+                },
+            ],
+            created_at: "2026-08-24T18:00:00.000Z".to_string(),
+            updated_at: "2026-08-24T18:00:00.000Z".to_string(),
+        };
+
+        assert!(validate_automations(&[automation]).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_automation_steps() {
+        let automation = Automation {
+            id: "broken".to_string(),
+            name: "Broken".to_string(),
+            path: "~/Projects/nava".to_string(),
+            steps: vec![AutomationStep {
+                id: "wait".to_string(),
+                kind: "wait".to_string(),
+                command: String::new(),
+                seconds: 0,
+                behavior: "background".to_string(),
+            }],
+            created_at: "2026-08-24T18:00:00.000Z".to_string(),
+            updated_at: "2026-08-24T18:00:00.000Z".to_string(),
+        };
+
+        let validation_error = validate_automations(&[automation]).unwrap_err();
+        assert!(validation_error.contains("between 1 second and 24 hours"));
     }
 }
