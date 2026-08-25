@@ -145,6 +145,12 @@ type Automation = {
   updatedAt: string;
 };
 
+type AutomationBackupImportResult = {
+  automations: Automation[];
+  importedCount: number;
+  replacedCount: number;
+};
+
 type AutomationCommandResult = {
   exitCode: number | null;
   stdout: string;
@@ -554,6 +560,15 @@ let automationEditor: Automation | null = null;
 let automationBusy = false;
 let automationError = "";
 let automationRun: AutomationRunState | null = null;
+// Automation backups deliberately use their own state and file format. This
+// prevents a workflow backup from being mistaken for an alias backup while
+// retaining the same selective export/import experience.
+let automationBackupDialogMode: BackupDialogMode | null = null;
+let automationBackupCandidates: Automation[] = [];
+let selectedAutomationBackupIds = new Set<string>();
+let automationBackupFilePath = "";
+let automationBackupBusy = false;
+let automationBackupError = "";
 
 const trashRetentionSeconds = 30 * 24 * 60 * 60;
 
@@ -1126,6 +1141,170 @@ function closeBackupDialogAfterSuccess() {
   selectedBackupIds.clear();
   backupFilePath = "";
   backupError = "";
+}
+
+function compareAutomations(left: Automation, right: Automation) {
+  const favoriteDifference = Number(Boolean(right.favorite)) - Number(Boolean(left.favorite));
+  return favoriteDifference || left.name.localeCompare(right.name);
+}
+
+function openAutomationBackupExport() {
+  clearMessages();
+  automationBackupError = "";
+  automationBackupFilePath = "";
+  automationBackupCandidates = [...automations].sort(compareAutomations);
+  selectedAutomationBackupIds = new Set(automationBackupCandidates.map((automation) => automation.id));
+  automationBackupDialogMode = "export";
+  renderAutomationsView();
+}
+
+function openAutomationBackupImport() {
+  clearMessages();
+  automationBackupError = "";
+  automationBackupFilePath = "";
+  automationBackupCandidates = [];
+  selectedAutomationBackupIds.clear();
+  automationBackupDialogMode = "import";
+  renderAutomationsView();
+}
+
+function closeAutomationBackupDialog() {
+  if (automationBackupBusy) return;
+  automationBackupDialogMode = null;
+  automationBackupCandidates = [];
+  selectedAutomationBackupIds.clear();
+  automationBackupFilePath = "";
+  automationBackupError = "";
+  renderAutomationsView();
+}
+
+function closeAutomationBackupDialogAfterSuccess() {
+  automationBackupDialogMode = null;
+  automationBackupCandidates = [];
+  selectedAutomationBackupIds.clear();
+  automationBackupFilePath = "";
+  automationBackupError = "";
+}
+
+async function chooseAutomationBackupFile() {
+  if (automationBackupBusy || automationBackupDialogMode !== "import") return;
+  automationBackupError = "";
+
+  if (!isTauriRuntime()) {
+    automationBackupError = "Automation backup files can only be opened in the Tauri app.";
+    renderAutomationsView();
+    return;
+  }
+
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "EasyAlias Automation Backup", extensions: ["json"] }]
+    });
+    if (typeof selected === "string") await inspectAutomationBackupFile(selected);
+  } catch (fileError) {
+    automationBackupError = `Automation backup could not be selected: ${String(fileError)}`;
+    renderAutomationsView();
+  }
+}
+
+async function inspectAutomationBackupFile(path: string) {
+  if (automationBackupBusy || automationBackupDialogMode !== "import") return;
+  automationBackupBusy = true;
+  automationBackupError = "";
+  renderAutomationsView();
+
+  try {
+    automationBackupCandidates = await invokeCommand<Automation[]>("inspect_automation_backup", { path });
+    automationBackupFilePath = path;
+    selectedAutomationBackupIds = new Set(automationBackupCandidates.map((automation) => automation.id));
+  } catch (inspectError) {
+    automationBackupCandidates = [];
+    selectedAutomationBackupIds.clear();
+    automationBackupFilePath = "";
+    automationBackupError = String(inspectError);
+  }
+
+  automationBackupBusy = false;
+  renderAutomationsView();
+}
+
+async function exportSelectedAutomations(event: SubmitEvent) {
+  event.preventDefault();
+  if (automationBackupBusy || automationBackupDialogMode !== "export") return;
+  automationBackupError = "";
+
+  if (selectedAutomationBackupIds.size === 0) {
+    automationBackupError = "Select at least one automation to export.";
+    renderAutomationsView();
+    return;
+  }
+  if (!isTauriRuntime()) {
+    automationBackupError = "Automation backups can only be exported in the Tauri app.";
+    renderAutomationsView();
+    return;
+  }
+
+  try {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const destination = await save({
+      defaultPath: `EasyAlias-automations-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: "EasyAlias Automation Backup", extensions: ["json"] }]
+    });
+    if (typeof destination !== "string") return;
+
+    automationBackupBusy = true;
+    renderAutomationsView();
+    const result = await invokeCommand<BackupExportResult>("export_automation_backup", {
+      selectedIds: [...selectedAutomationBackupIds],
+      destination,
+      exportedAt: nowIso()
+    });
+    closeAutomationBackupDialogAfterSuccess();
+    notice = `${result.exportedCount} automations exported to ${result.file}.`;
+  } catch (exportError) {
+    automationBackupError = String(exportError);
+  }
+
+  automationBackupBusy = false;
+  renderAutomationsView();
+}
+
+async function importSelectedBackupAutomations(event: SubmitEvent) {
+  event.preventDefault();
+  if (automationBackupBusy || automationBackupDialogMode !== "import") return;
+  automationBackupError = "";
+
+  if (!automationBackupFilePath || selectedAutomationBackupIds.size === 0) {
+    automationBackupError = automationBackupFilePath
+      ? "Select at least one automation to import."
+      : "Choose or drop an EasyAlias automation backup first.";
+    renderAutomationsView();
+    return;
+  }
+
+  automationBackupBusy = true;
+  renderAutomationsView();
+  try {
+    const result = await invokeCommand<AutomationBackupImportResult>("import_automation_backup", {
+      path: automationBackupFilePath,
+      selectedIds: [...selectedAutomationBackupIds],
+      importedAt: nowIso()
+    });
+    automations = result.automations;
+    closeAutomationBackupDialogAfterSuccess();
+    const replacementNote = result.replacedCount
+      ? ` ${result.replacedCount} existing automations replaced.`
+      : "";
+    notice = `${result.importedCount} automations imported.${replacementNote}`;
+  } catch (backupImportError) {
+    automationBackupError = String(backupImportError);
+  }
+
+  automationBackupBusy = false;
+  renderAutomationsView();
 }
 
 // Save a suggestion immediately. Suggestions with an existing alias name are
@@ -2195,6 +2374,8 @@ function renderAutomationsView() {
         </div>
         <div class="topbar-actions">
           <button class="header-icon-button" type="button" title="Back to aliases" aria-label="Back to aliases" data-automation-action="back" ${automationRun?.running ? "disabled" : ""}><i data-lucide="arrow-left"></i></button>
+          <button class="header-icon-button" type="button" title="Export automation backup" aria-label="Export automation backup" data-automation-action="open-backup-export" ${automations.length && !automationBackupBusy && !automationRun?.running ? "" : "disabled"}><i data-lucide="file-up"></i></button>
+          <button class="header-icon-button" type="button" title="Import automation backup" aria-label="Import automation backup" data-automation-action="open-backup-import" ${automationBackupBusy || automationRun?.running ? "disabled" : ""}><i data-lucide="file-down"></i></button>
           <button class="header-icon-button automation-create-button" type="button" title="Create automation" aria-label="Create automation" data-automation-action="new" ${automationRun?.running ? "disabled" : ""}><i data-lucide="plus"></i></button>
         </div>
       </header>
@@ -2265,13 +2446,14 @@ function renderAutomationsView() {
 
       ${renderAutomationEditor()}
       ${renderAutomationRun()}
+      ${renderAutomationBackupDialog()}
 
       <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>Become a sponsor</a></aside>
       <footer class="app-footer"><a href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>© Hannes Gnann</a><span aria-hidden="true">-</span><a href="${redditUrl}" target="_blank" rel="noreferrer" data-external-link>Reddit</a><span aria-hidden="true">-</span><a href="${websiteUrl}" target="_blank" rel="noreferrer" data-external-link>Website</a></footer>
     </section>`;
 
   createIcons({
-    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, FolderOpen, LoaderCircle, Pencil, Play, Plus, Save, Star, Terminal, Trash2, X },
+    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, FileDown, FileUp, FolderOpen, LoaderCircle, Pencil, Play, Plus, Save, Star, Terminal, Trash2, X },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
   scheduleMessageDismissal();
@@ -2280,6 +2462,8 @@ function renderAutomationsView() {
 
 function bindAutomationEvents() {
   document.querySelector<HTMLFormElement>("#automation-form")?.addEventListener("submit", saveAutomation);
+  document.querySelector<HTMLFormElement>("#automation-backup-export-form")?.addEventListener("submit", exportSelectedAutomations);
+  document.querySelector<HTMLFormElement>("#automation-backup-import-form")?.addEventListener("submit", importSelectedBackupAutomations);
   document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => link.addEventListener("click", openExternalLink));
   document.querySelector<HTMLInputElement>('input[name="automation-name"]')?.addEventListener("input", (event) => updateAutomationEditor("name", (event.target as HTMLInputElement).value));
   document.querySelector<HTMLInputElement>('input[name="automation-path"]')?.addEventListener("input", (event) => updateAutomationEditor("path", (event.target as HTMLInputElement).value));
@@ -2288,12 +2472,37 @@ function bindAutomationEvents() {
   document.querySelectorAll<HTMLSelectElement>('select[name="automation-step-behavior"]').forEach((select) => select.addEventListener("change", () => updateAutomationStep(Number(select.dataset.stepIndex), "behavior", select.value as AutomationCommandBehavior)));
   document.querySelectorAll<HTMLInputElement>('input[name="automation-step-seconds"]').forEach((input) => input.addEventListener("input", () => updateAutomationStep(Number(input.dataset.stepIndex), "seconds", Number(input.value))));
 
+  document.querySelector<HTMLInputElement>('input[name="automation-backup-all"]')?.addEventListener("change", (event) => {
+    const checked = (event.target as HTMLInputElement).checked;
+    selectedAutomationBackupIds = checked
+      ? new Set(automationBackupCandidates.map((automation) => automation.id))
+      : new Set();
+    document.querySelectorAll<HTMLInputElement>('input[name="automation-backup-candidate"]').forEach((checkbox) => {
+      checkbox.checked = checked;
+    });
+    syncAutomationBackupSelectionControls();
+  });
+
+  document.querySelectorAll<HTMLInputElement>('input[name="automation-backup-candidate"]').forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedAutomationBackupIds.add(checkbox.value);
+      else selectedAutomationBackupIds.delete(checkbox.value);
+      syncAutomationBackupSelectionControls();
+    });
+  });
+
+  if (automationBackupDialogMode) syncAutomationBackupSelectionControls();
+
   document.querySelectorAll<HTMLButtonElement>("[data-automation-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const action = button.dataset.automationAction;
       const id = button.dataset.id;
       const index = Number(button.dataset.stepIndex);
       if (action === "back") closeAutomationsView();
+      if (action === "open-backup-export") openAutomationBackupExport();
+      if (action === "open-backup-import") openAutomationBackupImport();
+      if (action === "close-backup") closeAutomationBackupDialog();
+      if (action === "choose-backup-file") void chooseAutomationBackupFile();
       if (action === "new") openAutomationEditor();
       if (action === "edit" && id) openAutomationEditor(id);
       if (action === "delete" && id) void deleteAutomation(id);
@@ -2769,6 +2978,108 @@ function renderBackupDialog() {
   `;
 }
 
+function renderAutomationBackupDialog() {
+  if (!automationBackupDialogMode) return "";
+
+  const isExport = automationBackupDialogMode === "export";
+  const allSelected =
+    automationBackupCandidates.length > 0 &&
+    automationBackupCandidates.every((automation) => selectedAutomationBackupIds.has(automation.id));
+  const existingNames = new Set(automations.map((automation) => automation.name));
+  const fileName = automationBackupFilePath.split(/[\\/]/).pop() ?? automationBackupFilePath;
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <form
+        class="modal-card import-card backup-card"
+        id="${isExport ? "automation-backup-export-form" : "automation-backup-import-form"}"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="automation-backup-title"
+      >
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">${isExport ? "Portable Workflows" : "Restore Workflows"}</p>
+            <h2 id="automation-backup-title">${isExport ? "Export automations" : "Import automations"}</h2>
+          </div>
+          <button class="ghost-button modal-close" type="button" data-automation-action="close-backup" ${automationBackupBusy ? "disabled" : ""}>Close</button>
+        </div>
+
+        <p class="import-intro">
+          ${
+            isExport
+              ? "Choose which automations to include. The versioned JSON backup keeps every path, step, behavior, and favorite state."
+              : "Choose an EasyAlias automation backup or drop it below. You can review every workflow before anything is changed."
+          }
+        </p>
+
+        ${automationBackupError ? `<p class="modal-error">${escapeHtml(automationBackupError)}</p>` : ""}
+
+        ${
+          isExport
+            ? ""
+            : `<button class="backup-drop-zone automation-backup-drop-zone" type="button" data-automation-action="choose-backup-file" ${automationBackupBusy ? "disabled" : ""}>
+                <span class="backup-drop-icon" aria-hidden="true">&#8681;</span>
+                <strong>${automationBackupFilePath ? escapeHtml(fileName) : "Drop an automation backup here"}</strong>
+                <span>${automationBackupFilePath ? `${automationBackupCandidates.length} automations found` : "or click to choose a .json file"}</span>
+              </button>`
+        }
+
+        ${
+          automationBackupCandidates.length
+            ? `<label class="import-select-all">
+                <input type="checkbox" name="automation-backup-all" ${allSelected ? "checked" : ""} ${automationBackupBusy ? "disabled" : ""} />
+                <span>Select all</span>
+              </label>
+
+              <div class="import-list" aria-label="Automations available for ${isExport ? "export" : "import"}">
+                ${automationBackupCandidates
+                  .map((automation) => {
+                    const willReplace = !isExport && existingNames.has(automation.name);
+                    const stepLabel = `${automation.steps.length} ${automation.steps.length === 1 ? "step" : "steps"}`;
+                    return `
+                      <label class="import-row">
+                        <input
+                          type="checkbox"
+                          name="automation-backup-candidate"
+                          value="${escapeHtml(automation.id)}"
+                          ${selectedAutomationBackupIds.has(automation.id) ? "checked" : ""}
+                          ${automationBackupBusy ? "disabled" : ""}
+                        />
+                        <span class="import-alias-copy">
+                          <span class="import-alias-meta">
+                            <strong>${escapeHtml(automation.name)}</strong>
+                            <span class="${willReplace ? "backup-conflict" : ""}">${willReplace ? "Replaces existing" : stepLabel}</span>
+                          </span>
+                          <code>${escapeHtml(automation.path)}</code>
+                        </span>
+                      </label>`;
+                  })
+                  .join("")}
+              </div>`
+            : isExport
+              ? `<p class="backup-empty">No automations are available to export.</p>`
+              : ""
+        }
+
+        <p class="import-safety">
+          ${
+            isExport
+              ? "The backup contains only the automations you select."
+              : "Automations with matching names replace their current EasyAlias workflow. Unselected automations stay unchanged."
+          }
+        </p>
+
+        <div class="modal-actions import-actions">
+          <button class="ghost-button" type="button" data-automation-action="close-backup" ${automationBackupBusy ? "disabled" : ""}>Cancel</button>
+          <button class="primary-button" type="submit" data-automation-backup-submit ${selectedAutomationBackupIds.size && !automationBackupBusy ? "" : "disabled"}>
+            ${automationBackupBusy ? "Working..." : `${isExport ? "Export" : "Import"} Selected (${selectedAutomationBackupIds.size})`}
+          </button>
+        </div>
+      </form>
+    </section>`;
+}
+
 function renderTrashDialog() {
   if (!trashOpen) return "";
 
@@ -3002,6 +3313,30 @@ function syncBackupSelectionControls() {
   }
 }
 
+// Automation backups use the same no-re-render selection behavior as alias
+// backups so long lists keep their current scroll position while selecting.
+function syncAutomationBackupSelectionControls() {
+  const selectedCount = automationBackupCandidates.filter((automation) =>
+    selectedAutomationBackupIds.has(automation.id),
+  ).length;
+  const selectAll = document.querySelector<HTMLInputElement>('input[name="automation-backup-all"]');
+
+  if (selectAll) {
+    selectAll.checked =
+      automationBackupCandidates.length > 0 && selectedCount === automationBackupCandidates.length;
+    selectAll.indeterminate = selectedCount > 0 && selectedCount < automationBackupCandidates.length;
+  }
+
+  const submitButton = document.querySelector<HTMLButtonElement>("[data-automation-backup-submit]");
+  if (submitButton) {
+    const actionLabel = automationBackupDialogMode === "export" ? "Export" : "Import";
+    submitButton.disabled = selectedCount === 0 || automationBackupBusy;
+    submitButton.textContent = automationBackupBusy
+      ? "Working..."
+      : `${actionLabel} Selected (${selectedCount})`;
+  }
+}
+
 // Because render() replaces the DOM, event listeners are reattached after every render.
 // Small live-preview updates skip render(), so their listeners stay intact.
 function bindEvents() {
@@ -3178,22 +3513,37 @@ async function bindNativeBackupDrop() {
   try {
     const { getCurrentWebview } = await import("@tauri-apps/api/webview");
     await getCurrentWebview().onDragDropEvent((event) => {
-      if (backupDialogMode !== "import") return;
+      const isAliasImport = backupDialogMode === "import";
+      const isAutomationImport = automationBackupDialogMode === "import";
+      if (!isAliasImport && !isAutomationImport) return;
+
+      const dropZoneSelector = isAutomationImport
+        ? ".automation-backup-drop-zone"
+        : ".backup-drop-zone";
 
       if (event.payload.type === "enter" || event.payload.type === "over") {
-        document.querySelector(".backup-drop-zone")?.classList.add("is-dragging");
+        document.querySelector(dropZoneSelector)?.classList.add("is-dragging");
         return;
       }
 
-      document.querySelector(".backup-drop-zone")?.classList.remove("is-dragging");
+      document.querySelector(dropZoneSelector)?.classList.remove("is-dragging");
       if (event.payload.type !== "drop") return;
       if (event.payload.paths.length !== 1) {
-        backupError = "Drop exactly one EasyAlias JSON backup.";
-        render();
+        if (isAutomationImport) {
+          automationBackupError = "Drop exactly one EasyAlias automation JSON backup.";
+          renderAutomationsView();
+        } else {
+          backupError = "Drop exactly one EasyAlias JSON backup.";
+          render();
+        }
         return;
       }
 
-      void inspectBackupFile(event.payload.paths[0]);
+      if (isAutomationImport) {
+        void inspectAutomationBackupFile(event.payload.paths[0]);
+      } else {
+        void inspectBackupFile(event.payload.paths[0]);
+      }
     });
   } catch (dropError) {
     console.warn("Native backup drop could not be initialized", dropError);

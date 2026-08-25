@@ -92,6 +92,23 @@ struct BackupImportResult {
     replaced_count: usize,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationBackup {
+    format: String,
+    version: u32,
+    exported_at: String,
+    automations: Vec<Automation>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationBackupImportResult {
+    automations: Vec<Automation>,
+    imported_count: usize,
+    replaced_count: usize,
+}
+
 // Deleted aliases live in a separate file so config.json remains fully
 // backwards-compatible. deleted_at is Unix time, which makes the 30-day
 // retention rule independent from locale and frontend date parsing.
@@ -171,6 +188,8 @@ const APP_ALIAS_LINE: &str = "alias easya='open /Applications/EasyAlias.app'";
 const IMPORT_MARKER_CONTENT: &str = "shell alias import prompt handled\n";
 const BACKUP_FORMAT: &str = "easyalias-backup";
 const BACKUP_VERSION: u32 = 1;
+const AUTOMATION_BACKUP_FORMAT: &str = "easyalias-automation-backup";
+const AUTOMATION_BACKUP_VERSION: u32 = 1;
 const MAX_BACKUP_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_BACKUP_ALIASES: usize = 5000;
 const TRASH_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
@@ -759,6 +778,48 @@ fn validate_automations(automations: &[Automation]) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_automation_backup_collection(automations: &[Automation]) -> Result<(), String> {
+    validate_automations(automations)?;
+
+    let mut names = HashSet::new();
+    for automation in automations {
+        if !names.insert(automation.name.as_str()) {
+            return Err(format!(
+                "Duplicate automation name in backup: {}",
+                automation.name
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn read_automation_backup(path: &Path) -> Result<AutomationBackup, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("{} could not be inspected: {}", path.display(), error))?;
+    if !metadata.is_file() {
+        return Err("Choose an EasyAlias automation JSON backup file.".to_string());
+    }
+    if metadata.len() > MAX_BACKUP_BYTES {
+        return Err("The backup is larger than 5 MB.".to_string());
+    }
+
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let backup: AutomationBackup = serde_json::from_str(&content)
+        .map_err(|error| format!("This is not a valid EasyAlias automation backup: {}", error))?;
+
+    if backup.format != AUTOMATION_BACKUP_FORMAT || backup.version != AUTOMATION_BACKUP_VERSION {
+        return Err("This EasyAlias automation backup format is not supported.".to_string());
+    }
+    if backup.exported_at.trim().is_empty() {
+        return Err("The backup has no export timestamp.".to_string());
+    }
+    validate_automation_backup_collection(&backup.automations)?;
+
+    Ok(backup)
+}
+
 fn load_automation_entries() -> Result<Vec<Automation>, String> {
     ensure_app_files()?;
     let path = automations_file()?;
@@ -892,6 +953,127 @@ fn load_automations() -> Result<Vec<Automation>, String> {
 fn save_automations(automations: Vec<Automation>) -> Result<Vec<Automation>, String> {
     write_automation_entries(&automations)?;
     Ok(automations)
+}
+
+// Automation backups use their own envelope so they cannot be confused with
+// alias backups. Only the workflows selected in the review dialog are written.
+#[tauri::command]
+fn export_automation_backup(
+    selected_ids: Vec<String>,
+    destination: String,
+    exported_at: String,
+) -> Result<BackupExportResult, String> {
+    if selected_ids.is_empty() {
+        return Err("Select at least one automation to export.".to_string());
+    }
+    if destination.trim().is_empty() {
+        return Err("Choose where to save the backup.".to_string());
+    }
+    if exported_at.trim().is_empty() {
+        return Err("Export timestamp is missing.".to_string());
+    }
+
+    let selected_id_set: HashSet<&str> = selected_ids.iter().map(String::as_str).collect();
+    let selected: Vec<Automation> = load_automation_entries()?
+        .into_iter()
+        .filter(|automation| selected_id_set.contains(automation.id.as_str()))
+        .collect();
+    if selected.len() != selected_id_set.len() {
+        return Err("Some automations changed. Reopen Export and try again.".to_string());
+    }
+    validate_automation_backup_collection(&selected)?;
+
+    let backup = AutomationBackup {
+        format: AUTOMATION_BACKUP_FORMAT.to_string(),
+        version: AUTOMATION_BACKUP_VERSION,
+        exported_at,
+        automations: selected,
+    };
+    let json = serde_json::to_string_pretty(&backup)
+        .map_err(|error| format!("Backup could not be serialized: {}", error))?;
+    let path = PathBuf::from(destination);
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))?;
+
+    Ok(BackupExportResult {
+        file: path.display().to_string(),
+        exported_count: backup.automations.len(),
+    })
+}
+
+#[tauri::command]
+fn inspect_automation_backup(path: String) -> Result<Vec<Automation>, String> {
+    Ok(read_automation_backup(Path::new(&path))?.automations)
+}
+
+// Import matches workflows by name. Replacing the complete workflow makes a
+// backup restore deterministic, while fresh ids prevent collisions with data
+// that was created after the backup.
+#[tauri::command]
+fn import_automation_backup(
+    path: String,
+    selected_ids: Vec<String>,
+    imported_at: String,
+) -> Result<AutomationBackupImportResult, String> {
+    if selected_ids.is_empty() {
+        return Err("Select at least one automation to import.".to_string());
+    }
+    if imported_at.trim().is_empty() {
+        return Err("Import timestamp is missing.".to_string());
+    }
+
+    let backup = read_automation_backup(Path::new(&path))?;
+    let selected_id_set: HashSet<&str> = selected_ids.iter().map(String::as_str).collect();
+    let mut selected: Vec<Automation> = backup
+        .automations
+        .into_iter()
+        .filter(|automation| selected_id_set.contains(automation.id.as_str()))
+        .collect();
+    if selected.len() != selected_id_set.len() {
+        return Err("Some selected automations are no longer present in the backup.".to_string());
+    }
+
+    let mut current = load_automation_entries()?;
+    let selected_names: HashSet<String> = selected
+        .iter()
+        .map(|automation| automation.name.clone())
+        .collect();
+    let replaced_count = current
+        .iter()
+        .filter(|automation| selected_names.contains(&automation.name))
+        .count();
+    current.retain(|automation| !selected_names.contains(&automation.name));
+
+    let timestamp = unix_timestamp()?;
+    for (automation_index, automation) in selected.iter_mut().enumerate() {
+        automation.id = format!(
+            "automation-backup-{}-{}-{}",
+            timestamp, automation_index, automation.id
+        );
+        automation.updated_at = imported_at.clone();
+        for (step_index, step) in automation.steps.iter_mut().enumerate() {
+            step.id = format!(
+                "automation-backup-step-{}-{}-{}-{}",
+                timestamp, automation_index, step_index, step.id
+            );
+        }
+    }
+
+    let imported_count = selected.len();
+    current.extend(selected);
+    current.sort_by(|left, right| {
+        right
+            .favorite
+            .cmp(&left.favorite)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    write_automation_entries(&current)?;
+
+    Ok(AutomationBackupImportResult {
+        automations: current,
+        imported_count,
+        replaced_count,
+    })
 }
 
 // Spawns the one persistent shell an automation run drives its steps
@@ -1389,6 +1571,9 @@ fn main() {
             save_aliases,
             load_automations,
             save_automations,
+            export_automation_backup,
+            inspect_automation_backup,
+            import_automation_backup,
             start_automation_session,
             run_session_command,
             stop_automation_session,
@@ -1474,6 +1659,24 @@ mod tests {
             favorite: false,
             created_at: "2026-08-13T18:00:00.000Z".to_string(),
             updated_at: "2026-08-13T18:00:00.000Z".to_string(),
+        }
+    }
+
+    fn test_automation(id: &str, name: &str, command: &str) -> Automation {
+        Automation {
+            id: id.to_string(),
+            name: name.to_string(),
+            path: "~/Projects".to_string(),
+            steps: vec![AutomationStep {
+                id: format!("{}-step", id),
+                kind: "command".to_string(),
+                command: command.to_string(),
+                seconds: 0,
+                behavior: "wait".to_string(),
+            }],
+            favorite: false,
+            created_at: "2026-08-25T12:00:00.000Z".to_string(),
+            updated_at: "2026-08-25T12:00:00.000Z".to_string(),
         }
     }
 
@@ -1748,6 +1951,76 @@ mod tests {
             .any(|alias| alias.name == "ll" && alias.command_preview == "ls -lah"));
         assert!(result.state.aliases.iter().any(|alias| alias.name == "gs"));
         assert!(result.state.aliases.iter().any(|alias| alias.name == "dcu"));
+    }
+
+    #[test]
+    fn automation_backup_export_contains_only_selected_workflows() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let temporary_home = TemporaryHome::create();
+        write_automation_entries(&[
+            test_automation("build", "Build", "npm run build"),
+            test_automation("deploy", "Deploy", "npm run deploy"),
+        ])
+        .unwrap();
+        let destination = temporary_home.path.join("automations-selected.json");
+
+        let result = export_automation_backup(
+            vec!["deploy".to_string()],
+            destination.display().to_string(),
+            "2026-08-25T12:30:00.000Z".to_string(),
+        )
+        .unwrap();
+        let backup = read_automation_backup(&destination).unwrap();
+
+        assert_eq!(result.exported_count, 1);
+        assert_eq!(backup.automations.len(), 1);
+        assert_eq!(backup.automations[0].name, "Deploy");
+    }
+
+    #[test]
+    fn automation_backup_import_replaces_names_and_keeps_other_workflows() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let temporary_home = TemporaryHome::create();
+        write_automation_entries(&[
+            test_automation("current-build", "Build", "npm run build:old"),
+            test_automation("keep", "Keep", "echo keep"),
+        ])
+        .unwrap();
+        let backup_path = temporary_home.path.join("automations-restore.json");
+        let backup = AutomationBackup {
+            format: AUTOMATION_BACKUP_FORMAT.to_string(),
+            version: AUTOMATION_BACKUP_VERSION,
+            exported_at: "2026-08-25T12:30:00.000Z".to_string(),
+            automations: vec![
+                test_automation("backup-build", "Build", "npm run build:new"),
+                test_automation("backup-test", "Test", "npm test"),
+            ],
+        };
+        fs::write(&backup_path, serde_json::to_string(&backup).unwrap()).unwrap();
+
+        let result = import_automation_backup(
+            backup_path.display().to_string(),
+            vec!["backup-build".to_string(), "backup-test".to_string()],
+            "2026-08-25T13:00:00.000Z".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(result.imported_count, 2);
+        assert_eq!(result.replaced_count, 1);
+        assert_eq!(result.automations.len(), 3);
+        assert!(result.automations.iter().any(|automation| {
+            automation.name == "Build"
+                && automation.steps[0].command == "npm run build:new"
+                && automation.id != "backup-build"
+        }));
+        assert!(result
+            .automations
+            .iter()
+            .any(|automation| automation.name == "Keep"));
+        assert!(result
+            .automations
+            .iter()
+            .any(|automation| automation.name == "Test"));
     }
 
     #[test]
