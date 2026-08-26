@@ -145,6 +145,16 @@ type Automation = {
   updatedAt: string;
 };
 
+type AutomationTrashEntry = {
+  automation: Automation;
+  deletedAt: number;
+};
+
+type AutomationTrashMutationResult = {
+  automations: Automation[];
+  trash: AutomationTrashEntry[];
+};
+
 type AutomationBackupImportResult = {
   automations: Automation[];
   importedCount: number;
@@ -569,6 +579,12 @@ let selectedAutomationBackupIds = new Set<string>();
 let automationBackupFilePath = "";
 let automationBackupBusy = false;
 let automationBackupError = "";
+// Deleted workflows use the same 30-day recovery model as aliases, but live
+// in their own file so alias and automation data can never be mixed.
+let automationTrashEntries: AutomationTrashEntry[] = [];
+let automationTrashOpen = false;
+let automationTrashBusy = false;
+let automationTrashError = "";
 
 const trashRetentionSeconds = 30 * 24 * 60 * 60;
 
@@ -763,6 +779,12 @@ async function loadState() {
         automations = [];
         error = `Automations could not be loaded: ${String(automationLoadError)}`;
       }
+      try {
+        automationTrashEntries = await invokeCommand<AutomationTrashEntry[]>("list_automation_trash");
+      } catch (automationTrashLoadError) {
+        automationTrashEntries = [];
+        error = `Automation Trash could not be loaded: ${String(automationTrashLoadError)}`;
+      }
       selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
       render();
       return;
@@ -794,12 +816,28 @@ async function loadState() {
       favorite: Boolean(automation.favorite)
     }));
   }
+  const savedAutomationTrash = localStorage.getItem("easyalias-automation-trash");
+  if (savedAutomationTrash) {
+    const cutoff = Math.floor(Date.now() / 1000) - trashRetentionSeconds;
+    automationTrashEntries = (JSON.parse(savedAutomationTrash) as AutomationTrashEntry[])
+      .map((entry) => ({
+        ...entry,
+        automation: { ...entry.automation, favorite: Boolean(entry.automation.favorite) }
+      }))
+      .filter((entry) => entry.deletedAt > cutoff)
+      .sort((left, right) => right.deletedAt - left.deletedAt);
+    saveBrowserAutomationTrash();
+  }
 
   render();
 }
 
 function saveBrowserTrash() {
   localStorage.setItem("easyalias-trash", JSON.stringify(trashEntries));
+}
+
+function saveBrowserAutomationTrash() {
+  localStorage.setItem("easyalias-automation-trash", JSON.stringify(automationTrashEntries));
 }
 
 // Persists current aliases. Tauri writes real files; browser preview only writes localStorage.
@@ -1880,6 +1918,8 @@ function openAutomationsView() {
 function closeAutomationsView() {
   if (automationRun?.running) return;
   automationEditor = null;
+  automationTrashOpen = false;
+  automationTrashError = "";
   automationError = "";
   automationRun = null;
   currentView = "aliases";
@@ -2051,15 +2091,148 @@ async function saveAutomation(event: SubmitEvent) {
 async function deleteAutomation(id: string) {
   if (automationBusy || automationRun?.running) return;
   const automation = automations.find((item) => item.id === id);
-  if (!automation || !window.confirm(`Delete automation "${automation.name}"?`)) return;
+  if (!automation || !window.confirm(`Move automation "${automation.name}" to Trash?`)) return;
   automationBusy = true;
   try {
-    await persistAutomations(automations.filter((item) => item.id !== id));
-    notice = `Automation "${automation.name}" deleted.`;
+    if (isTauriRuntime()) {
+      const result = await invokeCommand<AutomationTrashMutationResult>("move_automation_to_trash", { id });
+      automations = result.automations;
+      automationTrashEntries = result.trash;
+    } else {
+      const nextAutomations = automations.filter((item) => item.id !== id);
+      await persistAutomations(nextAutomations);
+      automationTrashEntries = [
+        { automation, deletedAt: Math.floor(Date.now() / 1000) },
+        ...automationTrashEntries.filter((entry) => entry.automation.id !== id)
+      ].sort((left, right) => right.deletedAt - left.deletedAt);
+      saveBrowserAutomationTrash();
+    }
+    notice = `Automation "${automation.name}" moved to Trash.`;
   } catch (deleteError) {
     error = String(deleteError);
   } finally {
     automationBusy = false;
+    render();
+  }
+}
+
+async function openAutomationTrash() {
+  clearMessages();
+  automationTrashError = "";
+  automationTrashOpen = true;
+
+  if (isTauriRuntime()) {
+    automationTrashBusy = true;
+    render();
+    try {
+      automationTrashEntries = await invokeCommand<AutomationTrashEntry[]>("list_automation_trash");
+    } catch (trashLoadError) {
+      automationTrashError = String(trashLoadError);
+    } finally {
+      automationTrashBusy = false;
+    }
+  } else {
+    const cutoff = Math.floor(Date.now() / 1000) - trashRetentionSeconds;
+    automationTrashEntries = automationTrashEntries
+      .filter((entry) => entry.deletedAt > cutoff)
+      .sort((left, right) => right.deletedAt - left.deletedAt);
+    saveBrowserAutomationTrash();
+  }
+
+  render();
+}
+
+function closeAutomationTrash() {
+  if (automationTrashBusy) return;
+  automationTrashOpen = false;
+  automationTrashError = "";
+  render();
+}
+
+async function restoreTrashAutomation(id: string) {
+  if (automationTrashBusy) return;
+  const entry = automationTrashEntries.find((item) => item.automation.id === id);
+  if (!entry) return;
+
+  automationTrashBusy = true;
+  automationTrashError = "";
+  render();
+  try {
+    if (isTauriRuntime()) {
+      const result = await invokeCommand<AutomationTrashMutationResult>("restore_trash_automation", { id });
+      automations = result.automations;
+      automationTrashEntries = result.trash;
+    } else {
+      const duplicate = automations.find(
+        (automation) =>
+          automation.id === entry.automation.id ||
+          automation.name.trim().toLocaleLowerCase() === entry.automation.name.trim().toLocaleLowerCase()
+      );
+      if (duplicate) {
+        throw new Error(`Automation "${entry.automation.name}" already exists.`);
+      }
+      await persistAutomations([...automations, entry.automation].sort(compareAutomations));
+      automationTrashEntries = automationTrashEntries.filter((item) => item.automation.id !== id);
+      saveBrowserAutomationTrash();
+    }
+    notice = `Automation "${entry.automation.name}" restored.`;
+  } catch (restoreError) {
+    automationTrashError = String(restoreError);
+  } finally {
+    automationTrashBusy = false;
+    render();
+  }
+}
+
+async function permanentlyDeleteTrashAutomation(id: string) {
+  if (automationTrashBusy) return;
+  const entry = automationTrashEntries.find((item) => item.automation.id === id);
+  if (!entry || !window.confirm(`Permanently delete automation "${entry.automation.name}"? This cannot be undone.`)) {
+    return;
+  }
+
+  automationTrashBusy = true;
+  automationTrashError = "";
+  render();
+  try {
+    if (isTauriRuntime()) {
+      automationTrashEntries = await invokeCommand<AutomationTrashEntry[]>(
+        "permanently_delete_trash_automation",
+        { id }
+      );
+    } else {
+      automationTrashEntries = automationTrashEntries.filter((item) => item.automation.id !== id);
+      saveBrowserAutomationTrash();
+    }
+  } catch (deleteError) {
+    automationTrashError = String(deleteError);
+  } finally {
+    automationTrashBusy = false;
+    render();
+  }
+}
+
+async function emptyAutomationTrash() {
+  if (automationTrashBusy || automationTrashEntries.length === 0) return;
+  const count = automationTrashEntries.length;
+  if (!window.confirm(`Permanently delete all ${count} automation${count === 1 ? "" : "s"} in Trash? This cannot be undone.`)) {
+    return;
+  }
+
+  automationTrashBusy = true;
+  automationTrashError = "";
+  render();
+  try {
+    if (isTauriRuntime()) {
+      automationTrashEntries = await invokeCommand<AutomationTrashEntry[]>("empty_automation_trash");
+    } else {
+      automationTrashEntries = [];
+      saveBrowserAutomationTrash();
+    }
+  } catch (emptyError) {
+    automationTrashError = String(emptyError);
+  } finally {
+    automationTrashBusy = false;
     render();
   }
 }
@@ -2376,6 +2549,17 @@ function renderAutomationsView() {
           <button class="header-icon-button" type="button" title="Back to aliases" aria-label="Back to aliases" data-automation-action="back" ${automationRun?.running ? "disabled" : ""}><i data-lucide="arrow-left"></i></button>
           <button class="header-icon-button" type="button" title="Export automation backup" aria-label="Export automation backup" data-automation-action="open-backup-export" ${automations.length && !automationBackupBusy && !automationRun?.running ? "" : "disabled"}><i data-lucide="file-up"></i></button>
           <button class="header-icon-button" type="button" title="Import automation backup" aria-label="Import automation backup" data-automation-action="open-backup-import" ${automationBackupBusy || automationRun?.running ? "disabled" : ""}><i data-lucide="file-down"></i></button>
+          <button
+            class="header-icon-button trash-header-button"
+            type="button"
+            title="Automation Trash${automationTrashEntries.length ? ` (${automationTrashEntries.length})` : ""}"
+            aria-label="Open Automation Trash${automationTrashEntries.length ? ` with ${automationTrashEntries.length} deleted automations` : ""}"
+            data-automation-action="open-trash"
+            ${automationTrashBusy || automationRun?.running ? "disabled" : ""}
+          >
+            <i data-lucide="trash-2"></i>
+            ${automationTrashEntries.length ? `<span class="header-count" aria-hidden="true">${automationTrashEntries.length}</span>` : ""}
+          </button>
           <button class="header-icon-button automation-create-button" type="button" title="Create automation" aria-label="Create automation" data-automation-action="new" ${automationRun?.running ? "disabled" : ""}><i data-lucide="plus"></i></button>
         </div>
       </header>
@@ -2447,13 +2631,14 @@ function renderAutomationsView() {
       ${renderAutomationEditor()}
       ${renderAutomationRun()}
       ${renderAutomationBackupDialog()}
+      ${renderAutomationTrashDialog()}
 
       <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>Become a sponsor</a></aside>
       <footer class="app-footer"><a href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>© Hannes Gnann</a><span aria-hidden="true">-</span><a href="${redditUrl}" target="_blank" rel="noreferrer" data-external-link>Reddit</a><span aria-hidden="true">-</span><a href="${websiteUrl}" target="_blank" rel="noreferrer" data-external-link>Website</a></footer>
     </section>`;
 
   createIcons({
-    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, FileDown, FileUp, FolderOpen, LoaderCircle, Pencil, Play, Plus, Save, Star, Terminal, Trash2, X },
+    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, FileDown, FileUp, FolderOpen, LoaderCircle, Pencil, Play, Plus, RotateCcw, Save, Star, Terminal, Trash2, X },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
   scheduleMessageDismissal();
@@ -2503,6 +2688,11 @@ function bindAutomationEvents() {
       if (action === "open-backup-import") openAutomationBackupImport();
       if (action === "close-backup") closeAutomationBackupDialog();
       if (action === "choose-backup-file") void chooseAutomationBackupFile();
+      if (action === "open-trash") void openAutomationTrash();
+      if (action === "close-trash") closeAutomationTrash();
+      if (action === "restore-trash" && id) void restoreTrashAutomation(id);
+      if (action === "delete-trash-permanently" && id) void permanentlyDeleteTrashAutomation(id);
+      if (action === "empty-trash") void emptyAutomationTrash();
       if (action === "new") openAutomationEditor();
       if (action === "edit" && id) openAutomationEditor(id);
       if (action === "delete" && id) void deleteAutomation(id);
@@ -3077,6 +3267,76 @@ function renderAutomationBackupDialog() {
           </button>
         </div>
       </form>
+    </section>`;
+}
+
+function renderAutomationTrashDialog() {
+  if (!automationTrashOpen) return "";
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <section class="modal-card trash-card" role="dialog" aria-modal="true" aria-labelledby="automation-trash-title">
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">Recovery</p>
+            <h2 id="automation-trash-title">Automation Trash</h2>
+          </div>
+          <span class="import-count">${automationTrashEntries.length} deleted</span>
+        </div>
+
+        <p class="import-intro">
+          Deleted automations stay here for 30 days. Restore a workflow at any time, or delete it permanently now.
+        </p>
+
+        ${automationTrashError ? `<p class="modal-error">${escapeHtml(automationTrashError)}</p>` : ""}
+
+        ${
+          automationTrashEntries.length
+            ? `<div class="trash-list" aria-label="Deleted automations">
+                ${automationTrashEntries
+                  .map(
+                    (entry) => `
+                      <article class="trash-row">
+                        <div class="trash-copy">
+                          <strong>${escapeHtml(entry.automation.name)}</strong>
+                          <span>${entry.automation.steps.length} ${entry.automation.steps.length === 1 ? "step" : "steps"}</span>
+                          <code>${escapeHtml(entry.automation.path)}</code>
+                          <small>Deleted ${formatDeletedDate(entry.deletedAt)} · ${trashDaysRemaining(entry.deletedAt)} days remaining</small>
+                        </div>
+                        <div class="trash-row-actions">
+                          <button
+                            class="trash-action restore"
+                            type="button"
+                            title="Restore ${escapeHtml(entry.automation.name)}"
+                            aria-label="Restore ${escapeHtml(entry.automation.name)}"
+                            data-automation-action="restore-trash"
+                            data-id="${escapeHtml(entry.automation.id)}"
+                            ${automationTrashBusy ? "disabled" : ""}
+                          ><i data-lucide="rotate-ccw"></i></button>
+                          <button
+                            class="trash-action permanent"
+                            type="button"
+                            title="Permanently delete ${escapeHtml(entry.automation.name)}"
+                            aria-label="Permanently delete ${escapeHtml(entry.automation.name)}"
+                            data-automation-action="delete-trash-permanently"
+                            data-id="${escapeHtml(entry.automation.id)}"
+                            ${automationTrashBusy ? "disabled" : ""}
+                          ><i data-lucide="trash-2"></i></button>
+                        </div>
+                      </article>`
+                  )
+                  .join("")}
+              </div>`
+            : `<div class="trash-empty"><strong>Automation Trash is empty</strong><span>Deleted workflows will stay recoverable here for 30 days.</span></div>`
+        }
+
+        <div class="modal-actions trash-footer-actions">
+          <button class="ghost-button" type="button" data-automation-action="close-trash" ${automationTrashBusy ? "disabled" : ""}>Close</button>
+          <button class="danger-button" type="button" data-automation-action="empty-trash" ${automationTrashEntries.length && !automationTrashBusy ? "" : "disabled"}>
+            <i data-lucide="trash-2"></i><span>${automationTrashBusy ? "Working..." : "Empty Trash"}</span>
+          </button>
+        </div>
+      </section>
     </section>`;
 }
 

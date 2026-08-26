@@ -154,6 +154,20 @@ struct Automation {
     updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationTrashEntry {
+    automation: Automation,
+    deleted_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationTrashMutationResult {
+    automations: Vec<Automation>,
+    trash: Vec<AutomationTrashEntry>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AutomationCommandResult {
@@ -251,6 +265,10 @@ fn trash_file() -> Result<PathBuf, String> {
 
 fn automations_file() -> Result<PathBuf, String> {
     Ok(app_dir()?.join("automations.json"))
+}
+
+fn automation_trash_file() -> Result<PathBuf, String> {
+    Ok(app_dir()?.join("automations-trash.json"))
 }
 
 fn import_marker_file(_setup: &ShellSetup) -> Result<PathBuf, String> {
@@ -845,6 +863,20 @@ fn write_automation_entries(automations: &[Automation]) -> Result<(), String> {
         .map_err(|error| format!("{} could not be written: {}", path.display(), error))
 }
 
+fn write_automation_trash_entries(entries: &[AutomationTrashEntry]) -> Result<(), String> {
+    // Trash is a history, not an active collection. Validate every workflow,
+    // but do not apply the active-list count or cross-entry uniqueness limits.
+    for entry in entries {
+        validate_automations(std::slice::from_ref(&entry.automation))?;
+    }
+    ensure_app_files()?;
+    let json = serde_json::to_string_pretty(entries)
+        .map_err(|error| format!("Automation Trash could not be serialized: {}", error))?;
+    let path = automation_trash_file()?;
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))
+}
+
 fn automation_working_directory(value: &str) -> Result<PathBuf, String> {
     let trimmed = value.trim();
     let path = if trimmed == "~" {
@@ -893,6 +925,37 @@ fn load_trash_entries() -> Result<Vec<TrashEntry>, String> {
 
     if entries.len() != original_len {
         write_trash_entries(&entries)?;
+    }
+
+    Ok(entries)
+}
+
+fn load_automation_trash_entries() -> Result<Vec<AutomationTrashEntry>, String> {
+    ensure_app_files()?;
+    let path = automation_trash_file()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let mut entries: Vec<AutomationTrashEntry> =
+        serde_json::from_str(&content).map_err(|error| {
+            format!(
+                "automations-trash.json is not valid EasyAlias JSON: {}",
+                error
+            )
+        })?;
+    for entry in &entries {
+        validate_automations(std::slice::from_ref(&entry.automation))?;
+    }
+    let now = unix_timestamp()?;
+    let original_len = entries.len();
+    entries.retain(|entry| now.saturating_sub(entry.deleted_at) < TRASH_RETENTION_SECONDS);
+    entries.sort_by(|left, right| right.deleted_at.cmp(&left.deleted_at));
+
+    if entries.len() != original_len {
+        write_automation_trash_entries(&entries)?;
     }
 
     Ok(entries)
@@ -953,6 +1016,98 @@ fn load_automations() -> Result<Vec<Automation>, String> {
 fn save_automations(automations: Vec<Automation>) -> Result<Vec<Automation>, String> {
     write_automation_entries(&automations)?;
     Ok(automations)
+}
+
+#[tauri::command]
+fn list_automation_trash() -> Result<Vec<AutomationTrashEntry>, String> {
+    load_automation_trash_entries()
+}
+
+// Keep the recoverable copy before updating active storage. This mirrors the
+// alias trash behavior and avoids losing a workflow if the second write fails.
+#[tauri::command]
+fn move_automation_to_trash(id: String) -> Result<AutomationTrashMutationResult, String> {
+    let mut automations = load_automation_entries()?;
+    let index = automations
+        .iter()
+        .position(|automation| automation.id == id)
+        .ok_or_else(|| "Automation no longer exists.".to_string())?;
+    let automation = automations.remove(index);
+    let mut trash = load_automation_trash_entries()?;
+    trash.retain(|entry| entry.automation.id != automation.id);
+    trash.push(AutomationTrashEntry {
+        automation,
+        deleted_at: unix_timestamp()?,
+    });
+    trash.sort_by(|left, right| right.deleted_at.cmp(&left.deleted_at));
+
+    write_automation_trash_entries(&trash)?;
+    write_automation_entries(&automations)?;
+
+    Ok(AutomationTrashMutationResult { automations, trash })
+}
+
+// Restore into active storage first. Name and id conflicts are rejected so a
+// deleted workflow never silently replaces a newer active workflow.
+#[tauri::command]
+fn restore_trash_automation(id: String) -> Result<AutomationTrashMutationResult, String> {
+    let mut trash = load_automation_trash_entries()?;
+    let index = trash
+        .iter()
+        .position(|entry| entry.automation.id == id)
+        .ok_or_else(|| "Deleted automation no longer exists.".to_string())?;
+    let automation = trash[index].automation.clone();
+    let mut automations = load_automation_entries()?;
+
+    if automations
+        .iter()
+        .any(|existing| existing.id == automation.id)
+    {
+        return Err("An active automation already uses this id.".to_string());
+    }
+    if automations.iter().any(|existing| {
+        existing
+            .name
+            .trim()
+            .eq_ignore_ascii_case(automation.name.trim())
+    }) {
+        return Err(format!(
+            "Automation \"{}\" already exists. Rename or delete the active automation before restoring.",
+            automation.name
+        ));
+    }
+
+    automations.push(automation);
+    automations.sort_by(|left, right| {
+        right
+            .favorite
+            .cmp(&left.favorite)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    write_automation_entries(&automations)?;
+    trash.remove(index);
+    write_automation_trash_entries(&trash)?;
+
+    Ok(AutomationTrashMutationResult { automations, trash })
+}
+
+#[tauri::command]
+fn permanently_delete_trash_automation(id: String) -> Result<Vec<AutomationTrashEntry>, String> {
+    let mut trash = load_automation_trash_entries()?;
+    let original_len = trash.len();
+    trash.retain(|entry| entry.automation.id != id);
+    if trash.len() == original_len {
+        return Err("Deleted automation no longer exists.".to_string());
+    }
+    write_automation_trash_entries(&trash)?;
+    Ok(trash)
+}
+
+#[tauri::command]
+fn empty_automation_trash() -> Result<Vec<AutomationTrashEntry>, String> {
+    ensure_app_files()?;
+    write_automation_trash_entries(&[])?;
+    Ok(Vec::new())
 }
 
 // Automation backups use their own envelope so they cannot be confused with
@@ -1571,6 +1726,11 @@ fn main() {
             save_aliases,
             load_automations,
             save_automations,
+            list_automation_trash,
+            move_automation_to_trash,
+            restore_trash_automation,
+            permanently_delete_trash_automation,
+            empty_automation_trash,
             export_automation_backup,
             inspect_automation_backup,
             import_automation_backup,
@@ -2021,6 +2181,50 @@ mod tests {
             .automations
             .iter()
             .any(|automation| automation.name == "Test"));
+    }
+
+    #[test]
+    fn deleted_automation_can_be_restored_from_trash() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let _temporary_home = TemporaryHome::create();
+        ensure_app_files().unwrap();
+        write_automation_entries(&[test_automation("build", "Build", "npm run build")]).unwrap();
+
+        let deleted = move_automation_to_trash("build".to_string()).unwrap();
+        assert!(deleted.automations.is_empty());
+        assert_eq!(deleted.trash.len(), 1);
+        assert_eq!(deleted.trash[0].automation.name, "Build");
+
+        let restored = restore_trash_automation("build".to_string()).unwrap();
+        assert_eq!(restored.automations.len(), 1);
+        assert_eq!(restored.automations[0].name, "Build");
+        assert!(restored.trash.is_empty());
+    }
+
+    #[test]
+    fn expired_automation_trash_entries_are_removed_automatically() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let _temporary_home = TemporaryHome::create();
+        ensure_app_files().unwrap();
+        let now = unix_timestamp().unwrap();
+        write_automation_trash_entries(&[
+            AutomationTrashEntry {
+                automation: test_automation("expired", "Expired", "echo expired"),
+                deleted_at: now.saturating_sub(TRASH_RETENTION_SECONDS + 1),
+            },
+            AutomationTrashEntry {
+                automation: test_automation("current", "Current", "echo current"),
+                deleted_at: now,
+            },
+        ])
+        .unwrap();
+
+        let trash = load_automation_trash_entries().unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].automation.id, "current");
+        assert!(!fs::read_to_string(automation_trash_file().unwrap())
+            .unwrap()
+            .contains("expired"));
     }
 
     #[test]
