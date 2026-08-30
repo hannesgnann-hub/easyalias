@@ -10,12 +10,14 @@ import {
   createIcons,
   FileDown,
   FileUp,
+  Filter,
   FolderOpen,
   Pencil,
   Play,
   Plus,
   RotateCcw,
   Save,
+  Search,
   SquareTerminal,
   Star,
   Terminal,
@@ -164,6 +166,11 @@ type AutomationRunState = {
   steps: AutomationRunStep[];
 };
 
+// Filters are inferred from step commands (same patterns as the alias
+// filter, minus favorites, which this automation model does not have yet)
+// plus one automation-specific category for background steps.
+type AutomationFilter = "all" | "background" | "git" | "docker" | "build";
+
 const actionLabels: Record<AliasAction, string> = {
   navigate: "Go to Folder",
   open: "Open",
@@ -171,6 +178,14 @@ const actionLabels: Record<AliasAction, string> = {
   compile_gradle: "Gradle Build",
   compile_maven: "Maven Build",
   custom: "Custom Command"
+};
+
+const automationFilterLabels: Record<AutomationFilter, string> = {
+  all: "All automations",
+  background: "Background",
+  git: "Git",
+  docker: "Docker",
+  build: "Build"
 };
 
 const emptyForm: AliasForm = {
@@ -526,6 +541,8 @@ let automationEditor: Automation | null = null;
 let automationBusy = false;
 let automationError = "";
 let automationRun: AutomationRunState | null = null;
+let automationSearchQuery = "";
+let automationFilter: AutomationFilter = "all";
 
 const trashRetentionSeconds = 30 * 24 * 60 * 60;
 
@@ -1978,8 +1995,112 @@ function renderAutomationRun() {
     </section>`;
 }
 
+function matchesAutomationFilter(automation: Automation) {
+  const commandText = automation.steps
+    .filter((step) => step.kind === "command")
+    .map((step) => step.command)
+    .join(" \n ")
+    .trim()
+    .toLocaleLowerCase();
+
+  switch (automationFilter) {
+    case "background":
+      return automation.steps.some((step) => step.kind === "command" && step.behavior === "background");
+    case "git":
+      return /(^|[\s;&|])git(?=\s|$)/.test(commandText);
+    case "docker":
+      return /(^|[\s;&|])docker(?:-compose)?(?=\s|$)/.test(commandText);
+    case "build":
+      return (
+        /(^|[\s;&|])(?:\.\/)?(?:gradle|gradlew|mvn|mvnw|make)(?=\s|$)/.test(commandText) ||
+        /(^|[\s;&|])cargo\s+build(?=\s|$)/.test(commandText) ||
+        /(^|[\s;&|])(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+build(?=\s|$)/.test(commandText)
+      );
+    case "all":
+    default:
+      return true;
+  }
+}
+
+function filterAutomations(automations: Automation[]) {
+  const query = automationSearchQuery.trim().toLocaleLowerCase();
+
+  return automations.filter(
+    (automation) =>
+      matchesAutomationFilter(automation) &&
+      (!query ||
+        automation.name.toLocaleLowerCase().includes(query) ||
+        automation.path.toLocaleLowerCase().includes(query) ||
+        automation.steps.some(
+          (step) => step.kind === "command" && step.command.toLocaleLowerCase().includes(query)
+        ))
+  );
+}
+
+function automationCountLabel(total: number, filtered: number) {
+  const suffix = total === 1 ? "automation" : "automations";
+  const hasActiveFilter = automationSearchQuery.trim() || automationFilter !== "all";
+  return hasActiveFilter ? `${filtered} of ${total} ${suffix}` : `${total} ${suffix}`;
+}
+
+// Search input stays mounted while only the result area is replaced. This
+// avoids losing focus or jumping the caret while someone types quickly.
+function renderAutomationResults(sortedAutomations: Automation[]) {
+  const filteredAutomations = filterAutomations(sortedAutomations);
+
+  if (!sortedAutomations.length) {
+    return `<div class="automation-empty"><div class="automation-empty-icon"><i data-lucide="play"></i></div><strong>No automations yet</strong><span>Combine project commands and waits into a repeatable workflow.</span><button class="primary-button" type="button" data-automation-action="new"><i data-lucide="plus"></i><span>Create automation</span></button></div>`;
+  }
+
+  if (!filteredAutomations.length) {
+    return `<div class="automation-empty"><strong>No matching automations</strong><span>Try another search or filter.</span></div>`;
+  }
+
+  return `<div class="automation-grid">
+      ${filteredAutomations
+        .map(
+          (automation) => `<article class="automation-card">
+              <div class="automation-card-header">
+                <div><strong>${escapeHtml(automation.name)}</strong><code>${escapeHtml(automation.path)}</code></div>
+                <span>${automation.steps.length} ${automation.steps.length === 1 ? "step" : "steps"}</span>
+              </div>
+              <ol class="automation-preview-list">
+                ${automation.steps
+                  .slice(0, 4)
+                  .map((step) => `<li><span>${step.kind === "wait" ? "Wait" : step.behavior === "background" ? "Start" : "Run"}</span><code>${escapeHtml(automationStepLabel(step))}</code></li>`)
+                  .join("")}
+                ${automation.steps.length > 4 ? `<li class="automation-more">+ ${automation.steps.length - 4} more</li>` : ""}
+              </ol>
+              <div class="automation-card-actions">
+                <button class="primary-button automation-run-button" type="button" data-automation-action="run" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="play"></i><span>Run</span></button>
+                <button class="header-icon-button" type="button" title="Edit ${escapeHtml(automation.name)}" aria-label="Edit ${escapeHtml(automation.name)}" data-automation-action="edit" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="pencil"></i></button>
+                <button class="header-icon-button automation-delete-button" type="button" title="Delete ${escapeHtml(automation.name)}" aria-label="Delete ${escapeHtml(automation.name)}" data-automation-action="delete" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="trash-2"></i></button>
+              </div>
+            </article>`
+        )
+        .join("")}
+    </div>`;
+}
+
+function refreshAutomationResults() {
+  const sortedAutomations = [...automations].sort((left, right) => left.name.localeCompare(right.name));
+  const filteredAutomations = filterAutomations(sortedAutomations);
+  const count = document.querySelector<HTMLElement>("[data-automation-count]");
+  const results = document.querySelector<HTMLElement>("[data-automation-results]");
+
+  if (count) count.textContent = automationCountLabel(sortedAutomations.length, filteredAutomations.length);
+  if (!results) return;
+
+  results.innerHTML = renderAutomationResults(sortedAutomations);
+  createIcons({
+    icons: { Pencil, Play, Plus, Trash2 },
+    attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
+  });
+}
+
 function renderAutomationsView() {
   const sortedAutomations = [...automations].sort((left, right) => left.name.localeCompare(right.name));
+  const filteredAutomationCount = filterAutomations(sortedAutomations).length;
   appElement.innerHTML = `
     <section class="shell automation-shell">
       <header class="topbar automation-topbar">
@@ -2012,37 +2133,43 @@ function renderAutomationsView() {
 
       <section class="automation-overview">
         <div class="automation-overview-header">
-          <div><h2>Your Automations</h2><span>Run repeatable project workflows from one place.</span></div>
+          <div><h2>Your Automations</h2><span data-automation-count>${automationCountLabel(sortedAutomations.length, filteredAutomationCount)}</span></div>
           <button class="primary-button" type="button" data-automation-action="new" ${automationRun?.running ? "disabled" : ""}><i data-lucide="plus"></i><span>New automation</span></button>
         </div>
-        ${
-          sortedAutomations.length
-            ? `<div class="automation-grid">
-                ${sortedAutomations
-                  .map(
-                    (automation) => `<article class="automation-card">
-                      <div class="automation-card-header">
-                        <div><strong>${escapeHtml(automation.name)}</strong><code>${escapeHtml(automation.path)}</code></div>
-                        <span>${automation.steps.length} ${automation.steps.length === 1 ? "step" : "steps"}</span>
-                      </div>
-                      <ol class="automation-preview-list">
-                        ${automation.steps
-                          .slice(0, 4)
-                          .map((step) => `<li><span>${step.kind === "wait" ? "Wait" : step.behavior === "background" ? "Start" : "Run"}</span><code>${escapeHtml(automationStepLabel(step))}</code></li>`)
-                          .join("")}
-                        ${automation.steps.length > 4 ? `<li class="automation-more">+ ${automation.steps.length - 4} more</li>` : ""}
-                      </ol>
-                      <div class="automation-card-actions">
-                        <button class="primary-button automation-run-button" type="button" data-automation-action="run" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="play"></i><span>Run</span></button>
-                        <button class="header-icon-button" type="button" title="Edit ${escapeHtml(automation.name)}" aria-label="Edit ${escapeHtml(automation.name)}" data-automation-action="edit" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="pencil"></i></button>
-                        <button class="header-icon-button automation-delete-button" type="button" title="Delete ${escapeHtml(automation.name)}" aria-label="Delete ${escapeHtml(automation.name)}" data-automation-action="delete" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="trash-2"></i></button>
-                      </div>
-                    </article>`
-                  )
-                  .join("")}
-              </div>`
-            : `<div class="automation-empty"><div class="automation-empty-icon"><i data-lucide="play"></i></div><strong>No automations yet</strong><span>Combine project commands and waits into a repeatable workflow.</span><button class="primary-button" type="button" data-automation-action="new"><i data-lucide="plus"></i><span>Create automation</span></button></div>`
-        }
+        <div class="automation-tools">
+          <div class="automation-search" role="search">
+            <i data-lucide="search"></i>
+            <input
+              type="search"
+              name="automation-search"
+              value="${escapeHtml(automationSearchQuery)}"
+              placeholder="Search automations or commands"
+              aria-label="Search automations by name, path, or command"
+              autocomplete="off"
+              ${automations.length ? "" : "disabled"}
+            />
+          </div>
+          <label class="automation-filter ${automationFilter !== "all" ? "is-active" : ""} ${automations.length ? "" : "is-disabled"}">
+            <span class="visually-hidden">Filter automations</span>
+            <i data-lucide="filter"></i>
+            <select
+              name="automation-filter"
+              aria-label="Filter automations"
+              title="Filter: ${automationFilterLabels[automationFilter]}"
+              ${automations.length ? "" : "disabled"}
+            >
+              ${Object.entries(automationFilterLabels)
+                .map(
+                  ([value, label]) =>
+                    `<option value="${value}" ${automationFilter === value ? "selected" : ""}>${label}</option>`
+                )
+                .join("")}
+            </select>
+          </label>
+        </div>
+        <div class="automation-results" data-automation-results>
+          ${renderAutomationResults(sortedAutomations)}
+        </div>
       </section>
 
       ${renderAutomationEditor()}
@@ -2053,7 +2180,7 @@ function renderAutomationsView() {
     </section>`;
 
   createIcons({
-    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, FolderOpen, Pencil, Play, Plus, Save, Terminal, Trash2, X },
+    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, Filter, FolderOpen, Pencil, Play, Plus, Save, Search, Terminal, Trash2, X },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
   scheduleMessageDismissal();
@@ -2070,16 +2197,38 @@ function bindAutomationEvents() {
   document.querySelectorAll<HTMLSelectElement>('select[name="automation-step-behavior"]').forEach((select) => select.addEventListener("change", () => updateAutomationStep(Number(select.dataset.stepIndex), "behavior", select.value as AutomationCommandBehavior)));
   document.querySelectorAll<HTMLInputElement>('input[name="automation-step-seconds"]').forEach((input) => input.addEventListener("input", () => updateAutomationStep(Number(input.dataset.stepIndex), "seconds", Number(input.value))));
 
+  document.querySelector<HTMLInputElement>('input[name="automation-search"]')?.addEventListener("input", (event) => {
+    automationSearchQuery = (event.target as HTMLInputElement).value;
+    refreshAutomationResults();
+  });
+
+  document.querySelector<HTMLSelectElement>('select[name="automation-filter"]')?.addEventListener("change", (event) => {
+    automationFilter = (event.target as HTMLSelectElement).value as AutomationFilter;
+    refreshAutomationResults();
+  });
+
+  // Card actions (run/edit/delete, plus "new" in the empty state) use
+  // delegation on the results container so live search/filter can replace
+  // those rows without rebinding handlers or disturbing the search field.
+  document.querySelector<HTMLElement>("[data-automation-results]")?.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-automation-action]");
+    if (!button) return;
+
+    const action = button.dataset.automationAction;
+    const id = button.dataset.id;
+    if (action === "new") openAutomationEditor();
+    if (action === "edit" && id) openAutomationEditor(id);
+    if (action === "delete" && id) void deleteAutomation(id);
+    if (action === "run" && id) void runAutomation(id);
+  });
+
   document.querySelectorAll<HTMLButtonElement>("[data-automation-action]").forEach((button) => {
+    if (button.closest("[data-automation-results]")) return;
     button.addEventListener("click", () => {
       const action = button.dataset.automationAction;
-      const id = button.dataset.id;
       const index = Number(button.dataset.stepIndex);
       if (action === "back") closeAutomationsView();
       if (action === "new") openAutomationEditor();
-      if (action === "edit" && id) openAutomationEditor(id);
-      if (action === "delete" && id) void deleteAutomation(id);
-      if (action === "run" && id) void runAutomation(id);
       if (action === "close-editor") closeAutomationEditor();
       if (action === "pick-folder") void openPathPicker("automation", "folder");
       if (action === "add-command") addAutomationStep("command");

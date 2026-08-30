@@ -600,7 +600,8 @@ textarea:focus {
   padding: 4px 4px 14px;
 }
 
-.alias-tools {
+.alias-tools,
+.automation-tools {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 48px;
   gap: 10px;
@@ -620,11 +621,14 @@ textarea:focus {
 }
 
 .alias-search,
-.alias-filter {
+.alias-filter,
+.automation-search,
+.automation-filter {
   position: relative;
 }
 
-.alias-search svg {
+.alias-search svg,
+.automation-search svg {
   position: absolute;
   top: 50%;
   left: 12px;
@@ -635,12 +639,14 @@ textarea:focus {
   transform: translateY(-50%);
 }
 
-.alias-search input {
+.alias-search input,
+.automation-search input {
   padding-left: 40px;
   background: #fbfdfc;
 }
 
-.alias-filter {
+.alias-filter,
+.automation-filter {
   display: grid;
   place-items: center;
   min-height: 44px;
@@ -650,19 +656,22 @@ textarea:focus {
   border-radius: 8px;
 }
 
-.alias-filter svg {
+.alias-filter svg,
+.automation-filter svg {
   width: 20px;
   height: 20px;
   pointer-events: none;
 }
 
-.alias-filter.is-active {
+.alias-filter.is-active,
+.automation-filter.is-active {
   color: #0f766e;
   background: #d8f3ed;
   border-color: #75c8bb;
 }
 
-.alias-filter select {
+.alias-filter select,
+.automation-filter select {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -672,28 +681,33 @@ textarea:focus {
   cursor: pointer;
 }
 
-.alias-search input:focus {
+.alias-search input:focus,
+.automation-search input:focus {
   border-color: #0f766e;
   outline: 3px solid rgba(15, 118, 110, 0.14);
 }
 
-.alias-filter:focus-within {
+.alias-filter:focus-within,
+.automation-filter:focus-within {
   border-color: #0f766e;
   outline: 3px solid rgba(15, 118, 110, 0.14);
 }
 
-.alias-search input:disabled {
+.alias-search input:disabled,
+.automation-search input:disabled {
   cursor: not-allowed;
   background: #f1f5f3;
 }
 
-.alias-filter.is-disabled {
+.alias-filter.is-disabled,
+.automation-filter.is-disabled {
   color: #94a39e;
   background: #f1f5f3;
   cursor: not-allowed;
 }
 
-.alias-filter select:disabled {
+.alias-filter select:disabled,
+.automation-filter select:disabled {
   cursor: not-allowed;
 }
 

@@ -312,6 +312,8 @@ All command steps in one run share a single `cmd.exe` session started in the aut
 
 Steps run top to bottom. Running an automation opens a progress dialog showing each step's status and captured output; a **Stop** button ends the session immediately, interrupting a command that is still running (a background process started with `start /B` keeps running on its own — Windows has no simple single-line way to report its PID, so background steps always show "Started in background." without one). If any foreground command exits with a non-zero status, the run stops and later steps are marked skipped.
 
+The automations list has its own search and filter: search by name, working directory, or command text, and filter to Background (any step that starts a process without waiting), Git, Docker, or Build.
+
 Automations are stored separately from shortcuts in `~\.easyalias\automations.json` and are only available in the real desktop app; the browser preview keeps its automations in `localStorage` and cannot execute commands.
 
 ## Documentation Layout

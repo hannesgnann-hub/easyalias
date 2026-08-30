@@ -195,6 +195,8 @@ All command steps in one run share a single shell session started in the automat
 
 Steps run top to bottom. Running an automation opens a progress dialog showing each step's status and captured output; a **Stop** button ends the session immediately, interrupting a command that is still running (a background process that already launched keeps running on its own). If any foreground command exits with a non-zero status, the run stops and later steps are marked skipped.
 
+The automations list has its own search and filter, matching aliases: search by name, working directory, or command text, and filter to Favorites, Background (any step that starts a process without waiting), Git, Docker, or Build.
+
 Automations are stored separately from aliases in `~/.easyalias/automations.json` and are only available in the real desktop app; the browser preview keeps its automations in `localStorage` and cannot execute commands.
 
 ## Development
