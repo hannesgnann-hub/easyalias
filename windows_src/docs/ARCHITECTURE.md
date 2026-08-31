@@ -187,6 +187,8 @@ type Automation = {
   name: string;
   path: string;
   steps: AutomationStep[];
+  // Free-text label used to organize automations; empty means ungrouped.
+  group: string;
   createdAt: string;
   updatedAt: string;
 };

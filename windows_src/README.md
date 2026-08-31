@@ -273,6 +273,7 @@ An automation is stored like this:
     { "id": "uuid", "kind": "command", "command": "npm run dev", "seconds": 0, "behavior": "wait" },
     { "id": "uuid", "kind": "wait", "command": "", "seconds": 10, "behavior": "wait" }
   ],
+  "group": "Backend",
   "createdAt": "2026-08-24T18:00:00.000Z",
   "updatedAt": "2026-08-24T18:00:00.000Z"
 }
@@ -312,7 +313,7 @@ All command steps in one run share a single `cmd.exe` session started in the aut
 
 Steps run top to bottom. Running an automation opens a progress dialog showing each step's status and captured output; a **Stop** button ends the session immediately, interrupting a command that is still running (a background process started with `start /B` keeps running on its own — Windows has no simple single-line way to report its PID, so background steps always show "Started in background." without one). If any foreground command exits with a non-zero status, the run stops and later steps are marked skipped.
 
-The automations list has its own search and filter: search by name, working directory, or command text, and filter to Background (any step that starts a process without waiting), Git, Docker, or Build.
+Each automation can optionally carry a **group** label — a free-text tag entered in the editor (with autocomplete suggesting existing group names). The automations list has its own search and filter: search by name, working directory, command text, or group label, and filter to Background (any step that starts a process without waiting), Git, Docker, Build, or any specific group. Choosing **Group view** in the filter dropdown replaces the list with one card per group (plus an "Ungrouped" card when applicable); clicking a card, or clicking the group chip on an automation card, filters straight to that group.
 
 Automations are stored separately from shortcuts in `~\.easyalias\automations.json` and are only available in the real desktop app; the browser preview keeps its automations in `localStorage` and cannot execute commands.
 

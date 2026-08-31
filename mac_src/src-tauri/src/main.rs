@@ -150,6 +150,11 @@ struct Automation {
     steps: Vec<AutomationStep>,
     #[serde(default)]
     favorite: bool,
+    // A free-text label the UI groups and filters automations by. Empty
+    // means "ungrouped"; older automations.json files without this field
+    // default to that.
+    #[serde(default)]
+    group: String,
     created_at: String,
     updated_at: String,
 }
@@ -744,6 +749,12 @@ fn validate_automations(automations: &[Automation]) -> Result<(), String> {
         if automation.path.trim().is_empty() || automation.path.chars().count() > 4096 {
             return Err(format!(
                 "Automation \"{}\" needs a valid working directory.",
+                name
+            ));
+        }
+        if automation.group.chars().count() > 60 {
+            return Err(format!(
+                "The group label for \"{}\" must be at most 60 characters.",
                 name
             ));
         }
@@ -1835,6 +1846,7 @@ mod tests {
                 behavior: "wait".to_string(),
             }],
             favorite: false,
+            group: String::new(),
             created_at: "2026-08-25T12:00:00.000Z".to_string(),
             updated_at: "2026-08-25T12:00:00.000Z".to_string(),
         }
@@ -2250,6 +2262,7 @@ mod tests {
                 },
             ],
             favorite: false,
+            group: "Backend".to_string(),
             created_at: "2026-08-24T18:00:00.000Z".to_string(),
             updated_at: "2026-08-24T18:00:00.000Z".to_string(),
         };
@@ -2271,6 +2284,7 @@ mod tests {
                 behavior: "background".to_string(),
             }],
             favorite: false,
+            group: String::new(),
             created_at: "2026-08-24T18:00:00.000Z".to_string(),
             updated_at: "2026-08-24T18:00:00.000Z".to_string(),
         };
@@ -2327,5 +2341,14 @@ mod tests {
 
         let _ = session.child.kill();
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rejects_a_group_label_over_the_length_limit() {
+        let mut automation = test_automation("grouped", "Grouped", "echo hi");
+        automation.group = "g".repeat(61);
+
+        let validation_error = validate_automations(&[automation]).unwrap_err();
+        assert!(validation_error.contains("group label"));
     }
 }

@@ -1171,6 +1171,85 @@ textarea:focus {
   background: #e7f3ef;
 }
 
+.automation-optional {
+  color: #8a988f;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.automation-group-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  margin-top: 2px;
+  padding: 3px 8px;
+  border: 1px solid #cfe3d5;
+  border-radius: 999px;
+  color: #2b6a4a;
+  background: #ecf7f0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.automation-group-chip:hover {
+  border-color: #8fc7a4;
+  background: #dcf1e2;
+}
+
+.automation-group-chip svg {
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+}
+
+.automation-group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.automation-group-card {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid #dce5e1;
+  border-radius: 8px;
+  color: inherit;
+  background: #fbfdfc;
+  text-align: left;
+  cursor: pointer;
+}
+
+.automation-group-card:hover {
+  border-color: #75c8bb;
+  background: #f2faf7;
+}
+
+.automation-group-card svg {
+  width: 18px;
+  height: 18px;
+  color: #0f766e;
+}
+
+.automation-group-card span {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #1d2528;
+}
+
+.automation-group-card strong {
+  color: #60706b;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.automation-group-card.is-ungrouped svg,
+.automation-group-card.is-ungrouped span {
+  color: #66736f;
+}
+
 .automation-preview-list {
   display: grid;
   gap: 7px;
@@ -1268,7 +1347,7 @@ textarea:focus {
 
 .automation-form-grid {
   display: grid;
-  grid-template-columns: minmax(190px, 0.7fr) minmax(280px, 1.3fr);
+  grid-template-columns: minmax(160px, 0.65fr) minmax(240px, 1.1fr) minmax(150px, 0.55fr);
   gap: 14px;
 }
 

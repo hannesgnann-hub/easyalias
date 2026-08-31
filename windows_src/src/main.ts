@@ -20,6 +20,7 @@ import {
   Search,
   SquareTerminal,
   Star,
+  Tag,
   Terminal,
   Trash2,
   X
@@ -140,6 +141,8 @@ type Automation = {
   name: string;
   path: string;
   steps: AutomationStep[];
+  // Free-text label used to organize automations. Empty means ungrouped.
+  group: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -168,8 +171,13 @@ type AutomationRunState = {
 
 // Filters are inferred from step commands (same patterns as the alias
 // filter, minus favorites, which this automation model does not have yet)
-// plus one automation-specific category for background steps.
-type AutomationFilter = "all" | "background" | "git" | "docker" | "build";
+// plus background steps and groups. "groups" switches the results area to
+// a browsable group overview instead of filtering the automation list
+// directly; a `group:<name>` value (picked from a group card or the
+// dropdown) filters to that one group, where `group:` with an empty name
+// means "ungrouped".
+type AutomationStaticFilter = "all" | "background" | "git" | "docker" | "build" | "groups";
+type AutomationFilter = AutomationStaticFilter | `group:${string}`;
 
 const actionLabels: Record<AliasAction, string> = {
   navigate: "Go to Folder",
@@ -180,13 +188,31 @@ const actionLabels: Record<AliasAction, string> = {
   custom: "Custom Command"
 };
 
-const automationFilterLabels: Record<AutomationFilter, string> = {
+const automationFilterLabels: Record<AutomationStaticFilter, string> = {
   all: "All automations",
   background: "Background",
   git: "Git",
   docker: "Docker",
-  build: "Build"
+  build: "Build",
+  groups: "Group view"
 };
+
+function automationFilterLabel(filter: AutomationFilter): string {
+  if (filter.startsWith("group:")) {
+    const name = filter.slice("group:".length);
+    return name ? `Group: ${name}` : "Ungrouped";
+  }
+  return automationFilterLabels[filter as AutomationStaticFilter];
+}
+
+function automationGroups(automations: Automation[]) {
+  const names = new Set<string>();
+  for (const automation of automations) {
+    const trimmed = automation.group.trim();
+    if (trimmed) names.add(trimmed);
+  }
+  return [...names].sort((left, right) => left.localeCompare(right));
+}
 
 const emptyForm: AliasForm = {
   name: "",
@@ -782,7 +808,10 @@ async function loadState() {
   }
   const savedAutomations = localStorage.getItem("easyalias-automations");
   if (savedAutomations) {
-    automations = JSON.parse(savedAutomations) as Automation[];
+    automations = (JSON.parse(savedAutomations) as Automation[]).map((automation) => ({
+      ...automation,
+      group: automation.group ?? ""
+    }));
   }
 
   render();
@@ -1565,6 +1594,7 @@ function openAutomationEditor(id?: string) {
         name: "",
         path: "~/Projects",
         steps: [createAutomationStep("command")],
+        group: "",
         createdAt: timestamp,
         updatedAt: timestamp
       };
@@ -1579,7 +1609,7 @@ function closeAutomationEditor() {
   render();
 }
 
-function updateAutomationEditor<K extends "name" | "path">(key: K, value: Automation[K]) {
+function updateAutomationEditor<K extends "name" | "path" | "group">(key: K, value: Automation[K]) {
   if (!automationEditor) return;
   automationEditor = { ...automationEditor, [key]: value };
   automationError = "";
@@ -1638,6 +1668,7 @@ function removeAutomationStep(index: number) {
 function validateAutomation(automation: Automation) {
   if (!automation.name.trim()) return "Enter a name for the automation.";
   if (!automation.path.trim()) return "Choose a working directory.";
+  if (automation.group.trim().length > 60) return "The group label must be at most 60 characters.";
   if (!automation.steps.length) return "Add at least one step.";
 
   for (const [index, step] of automation.steps.entries()) {
@@ -1687,6 +1718,7 @@ async function saveAutomation(event: SubmitEvent) {
     ...automationEditor,
     name: automationEditor.name.trim(),
     path: automationEditor.path.trim(),
+    group: automationEditor.group.trim(),
     steps: automationEditor.steps.map((step) => ({
       ...step,
       command: step.kind === "command" ? step.command.trim() : "",
@@ -1886,6 +1918,15 @@ function renderAutomationEditor() {
               <button class="picker-button automation-folder-button" type="button" title="Choose working directory" aria-label="Choose working directory" data-automation-action="pick-folder"><i data-lucide="folder-open"></i></button>
             </span>
           </label>
+          <label>
+            Group <span class="automation-optional">(optional)</span>
+            <input name="automation-group" value="${escapeHtml(automationEditor.group)}" placeholder="e.g. Backend" list="automation-group-options" autocomplete="off" maxlength="60" />
+            <datalist id="automation-group-options">
+              ${automationGroups(automations)
+                .map((name) => `<option value="${escapeHtml(name)}"></option>`)
+                .join("")}
+            </datalist>
+          </label>
         </div>
 
         <div class="automation-step-heading">
@@ -1996,6 +2037,10 @@ function renderAutomationRun() {
 }
 
 function matchesAutomationFilter(automation: Automation) {
+  if (automationFilter.startsWith("group:")) {
+    return automation.group.trim() === automationFilter.slice("group:".length);
+  }
+
   const commandText = automation.steps
     .filter((step) => step.kind === "command")
     .map((step) => step.command)
@@ -2016,6 +2061,7 @@ function matchesAutomationFilter(automation: Automation) {
         /(^|[\s;&|])cargo\s+build(?=\s|$)/.test(commandText) ||
         /(^|[\s;&|])(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+build(?=\s|$)/.test(commandText)
       );
+    case "groups":
     case "all":
     default:
       return true;
@@ -2031,6 +2077,7 @@ function filterAutomations(automations: Automation[]) {
       (!query ||
         automation.name.toLocaleLowerCase().includes(query) ||
         automation.path.toLocaleLowerCase().includes(query) ||
+        automation.group.toLocaleLowerCase().includes(query) ||
         automation.steps.some(
           (step) => step.kind === "command" && step.command.toLocaleLowerCase().includes(query)
         ))
@@ -2043,14 +2090,56 @@ function automationCountLabel(total: number, filtered: number) {
   return hasActiveFilter ? `${filtered} of ${total} ${suffix}` : `${total} ${suffix}`;
 }
 
+function automationOverviewCountLabel(sortedAutomations: Automation[]) {
+  if (automationFilter === "groups") {
+    const groupCount = automationGroups(sortedAutomations).length;
+    const hasUngrouped = sortedAutomations.some((automation) => !automation.group.trim());
+    const count = groupCount + (hasUngrouped ? 1 : 0);
+    return `${count} ${count === 1 ? "group" : "groups"}`;
+  }
+  return automationCountLabel(sortedAutomations.length, filterAutomations(sortedAutomations).length);
+}
+
 // Search input stays mounted while only the result area is replaced. This
 // avoids losing focus or jumping the caret while someone types quickly.
-function renderAutomationResults(sortedAutomations: Automation[]) {
-  const filteredAutomations = filterAutomations(sortedAutomations);
+function renderAutomationGroupOverview(sortedAutomations: Automation[]) {
+  const groupNames = automationGroups(sortedAutomations);
+  const ungrouped = sortedAutomations.filter((automation) => !automation.group.trim());
 
+  const cards = groupNames.map((name) => {
+    const count = sortedAutomations.filter((automation) => automation.group.trim() === name).length;
+    return `<button class="automation-group-card" type="button" data-automation-action="select-group" data-group="${escapeHtml(name)}">
+        <i data-lucide="tag"></i>
+        <span>${escapeHtml(name)}</span>
+        <strong>${count} ${count === 1 ? "automation" : "automations"}</strong>
+      </button>`;
+  });
+
+  if (ungrouped.length) {
+    cards.push(`<button class="automation-group-card is-ungrouped" type="button" data-automation-action="select-group" data-group="">
+        <i data-lucide="tag"></i>
+        <span>Ungrouped</span>
+        <strong>${ungrouped.length} ${ungrouped.length === 1 ? "automation" : "automations"}</strong>
+      </button>`);
+  }
+
+  if (!cards.length) {
+    return `<div class="automation-empty"><strong>No groups yet</strong><span>Add a group label to an automation to see it here.</span></div>`;
+  }
+
+  return `<div class="automation-group-grid">${cards.join("")}</div>`;
+}
+
+function renderAutomationResults(sortedAutomations: Automation[]) {
   if (!sortedAutomations.length) {
     return `<div class="automation-empty"><div class="automation-empty-icon"><i data-lucide="play"></i></div><strong>No automations yet</strong><span>Combine project commands and waits into a repeatable workflow.</span><button class="primary-button" type="button" data-automation-action="new"><i data-lucide="plus"></i><span>Create automation</span></button></div>`;
   }
+
+  if (automationFilter === "groups") {
+    return renderAutomationGroupOverview(sortedAutomations);
+  }
+
+  const filteredAutomations = filterAutomations(sortedAutomations);
 
   if (!filteredAutomations.length) {
     return `<div class="automation-empty"><strong>No matching automations</strong><span>Try another search or filter.</span></div>`;
@@ -2061,7 +2150,15 @@ function renderAutomationResults(sortedAutomations: Automation[]) {
         .map(
           (automation) => `<article class="automation-card">
               <div class="automation-card-header">
-                <div><strong>${escapeHtml(automation.name)}</strong><code>${escapeHtml(automation.path)}</code></div>
+                <div>
+                  <strong>${escapeHtml(automation.name)}</strong>
+                  <code>${escapeHtml(automation.path)}</code>
+                  ${
+                    automation.group.trim()
+                      ? `<button class="automation-group-chip" type="button" title="Filter by group ${escapeHtml(automation.group.trim())}" data-automation-action="select-group" data-group="${escapeHtml(automation.group.trim())}"><i data-lucide="tag"></i><span>${escapeHtml(automation.group.trim())}</span></button>`
+                      : ""
+                  }
+                </div>
                 <span>${automation.steps.length} ${automation.steps.length === 1 ? "step" : "steps"}</span>
               </div>
               <ol class="automation-preview-list">
@@ -2084,23 +2181,28 @@ function renderAutomationResults(sortedAutomations: Automation[]) {
 
 function refreshAutomationResults() {
   const sortedAutomations = [...automations].sort((left, right) => left.name.localeCompare(right.name));
-  const filteredAutomations = filterAutomations(sortedAutomations);
   const count = document.querySelector<HTMLElement>("[data-automation-count]");
   const results = document.querySelector<HTMLElement>("[data-automation-results]");
+  const filterLabel = document.querySelector<HTMLLabelElement>(".automation-filter");
 
-  if (count) count.textContent = automationCountLabel(sortedAutomations.length, filteredAutomations.length);
+  if (count) count.textContent = automationOverviewCountLabel(sortedAutomations);
+  if (filterLabel) {
+    filterLabel.classList.toggle("is-active", automationFilter !== "all");
+    const select = filterLabel.querySelector("select");
+    if (select) select.title = `Filter: ${automationFilterLabel(automationFilter)}`;
+  }
   if (!results) return;
 
   results.innerHTML = renderAutomationResults(sortedAutomations);
   createIcons({
-    icons: { Pencil, Play, Plus, Trash2 },
+    icons: { Pencil, Play, Plus, Tag, Trash2 },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
 }
 
 function renderAutomationsView() {
   const sortedAutomations = [...automations].sort((left, right) => left.name.localeCompare(right.name));
-  const filteredAutomationCount = filterAutomations(sortedAutomations).length;
+  const automationGroupNames = automationGroups(sortedAutomations);
   appElement.innerHTML = `
     <section class="shell automation-shell">
       <header class="topbar automation-topbar">
@@ -2133,7 +2235,7 @@ function renderAutomationsView() {
 
       <section class="automation-overview">
         <div class="automation-overview-header">
-          <div><h2>Your Automations</h2><span data-automation-count>${automationCountLabel(sortedAutomations.length, filteredAutomationCount)}</span></div>
+          <div><h2>Your Automations</h2><span data-automation-count>${automationOverviewCountLabel(sortedAutomations)}</span></div>
           <button class="primary-button" type="button" data-automation-action="new" ${automationRun?.running ? "disabled" : ""}><i data-lucide="plus"></i><span>New automation</span></button>
         </div>
         <div class="automation-tools">
@@ -2155,7 +2257,7 @@ function renderAutomationsView() {
             <select
               name="automation-filter"
               aria-label="Filter automations"
-              title="Filter: ${automationFilterLabels[automationFilter]}"
+              title="Filter: ${automationFilterLabel(automationFilter)}"
               ${automations.length ? "" : "disabled"}
             >
               ${Object.entries(automationFilterLabels)
@@ -2164,6 +2266,18 @@ function renderAutomationsView() {
                     `<option value="${value}" ${automationFilter === value ? "selected" : ""}>${label}</option>`
                 )
                 .join("")}
+              ${
+                automationGroupNames.length
+                  ? `<optgroup label="Groups">
+                      ${automationGroupNames
+                        .map(
+                          (name) =>
+                            `<option value="group:${escapeHtml(name)}" ${automationFilter === `group:${name}` ? "selected" : ""}>${escapeHtml(name)}</option>`
+                        )
+                        .join("")}
+                    </optgroup>`
+                  : ""
+              }
             </select>
           </label>
         </div>
@@ -2180,7 +2294,7 @@ function renderAutomationsView() {
     </section>`;
 
   createIcons({
-    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, Filter, FolderOpen, Pencil, Play, Plus, Save, Search, Terminal, Trash2, X },
+    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, Filter, FolderOpen, Pencil, Play, Plus, Save, Search, Tag, Terminal, Trash2, X },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
   scheduleMessageDismissal();
@@ -2192,6 +2306,7 @@ function bindAutomationEvents() {
   document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => link.addEventListener("click", openExternalLink));
   document.querySelector<HTMLInputElement>('input[name="automation-name"]')?.addEventListener("input", (event) => updateAutomationEditor("name", (event.target as HTMLInputElement).value));
   document.querySelector<HTMLInputElement>('input[name="automation-path"]')?.addEventListener("input", (event) => updateAutomationEditor("path", (event.target as HTMLInputElement).value));
+  document.querySelector<HTMLInputElement>('input[name="automation-group"]')?.addEventListener("input", (event) => updateAutomationEditor("group", (event.target as HTMLInputElement).value));
   document.querySelectorAll<HTMLSelectElement>('select[name="automation-step-kind"]').forEach((select) => select.addEventListener("change", () => updateAutomationStep(Number(select.dataset.stepIndex), "kind", select.value as AutomationStepKind, true)));
   document.querySelectorAll<HTMLTextAreaElement>('textarea[name="automation-step-command"]').forEach((input) => input.addEventListener("input", () => updateAutomationStep(Number(input.dataset.stepIndex), "command", input.value)));
   document.querySelectorAll<HTMLSelectElement>('select[name="automation-step-behavior"]').forEach((select) => select.addEventListener("change", () => updateAutomationStep(Number(select.dataset.stepIndex), "behavior", select.value as AutomationCommandBehavior)));
@@ -2220,6 +2335,13 @@ function bindAutomationEvents() {
     if (action === "edit" && id) openAutomationEditor(id);
     if (action === "delete" && id) void deleteAutomation(id);
     if (action === "run" && id) void runAutomation(id);
+    if (action === "select-group") {
+      // A full render (not refreshAutomationResults) so the filter <select>
+      // picks up this group as a newly selected option and its "is-active"
+      // state, exactly as if the user had chosen it from the dropdown.
+      automationFilter = `group:${button.dataset.group ?? ""}`;
+      render();
+    }
   });
 
   document.querySelectorAll<HTMLButtonElement>("[data-automation-action]").forEach((button) => {

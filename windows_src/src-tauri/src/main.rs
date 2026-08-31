@@ -131,6 +131,11 @@ struct Automation {
     name: String,
     path: String,
     steps: Vec<AutomationStep>,
+    // A free-text label the UI groups and filters automations by. Empty
+    // means "ungrouped"; older automations.json files without this field
+    // default to that.
+    #[serde(default)]
+    group: String,
     created_at: String,
     updated_at: String,
 }
@@ -931,6 +936,12 @@ fn validate_automations(automations: &[Automation]) -> Result<(), String> {
         if automation.path.trim().is_empty() || automation.path.chars().count() > 4096 {
             return Err(format!(
                 "Automation \"{}\" needs a valid working directory.",
+                name
+            ));
+        }
+        if automation.group.chars().count() > 60 {
+            return Err(format!(
+                "The group label for \"{}\" must be at most 60 characters.",
                 name
             ));
         }
@@ -1877,6 +1888,7 @@ mod tests {
                     behavior: "wait".to_string(),
                 },
             ],
+            group: "Backend".to_string(),
             created_at: "2026-08-24T18:00:00.000Z".to_string(),
             updated_at: "2026-08-24T18:00:00.000Z".to_string(),
         };
@@ -1897,6 +1909,7 @@ mod tests {
                 seconds: 0,
                 behavior: "background".to_string(),
             }],
+            group: String::new(),
             created_at: "2026-08-24T18:00:00.000Z".to_string(),
             updated_at: "2026-08-24T18:00:00.000Z".to_string(),
         };
@@ -1957,5 +1970,27 @@ mod tests {
 
         let _ = session.child.kill();
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn rejects_a_group_label_over_the_length_limit() {
+        let automation = Automation {
+            id: "grouped".to_string(),
+            name: "Grouped".to_string(),
+            path: "~/Projects".to_string(),
+            steps: vec![AutomationStep {
+                id: "step".to_string(),
+                kind: "command".to_string(),
+                command: "echo hi".to_string(),
+                seconds: 0,
+                behavior: "wait".to_string(),
+            }],
+            group: "g".repeat(61),
+            created_at: "2026-08-24T18:00:00.000Z".to_string(),
+            updated_at: "2026-08-24T18:00:00.000Z".to_string(),
+        };
+
+        let validation_error = validate_automations(&[automation]).unwrap_err();
+        assert!(validation_error.contains("group label"));
     }
 }
