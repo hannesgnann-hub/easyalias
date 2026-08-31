@@ -21,6 +21,7 @@ import {
   SquareTerminal,
   Star,
   Tag,
+  Tags,
   Terminal,
   Trash2,
   X
@@ -569,6 +570,10 @@ let automationError = "";
 let automationRun: AutomationRunState | null = null;
 let automationSearchQuery = "";
 let automationFilter: AutomationFilter = "all";
+// Only one card's quick group-picker is open at a time; the editor's picker
+// is separate since it lives in its own modal.
+let automationGroupPickerId: string | null = null;
+let automationEditorGroupPickerOpen = false;
 
 const trashRetentionSeconds = 30 * 24 * 60 * 60;
 
@@ -1568,6 +1573,7 @@ function createAutomationStep(kind: AutomationStepKind): AutomationStep {
 function openAutomationsView() {
   clearMessages();
   automationError = "";
+  automationGroupPickerId = null;
   currentView = "automations";
   render();
 }
@@ -1577,6 +1583,7 @@ function closeAutomationsView() {
   automationEditor = null;
   automationError = "";
   automationRun = null;
+  automationGroupPickerId = null;
   currentView = "aliases";
   render();
 }
@@ -1599,6 +1606,7 @@ function openAutomationEditor(id?: string) {
         updatedAt: timestamp
       };
   automationError = "";
+  automationEditorGroupPickerOpen = false;
   render();
 }
 
@@ -1606,6 +1614,7 @@ function closeAutomationEditor() {
   if (automationBusy) return;
   automationEditor = null;
   automationError = "";
+  automationEditorGroupPickerOpen = false;
   render();
 }
 
@@ -1690,6 +1699,36 @@ async function persistAutomations(next: Automation[]) {
   }
   automations = next;
   localStorage.setItem("easyalias-automations", JSON.stringify(next));
+}
+
+function toggleAutomationGroupPicker(id: string) {
+  automationGroupPickerId = automationGroupPickerId === id ? null : id;
+  refreshAutomationResults();
+}
+
+async function assignAutomationGroup(id: string, group: string) {
+  const automation = automations.find((item) => item.id === id);
+  if (!automation) return;
+
+  const trimmedGroup = group.trim();
+  if (trimmedGroup.length > 60) {
+    error = "The group label must be at most 60 characters.";
+    render();
+    return;
+  }
+
+  automationGroupPickerId = null;
+  try {
+    await persistAutomations(
+      automations.map((item) => (item.id === id ? { ...item, group: trimmedGroup, updatedAt: nowIso() } : item))
+    );
+    notice = trimmedGroup
+      ? `Moved "${automation.name}" to "${trimmedGroup}".`
+      : `Removed "${automation.name}" from its group.`;
+  } catch (assignError) {
+    error = String(assignError);
+  }
+  render();
 }
 
 async function saveAutomation(event: SubmitEvent) {
@@ -1920,12 +1959,26 @@ function renderAutomationEditor() {
           </label>
           <label>
             Group <span class="automation-optional">(optional)</span>
-            <input name="automation-group" value="${escapeHtml(automationEditor.group)}" placeholder="e.g. Backend" list="automation-group-options" autocomplete="off" maxlength="60" />
-            <datalist id="automation-group-options">
-              ${automationGroups(automations)
-                .map((name) => `<option value="${escapeHtml(name)}"></option>`)
-                .join("")}
-            </datalist>
+            <span class="automation-path-row">
+              <input name="automation-group" value="${escapeHtml(automationEditor.group)}" placeholder="e.g. Backend, or type a new name" autocomplete="off" maxlength="60" />
+              <button class="picker-button automation-group-picker-button" type="button" title="Choose an existing group" aria-label="Choose an existing group" aria-expanded="${automationEditorGroupPickerOpen}" data-automation-action="toggle-editor-group-picker"><i data-lucide="tags"></i></button>
+            </span>
+            ${
+              automationEditorGroupPickerOpen
+                ? `<div class="automation-group-picker automation-group-picker-editor" role="menu" aria-label="Existing groups">
+                    ${
+                      automationGroups(automations).length
+                        ? automationGroups(automations)
+                            .map(
+                              (name) =>
+                                `<button type="button" class="automation-group-option ${automationEditor!.group.trim() === name ? "is-selected" : ""}" data-automation-action="pick-editor-group" data-group="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+                            )
+                            .join("")
+                        : `<p class="automation-group-picker-empty">No groups yet. Type a new name above.</p>`
+                    }
+                  </div>`
+                : ""
+            }
           </label>
         </div>
 
@@ -2102,6 +2155,37 @@ function automationOverviewCountLabel(sortedAutomations: Automation[]) {
 
 // Search input stays mounted while only the result area is replaced. This
 // avoids losing focus or jumping the caret while someone types quickly.
+// Inline card popover for quickly assigning an automation to an existing
+// group or creating a new one, without opening the full editor.
+function renderAutomationGroupPicker(automation: Automation, allAutomations: Automation[]) {
+  const currentGroup = automation.group.trim();
+  const existingGroups = automationGroups(allAutomations);
+
+  return `<div class="automation-group-picker" role="menu" aria-label="Assign ${escapeHtml(automation.name)} to a group">
+      ${
+        existingGroups.length
+          ? `<div class="automation-group-picker-list">
+              ${existingGroups
+                .map(
+                  (name) =>
+                    `<button type="button" class="automation-group-option ${currentGroup === name ? "is-selected" : ""}" data-automation-action="assign-group" data-id="${escapeHtml(automation.id)}" data-group="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+                )
+                .join("")}
+            </div>`
+          : `<p class="automation-group-picker-empty">No groups yet.</p>`
+      }
+      ${
+        currentGroup
+          ? `<button type="button" class="automation-group-option is-remove" data-automation-action="assign-group" data-id="${escapeHtml(automation.id)}" data-group="">No group</button>`
+          : ""
+      }
+      <form class="automation-group-picker-create" data-automation-group-form="${escapeHtml(automation.id)}">
+        <input type="text" name="automation-group-new" placeholder="New group name" maxlength="60" autocomplete="off" />
+        <button class="ghost-button" type="submit">Create</button>
+      </form>
+    </div>`;
+}
+
 function renderAutomationGroupOverview(sortedAutomations: Automation[]) {
   const groupNames = automationGroups(sortedAutomations);
   const ungrouped = sortedAutomations.filter((automation) => !automation.group.trim());
@@ -2150,17 +2234,30 @@ function renderAutomationResults(sortedAutomations: Automation[]) {
         .map(
           (automation) => `<article class="automation-card">
               <div class="automation-card-header">
-                <div>
-                  <strong>${escapeHtml(automation.name)}</strong>
-                  <code>${escapeHtml(automation.path)}</code>
-                  ${
-                    automation.group.trim()
-                      ? `<button class="automation-group-chip" type="button" title="Filter by group ${escapeHtml(automation.group.trim())}" data-automation-action="select-group" data-group="${escapeHtml(automation.group.trim())}"><i data-lucide="tag"></i><span>${escapeHtml(automation.group.trim())}</span></button>`
-                      : ""
-                  }
+                <div class="automation-card-title">
+                  <button
+                    class="automation-group-button ${automation.group.trim() ? "has-group" : ""}"
+                    type="button"
+                    title="${automation.group.trim() ? `Change group (currently ${escapeHtml(automation.group.trim())})` : "Assign to a group"}"
+                    aria-label="${automation.group.trim() ? "Change group for" : "Assign"} ${escapeHtml(automation.name)}${automation.group.trim() ? "" : " to a group"}"
+                    aria-expanded="${automationGroupPickerId === automation.id}"
+                    data-automation-action="toggle-group-picker"
+                    data-id="${escapeHtml(automation.id)}"
+                    ${automationRun?.running ? "disabled" : ""}
+                  ><i data-lucide="tags"></i></button>
+                  <div>
+                    <strong>${escapeHtml(automation.name)}</strong>
+                    <code>${escapeHtml(automation.path)}</code>
+                    ${
+                      automation.group.trim()
+                        ? `<button class="automation-group-chip" type="button" title="Filter by group ${escapeHtml(automation.group.trim())}" data-automation-action="select-group" data-group="${escapeHtml(automation.group.trim())}"><i data-lucide="tag"></i><span>${escapeHtml(automation.group.trim())}</span></button>`
+                        : ""
+                    }
+                  </div>
                 </div>
                 <span>${automation.steps.length} ${automation.steps.length === 1 ? "step" : "steps"}</span>
               </div>
+              ${automationGroupPickerId === automation.id ? renderAutomationGroupPicker(automation, sortedAutomations) : ""}
               <ol class="automation-preview-list">
                 ${automation.steps
                   .slice(0, 4)
@@ -2195,7 +2292,7 @@ function refreshAutomationResults() {
 
   results.innerHTML = renderAutomationResults(sortedAutomations);
   createIcons({
-    icons: { Pencil, Play, Plus, Tag, Trash2 },
+    icons: { Pencil, Play, Plus, Tag, Tags, Trash2 },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
 }
@@ -2212,6 +2309,7 @@ function renderAutomationsView() {
         </div>
         <div class="topbar-actions">
           <button class="header-icon-button" type="button" title="Back to aliases" aria-label="Back to aliases" data-automation-action="back" ${automationRun?.running ? "disabled" : ""}><i data-lucide="arrow-left"></i></button>
+          <button class="header-icon-button ${automationFilter === "groups" ? "active" : ""}" type="button" title="Group view" aria-label="Show automation groups" aria-pressed="${automationFilter === "groups"}" data-automation-action="show-groups" ${automationRun?.running ? "disabled" : ""}><i data-lucide="tags"></i></button>
           <button class="header-icon-button automation-create-button" type="button" title="Create automation" aria-label="Create automation" data-automation-action="new" ${automationRun?.running ? "disabled" : ""}><i data-lucide="plus"></i></button>
         </div>
       </header>
@@ -2294,7 +2392,7 @@ function renderAutomationsView() {
     </section>`;
 
   createIcons({
-    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, Filter, FolderOpen, Pencil, Play, Plus, Save, Search, Tag, Terminal, Trash2, X },
+    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, Filter, FolderOpen, Pencil, Play, Plus, Save, Search, Tag, Tags, Terminal, Trash2, X },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
   scheduleMessageDismissal();
@@ -2342,6 +2440,19 @@ function bindAutomationEvents() {
       automationFilter = `group:${button.dataset.group ?? ""}`;
       render();
     }
+    if (action === "toggle-group-picker" && id) toggleAutomationGroupPicker(id);
+    if (action === "assign-group" && id) void assignAutomationGroup(id, button.dataset.group ?? "");
+  });
+
+  // The create-new-group mini form inside a card's group picker; submit
+  // bubbles up to the same results container as the click delegation above.
+  document.querySelector<HTMLElement>("[data-automation-results]")?.addEventListener("submit", (event) => {
+    const form = (event.target as HTMLElement).closest<HTMLFormElement>("[data-automation-group-form]");
+    if (!form) return;
+    event.preventDefault();
+    const id = form.dataset.automationGroupForm;
+    const input = form.querySelector<HTMLInputElement>('input[name="automation-group-new"]');
+    if (id && input) void assignAutomationGroup(id, input.value);
   });
 
   document.querySelectorAll<HTMLButtonElement>("[data-automation-action]").forEach((button) => {
@@ -2360,6 +2471,19 @@ function bindAutomationEvents() {
       if (action === "stop-run") void stopAutomation();
       if (action === "close-run") closeAutomationRun();
       if (action === "dismiss-message") dismissMessage();
+      if (action === "show-groups") {
+        automationFilter = "groups";
+        render();
+      }
+      if (action === "toggle-editor-group-picker") {
+        automationEditorGroupPickerOpen = !automationEditorGroupPickerOpen;
+        render();
+      }
+      if (action === "pick-editor-group") {
+        updateAutomationEditor("group", button.dataset.group ?? "");
+        automationEditorGroupPickerOpen = false;
+        render();
+      }
     });
   });
 }

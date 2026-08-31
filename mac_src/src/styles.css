@@ -132,6 +132,12 @@ h2 {
   outline-offset: 2px;
 }
 
+.header-icon-button.active {
+  color: #0f766e;
+  border-color: #75c8bb;
+  background: #d8f3ed;
+}
+
 .trash-header-button {
   position: relative;
 }
@@ -1301,6 +1307,48 @@ textarea:focus {
   pointer-events: none;
 }
 
+.automation-group-button {
+  display: grid;
+  flex: 0 0 36px;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid #dce5e1;
+  border-radius: 8px;
+  color: #71807b;
+  background: #f4f8f6;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.automation-group-button:hover,
+.automation-group-button[aria-expanded="true"] {
+  border-color: #8fc7a4;
+  color: #2b6a4a;
+  background: #ecf7f0;
+}
+
+.automation-group-button.has-group {
+  color: #2b6a4a;
+  border-color: #cfe3d5;
+  background: #ecf7f0;
+}
+
+.automation-group-button:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.24);
+  outline-offset: 2px;
+}
+
+.automation-group-button svg {
+  width: 17px;
+  height: 17px;
+  pointer-events: none;
+}
+
 .automation-card-header strong {
   font-size: 1rem;
 }
@@ -1352,6 +1400,78 @@ textarea:focus {
   width: 12px;
   height: 12px;
   pointer-events: none;
+}
+
+.automation-group-picker {
+  display: grid;
+  gap: 8px;
+  margin: 4px 0 2px;
+  padding: 10px;
+  border: 1px solid #cfe3d5;
+  border-radius: 8px;
+  background: #f6faf8;
+}
+
+.automation-group-picker-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.automation-group-option {
+  padding: 5px 10px;
+  border: 1px solid #cfe3d5;
+  border-radius: 999px;
+  color: #2b6a4a;
+  background: #fff;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.automation-group-option:hover {
+  border-color: #8fc7a4;
+  background: #ecf7f0;
+}
+
+.automation-group-option.is-selected {
+  color: #fff;
+  border-color: #0f766e;
+  background: #0f766e;
+}
+
+.automation-group-option.is-remove {
+  color: #8a302b;
+  border-color: #edd0cd;
+  background: #fff4f3;
+}
+
+.automation-group-picker-empty {
+  margin: 0;
+  color: #66736f;
+  font-size: 0.78rem;
+}
+
+.automation-group-picker-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.automation-group-picker-create input {
+  padding: 7px 10px;
+  border: 1px solid #c9d8d3;
+  border-radius: 7px;
+  font-size: 0.8rem;
+}
+
+.automation-group-picker-create .ghost-button {
+  min-height: 0;
+  padding: 0 12px;
+}
+
+.automation-group-picker-editor {
+  margin-top: 4px;
 }
 
 .automation-group-grid {
@@ -1517,7 +1637,8 @@ textarea:focus {
   gap: 8px;
 }
 
-.automation-folder-button {
+.automation-folder-button,
+.automation-group-picker-button {
   display: grid;
   place-items: center;
   width: 44px;
