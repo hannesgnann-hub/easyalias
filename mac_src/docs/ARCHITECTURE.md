@@ -410,4 +410,4 @@ Later:
 
 - settings window
 - signed and notarized release automation
-- port Automations to Linux (Windows already has it; the sandboxed Mac App Store edition is intentionally excluded, see its architecture doc)
+- Automations now ship on macOS, Windows, and Linux; the sandboxed Mac App Store edition remains intentionally excluded (see its architecture doc)

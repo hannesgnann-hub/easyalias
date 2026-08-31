@@ -2,10 +2,14 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
-    io::ErrorKind,
+    io::{BufRead, BufReader, ErrorKind, Write},
     path::{Path, PathBuf},
+    process::{Child, ChildStdin, Command, Stdio},
+    sync::{mpsc, Mutex},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tauri::Manager;
 
 // Must match the frontend AliasEntry shape. serde's camelCase conversion keeps
 // Rust idiomatic while still producing JSON fields like customCommand/createdAt.
@@ -99,6 +103,108 @@ struct TrashMutationResult {
     trash: Vec<TrashEntry>,
 }
 
+// Automations are intentionally stored separately from aliases. Each workflow
+// has one working directory and an ordered list of commands or timed pauses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationStep {
+    id: String,
+    kind: String,
+    #[serde(default)]
+    command: String,
+    #[serde(default)]
+    seconds: u64,
+    #[serde(default = "default_command_behavior")]
+    behavior: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Automation {
+    id: String,
+    name: String,
+    path: String,
+    steps: Vec<AutomationStep>,
+    #[serde(default)]
+    favorite: bool,
+    // A free-text label the UI groups and filters automations by. Empty
+    // means "ungrouped"; older automations.json files without this field
+    // default to that.
+    #[serde(default)]
+    group: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationTrashEntry {
+    automation: Automation,
+    deleted_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationTrashMutationResult {
+    automations: Vec<Automation>,
+    trash: Vec<AutomationTrashEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationBackup {
+    format: String,
+    version: u32,
+    exported_at: String,
+    automations: Vec<Automation>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationBackupImportResult {
+    automations: Vec<Automation>,
+    imported_count: usize,
+    replaced_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationCommandResult {
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    process_id: Option<u32>,
+}
+
+// One automation run gets one persistent shell process (bash or zsh, matching
+// the user's detected login shell), so `cd` and exported environment
+// variables carry over between steps exactly as they would in a real
+// terminal. A background thread streams its merged stdout/stderr line by
+// line into `output_rx`; commands are matched to their output by writing a
+// unique sentinel after each one.
+struct AutomationSessionHandle {
+    child: Child,
+    stdin: ChildStdin,
+    output_rx: mpsc::Receiver<String>,
+}
+
+#[derive(Default)]
+struct AutomationSessions(Mutex<HashMap<String, AutomationSessionHandle>>);
+
+const AUTOMATION_DONE_MARKER: &str = "__EASYALIAS_AUTOMATION_DONE__";
+const AUTOMATION_BG_MARKER: &str = "__EASYALIAS_AUTOMATION_BG__";
+const AUTOMATION_BACKUP_FORMAT: &str = "easyalias-automation-backup";
+const AUTOMATION_BACKUP_VERSION: u32 = 1;
+const MAX_AUTOMATIONS: usize = 200;
+const MAX_AUTOMATION_STEPS: usize = 100;
+const MAX_AUTOMATION_COMMAND_BYTES: usize = 16 * 1024;
+const MAX_AUTOMATION_OUTPUT_CHARS: usize = 20_000;
+const MAX_WAIT_SECONDS: u64 = 24 * 60 * 60;
+
+fn default_command_behavior() -> String {
+    "wait".to_string()
+}
+
 // EasyAlias owns ~/.easyalias/aliases.sh and adds only these small integration
 // lines to the active shell's startup file.
 const SOURCE_LINE: &str = "source ~/.easyalias/aliases.sh";
@@ -164,8 +270,26 @@ fn trash_file() -> Result<PathBuf, String> {
     Ok(app_dir()?.join("trash.json"))
 }
 
+fn automations_file() -> Result<PathBuf, String> {
+    Ok(app_dir()?.join("automations.json"))
+}
+
+fn automation_trash_file() -> Result<PathBuf, String> {
+    Ok(app_dir()?.join("automations-trash.json"))
+}
+
 fn import_marker_file() -> Result<PathBuf, String> {
     Ok(app_dir()?.join(".shell-import-v1"))
+}
+
+// Automations run through the same shell EasyAlias already detected for
+// aliases (bash or zsh), so `cd`/exports behave exactly like the user's own
+// terminal instead of defaulting to a shell they may not use.
+fn automation_shell_binary() -> Result<&'static str, String> {
+    Ok(match shell_setup()?.name.as_str() {
+        "zsh" => "/bin/zsh",
+        _ => "/bin/bash",
+    })
 }
 
 // A missing startup file is valid. Other read failures are surfaced so an
@@ -598,6 +722,321 @@ fn load_trash_entries() -> Result<Vec<TrashEntry>, String> {
     Ok(entries)
 }
 
+fn validate_automations(automations: &[Automation]) -> Result<(), String> {
+    if automations.len() > MAX_AUTOMATIONS {
+        return Err(format!(
+            "EasyAlias supports up to {} automations.",
+            MAX_AUTOMATIONS
+        ));
+    }
+
+    let mut automation_ids = HashSet::new();
+    for automation in automations {
+        let name = automation.name.trim();
+        if name.is_empty() || name.chars().count() > 120 {
+            return Err("Every automation needs a name with at most 120 characters.".to_string());
+        }
+        if automation.id.trim().is_empty() || !automation_ids.insert(automation.id.as_str()) {
+            return Err("Every automation needs a unique id.".to_string());
+        }
+        if automation.path.trim().is_empty() || automation.path.chars().count() > 4096 {
+            return Err(format!(
+                "Automation \"{}\" needs a valid working directory.",
+                name
+            ));
+        }
+        if automation.group.chars().count() > 60 {
+            return Err(format!(
+                "The group label for \"{}\" must be at most 60 characters.",
+                name
+            ));
+        }
+        if automation.steps.is_empty() || automation.steps.len() > MAX_AUTOMATION_STEPS {
+            return Err(format!(
+                "Automation \"{}\" needs between 1 and {} steps.",
+                name, MAX_AUTOMATION_STEPS
+            ));
+        }
+
+        let mut step_ids = HashSet::new();
+        for step in &automation.steps {
+            if step.id.trim().is_empty() || !step_ids.insert(step.id.as_str()) {
+                return Err(format!(
+                    "Automation \"{}\" contains a duplicate step id.",
+                    name
+                ));
+            }
+
+            match step.kind.as_str() {
+                "command" => {
+                    if step.command.trim().is_empty()
+                        || step.command.len() > MAX_AUTOMATION_COMMAND_BYTES
+                    {
+                        return Err(format!(
+                            "Every command in \"{}\" must contain at most {} bytes.",
+                            name, MAX_AUTOMATION_COMMAND_BYTES
+                        ));
+                    }
+                    if !matches!(step.behavior.as_str(), "wait" | "background") {
+                        return Err(format!(
+                            "Automation \"{}\" has an invalid command mode.",
+                            name
+                        ));
+                    }
+                }
+                "wait" => {
+                    if step.seconds == 0 || step.seconds > MAX_WAIT_SECONDS {
+                        return Err(format!(
+                            "Wait steps in \"{}\" must be between 1 second and 24 hours.",
+                            name
+                        ));
+                    }
+                }
+                _ => return Err(format!("Automation \"{}\" has an unknown step type.", name)),
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_automation_backup_collection(automations: &[Automation]) -> Result<(), String> {
+    validate_automations(automations)?;
+
+    let mut names = HashSet::new();
+    for automation in automations {
+        if !names.insert(automation.name.as_str()) {
+            return Err(format!(
+                "Duplicate automation name in backup: {}",
+                automation.name
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn read_automation_backup(path: &Path) -> Result<AutomationBackup, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("{} could not be inspected: {}", path.display(), error))?;
+    if !metadata.is_file() {
+        return Err("Choose an EasyAlias automation JSON backup file.".to_string());
+    }
+    if metadata.len() > MAX_BACKUP_BYTES {
+        return Err("The backup is larger than 5 MB.".to_string());
+    }
+
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let backup: AutomationBackup = serde_json::from_str(&content)
+        .map_err(|error| format!("This is not a valid EasyAlias automation backup: {}", error))?;
+
+    if backup.format != AUTOMATION_BACKUP_FORMAT || backup.version != AUTOMATION_BACKUP_VERSION {
+        return Err("This EasyAlias automation backup format is not supported.".to_string());
+    }
+    if backup.exported_at.trim().is_empty() {
+        return Err("The backup has no export timestamp.".to_string());
+    }
+    validate_automation_backup_collection(&backup.automations)?;
+
+    Ok(backup)
+}
+
+fn load_automation_entries() -> Result<Vec<Automation>, String> {
+    ensure_app_files()?;
+    let path = automations_file()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let automations: Vec<Automation> = serde_json::from_str(&content)
+        .map_err(|error| format!("automations.json is not valid EasyAlias JSON: {}", error))?;
+    validate_automations(&automations)?;
+    Ok(automations)
+}
+
+fn write_automation_entries(automations: &[Automation]) -> Result<(), String> {
+    validate_automations(automations)?;
+    ensure_app_files()?;
+    let json = serde_json::to_string_pretty(automations)
+        .map_err(|error| format!("Automations could not be serialized: {}", error))?;
+    let path = automations_file()?;
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))
+}
+
+fn write_automation_trash_entries(entries: &[AutomationTrashEntry]) -> Result<(), String> {
+    // Trash is a history, not an active collection. Validate every workflow,
+    // but do not apply the active-list count or cross-entry uniqueness limits.
+    for entry in entries {
+        validate_automations(std::slice::from_ref(&entry.automation))?;
+    }
+    ensure_app_files()?;
+    let json = serde_json::to_string_pretty(entries)
+        .map_err(|error| format!("Automation Trash could not be serialized: {}", error))?;
+    let path = automation_trash_file()?;
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))
+}
+
+fn load_automation_trash_entries() -> Result<Vec<AutomationTrashEntry>, String> {
+    ensure_app_files()?;
+    let path = automation_trash_file()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let mut entries: Vec<AutomationTrashEntry> =
+        serde_json::from_str(&content).map_err(|error| {
+            format!(
+                "automations-trash.json is not valid EasyAlias JSON: {}",
+                error
+            )
+        })?;
+    for entry in &entries {
+        validate_automations(std::slice::from_ref(&entry.automation))?;
+    }
+    let now = unix_timestamp()?;
+    let original_len = entries.len();
+    entries.retain(|entry| now.saturating_sub(entry.deleted_at) < TRASH_RETENTION_SECONDS);
+    entries.sort_by(|left, right| right.deleted_at.cmp(&left.deleted_at));
+
+    if entries.len() != original_len {
+        write_automation_trash_entries(&entries)?;
+    }
+
+    Ok(entries)
+}
+
+// Resolves an automation's working directory. "~" and "~/..." expand against
+// HOME, matching the tilde convention already used for alias paths elsewhere
+// in this app.
+fn automation_working_directory(value: &str) -> Result<PathBuf, String> {
+    let trimmed = value.trim();
+    let path = if trimmed == "~" {
+        home_dir()?
+    } else if let Some(relative) = trimmed.strip_prefix("~/") {
+        home_dir()?.join(relative)
+    } else {
+        PathBuf::from(trimmed)
+    };
+
+    if !path.is_dir() {
+        return Err(format!(
+            "Working directory does not exist: {}",
+            path.display()
+        ));
+    }
+
+    path.canonicalize()
+        .map_err(|error| format!("Working directory could not be opened: {}", error))
+}
+
+fn limited_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .chars()
+        .take(MAX_AUTOMATION_OUTPUT_CHARS)
+        .collect()
+}
+
+// Spawns the one persistent shell an automation run drives its steps
+// through, with a background thread streaming its merged stdout/stderr into
+// a channel so `execute_in_session` can read command output synchronously.
+fn spawn_automation_session(working_directory: &Path) -> Result<AutomationSessionHandle, String> {
+    let mut child = Command::new(automation_shell_binary()?)
+        .arg("-l")
+        .current_dir(working_directory)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("Shell session could not be started: {}", error))?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Shell session has no input stream.".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Shell session has no output stream.".to_string())?;
+
+    let (sender, receiver) = mpsc::channel::<String>();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            match line {
+                Ok(text) => {
+                    if sender.send(text).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    Ok(AutomationSessionHandle {
+        child,
+        stdin,
+        output_rx: receiver,
+    })
+}
+
+// Runs one command inside an already-running automation session, so `cd`
+// and exported variables from earlier steps are still in effect. Foreground
+// commands wait for a completion sentinel carrying the exit code; background
+// commands only wait for confirmation that the job was started, so a
+// long-running dev server does not block the next step.
+fn execute_in_session(
+    session: &mut AutomationSessionHandle,
+    command: &str,
+    background: bool,
+) -> Result<AutomationCommandResult, String> {
+    let send_error = |error: std::io::Error| format!("Command could not be sent: {}", error);
+    let recv_error = || "Automation session ended unexpectedly.".to_string();
+
+    if background {
+        writeln!(session.stdin, "{{ {} ; }} >/dev/null 2>&1 &", command).map_err(send_error)?;
+        writeln!(session.stdin, "echo \"{}$!\"", AUTOMATION_BG_MARKER).map_err(send_error)?;
+        session.stdin.flush().map_err(send_error)?;
+
+        loop {
+            let line = session.output_rx.recv().map_err(|_| recv_error())?;
+            if let Some(pid) = line.strip_prefix(AUTOMATION_BG_MARKER) {
+                return Ok(AutomationCommandResult {
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    process_id: pid.trim().parse::<u32>().ok(),
+                });
+            }
+        }
+    }
+
+    writeln!(session.stdin, "{{ {} ; }} 2>&1", command).map_err(send_error)?;
+    writeln!(session.stdin, "echo \"{}$?\"", AUTOMATION_DONE_MARKER).map_err(send_error)?;
+    session.stdin.flush().map_err(send_error)?;
+
+    let mut collected = String::new();
+    loop {
+        let line = session.output_rx.recv().map_err(|_| recv_error())?;
+        if let Some(code) = line.strip_prefix(AUTOMATION_DONE_MARKER) {
+            return Ok(AutomationCommandResult {
+                exit_code: code.trim().parse::<i32>().ok(),
+                stdout: limited_output(collected.trim_end().as_bytes()),
+                stderr: String::new(),
+                process_id: None,
+            });
+        }
+        collected.push_str(&line);
+        collected.push('\n');
+    }
+}
+
 fn replace_imported_alias_lines(content: &str, selected_lines: &HashMap<usize, &str>) -> String {
     let mut lines: Vec<String> = content.split('\n').map(str::to_string).collect();
     for (index, line) in lines.iter_mut().enumerate() {
@@ -640,6 +1079,298 @@ fn save_aliases(aliases: Vec<AliasEntry>) -> Result<AppState, String> {
 
     write_alias_files(&aliases)?;
     app_state(aliases, &setup, Vec::new())
+}
+
+#[tauri::command]
+fn load_automations() -> Result<Vec<Automation>, String> {
+    load_automation_entries()
+}
+
+#[tauri::command]
+fn save_automations(automations: Vec<Automation>) -> Result<Vec<Automation>, String> {
+    write_automation_entries(&automations)?;
+    Ok(automations)
+}
+
+#[tauri::command]
+fn list_automation_trash() -> Result<Vec<AutomationTrashEntry>, String> {
+    load_automation_trash_entries()
+}
+
+// Keep the recoverable copy before updating active storage. This mirrors the
+// alias trash behavior and avoids losing a workflow if the second write fails.
+#[tauri::command]
+fn move_automation_to_trash(id: String) -> Result<AutomationTrashMutationResult, String> {
+    let mut automations = load_automation_entries()?;
+    let index = automations
+        .iter()
+        .position(|automation| automation.id == id)
+        .ok_or_else(|| "Automation no longer exists.".to_string())?;
+    let automation = automations.remove(index);
+    let mut trash = load_automation_trash_entries()?;
+    trash.retain(|entry| entry.automation.id != automation.id);
+    trash.push(AutomationTrashEntry {
+        automation,
+        deleted_at: unix_timestamp()?,
+    });
+    trash.sort_by(|left, right| right.deleted_at.cmp(&left.deleted_at));
+
+    write_automation_trash_entries(&trash)?;
+    write_automation_entries(&automations)?;
+
+    Ok(AutomationTrashMutationResult { automations, trash })
+}
+
+// Restore into active storage first. Name and id conflicts are rejected so a
+// deleted workflow never silently replaces a newer active workflow.
+#[tauri::command]
+fn restore_trash_automation(id: String) -> Result<AutomationTrashMutationResult, String> {
+    let mut trash = load_automation_trash_entries()?;
+    let index = trash
+        .iter()
+        .position(|entry| entry.automation.id == id)
+        .ok_or_else(|| "Deleted automation no longer exists.".to_string())?;
+    let automation = trash[index].automation.clone();
+    let mut automations = load_automation_entries()?;
+
+    if automations
+        .iter()
+        .any(|existing| existing.id == automation.id)
+    {
+        return Err("An active automation already uses this id.".to_string());
+    }
+    if automations.iter().any(|existing| {
+        existing
+            .name
+            .trim()
+            .eq_ignore_ascii_case(automation.name.trim())
+    }) {
+        return Err(format!(
+            "Automation \"{}\" already exists. Rename or delete the active automation before restoring.",
+            automation.name
+        ));
+    }
+
+    automations.push(automation);
+    automations.sort_by(|left, right| {
+        right
+            .favorite
+            .cmp(&left.favorite)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    write_automation_entries(&automations)?;
+    trash.remove(index);
+    write_automation_trash_entries(&trash)?;
+
+    Ok(AutomationTrashMutationResult { automations, trash })
+}
+
+#[tauri::command]
+fn permanently_delete_trash_automation(id: String) -> Result<Vec<AutomationTrashEntry>, String> {
+    let mut trash = load_automation_trash_entries()?;
+    let original_len = trash.len();
+    trash.retain(|entry| entry.automation.id != id);
+    if trash.len() == original_len {
+        return Err("Deleted automation no longer exists.".to_string());
+    }
+    write_automation_trash_entries(&trash)?;
+    Ok(trash)
+}
+
+#[tauri::command]
+fn empty_automation_trash() -> Result<Vec<AutomationTrashEntry>, String> {
+    ensure_app_files()?;
+    write_automation_trash_entries(&[])?;
+    Ok(Vec::new())
+}
+
+// Automation backups use their own envelope so they cannot be confused with
+// alias backups. Only the workflows selected in the review dialog are written.
+#[tauri::command]
+fn export_automation_backup(
+    selected_ids: Vec<String>,
+    destination: String,
+    exported_at: String,
+) -> Result<BackupExportResult, String> {
+    if selected_ids.is_empty() {
+        return Err("Select at least one automation to export.".to_string());
+    }
+    if destination.trim().is_empty() {
+        return Err("Choose where to save the backup.".to_string());
+    }
+    if exported_at.trim().is_empty() {
+        return Err("Export timestamp is missing.".to_string());
+    }
+
+    let selected_id_set: HashSet<&str> = selected_ids.iter().map(String::as_str).collect();
+    let selected: Vec<Automation> = load_automation_entries()?
+        .into_iter()
+        .filter(|automation| selected_id_set.contains(automation.id.as_str()))
+        .collect();
+    if selected.len() != selected_id_set.len() {
+        return Err("Some automations changed. Reopen Export and try again.".to_string());
+    }
+    validate_automation_backup_collection(&selected)?;
+
+    let backup = AutomationBackup {
+        format: AUTOMATION_BACKUP_FORMAT.to_string(),
+        version: AUTOMATION_BACKUP_VERSION,
+        exported_at,
+        automations: selected,
+    };
+    let json = serde_json::to_string_pretty(&backup)
+        .map_err(|error| format!("Backup could not be serialized: {}", error))?;
+    let path = PathBuf::from(destination);
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))?;
+
+    Ok(BackupExportResult {
+        file: path.display().to_string(),
+        exported_count: backup.automations.len(),
+    })
+}
+
+#[tauri::command]
+fn inspect_automation_backup(path: String) -> Result<Vec<Automation>, String> {
+    Ok(read_automation_backup(Path::new(&path))?.automations)
+}
+
+// Import matches workflows by name. Replacing the complete workflow makes a
+// backup restore deterministic, while fresh ids prevent collisions with data
+// that was created after the backup.
+#[tauri::command]
+fn import_automation_backup(
+    path: String,
+    selected_ids: Vec<String>,
+    imported_at: String,
+) -> Result<AutomationBackupImportResult, String> {
+    if selected_ids.is_empty() {
+        return Err("Select at least one automation to import.".to_string());
+    }
+    if imported_at.trim().is_empty() {
+        return Err("Import timestamp is missing.".to_string());
+    }
+
+    let backup = read_automation_backup(Path::new(&path))?;
+    let selected_id_set: HashSet<&str> = selected_ids.iter().map(String::as_str).collect();
+    let mut selected: Vec<Automation> = backup
+        .automations
+        .into_iter()
+        .filter(|automation| selected_id_set.contains(automation.id.as_str()))
+        .collect();
+    if selected.len() != selected_id_set.len() {
+        return Err("Some selected automations are no longer present in the backup.".to_string());
+    }
+
+    let mut current = load_automation_entries()?;
+    let selected_names: HashSet<String> = selected
+        .iter()
+        .map(|automation| automation.name.clone())
+        .collect();
+    let replaced_count = current
+        .iter()
+        .filter(|automation| selected_names.contains(&automation.name))
+        .count();
+    current.retain(|automation| !selected_names.contains(&automation.name));
+
+    let timestamp = unix_timestamp()?;
+    for (automation_index, automation) in selected.iter_mut().enumerate() {
+        automation.id = format!(
+            "automation-backup-{}-{}-{}",
+            timestamp, automation_index, automation.id
+        );
+        automation.updated_at = imported_at.clone();
+        for (step_index, step) in automation.steps.iter_mut().enumerate() {
+            step.id = format!(
+                "automation-backup-step-{}-{}-{}-{}",
+                timestamp, automation_index, step_index, step.id
+            );
+        }
+    }
+
+    let imported_count = selected.len();
+    current.extend(selected);
+    current.sort_by(|left, right| {
+        right
+            .favorite
+            .cmp(&left.favorite)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    write_automation_entries(&current)?;
+
+    Ok(AutomationBackupImportResult {
+        automations: current,
+        imported_count,
+        replaced_count,
+    })
+}
+
+// The frontend generates `session_id` (mirrors how entity ids are created
+// elsewhere) and passes it back into every later call for this run.
+#[tauri::command]
+fn start_automation_session(
+    session_id: String,
+    path: String,
+    sessions: tauri::State<AutomationSessions>,
+) -> Result<(), String> {
+    let working_directory = automation_working_directory(&path)?;
+    let session = spawn_automation_session(&working_directory)?;
+
+    let mut registry = sessions
+        .0
+        .lock()
+        .map_err(|_| "Automation session lock was poisoned.".to_string())?;
+    registry.insert(session_id, session);
+    Ok(())
+}
+
+#[tauri::command]
+async fn run_session_command(
+    session_id: String,
+    command: String,
+    background: bool,
+    app: tauri::AppHandle,
+) -> Result<AutomationCommandResult, String> {
+    if command.trim().is_empty() || command.len() > MAX_AUTOMATION_COMMAND_BYTES {
+        return Err(format!(
+            "Command must contain at most {} bytes.",
+            MAX_AUTOMATION_COMMAND_BYTES
+        ));
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let sessions = app.state::<AutomationSessions>();
+        let mut registry = sessions
+            .0
+            .lock()
+            .map_err(|_| "Automation session lock was poisoned.".to_string())?;
+        let session = registry
+            .get_mut(&session_id)
+            .ok_or_else(|| "Automation session is no longer running.".to_string())?;
+        execute_in_session(session, &command, background)
+    })
+    .await
+    .map_err(|error| format!("Automation worker failed: {}", error))?
+}
+
+// Ends an automation run's shell session, either because the run finished or
+// because the user clicked Stop. Killing this specific process (not its
+// process group) interrupts a stuck foreground command without touching
+// background jobs it already started with `&`, which keep running detached.
+#[tauri::command]
+fn stop_automation_session(
+    session_id: String,
+    sessions: tauri::State<AutomationSessions>,
+) -> Result<(), String> {
+    let mut registry = sessions
+        .0
+        .lock()
+        .map_err(|_| "Automation session lock was poisoned.".to_string())?;
+    if let Some(mut session) = registry.remove(&session_id) {
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -953,9 +1684,23 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .manage(AutomationSessions::default())
         .invoke_handler(tauri::generate_handler![
             load_aliases,
             save_aliases,
+            load_automations,
+            save_automations,
+            list_automation_trash,
+            move_automation_to_trash,
+            restore_trash_automation,
+            permanently_delete_trash_automation,
+            empty_automation_trash,
+            export_automation_backup,
+            inspect_automation_backup,
+            import_automation_backup,
+            start_automation_session,
+            run_session_command,
+            stop_automation_session,
             list_trash,
             move_alias_to_trash,
             restore_trash_alias,
@@ -1215,5 +1960,138 @@ mod tests {
             .any(|alias| alias.name == "ll" && alias.command_preview == "ls -lah"));
         assert!(result.state.aliases.iter().any(|alias| alias.name == "gs"));
         assert!(result.state.aliases.iter().any(|alias| alias.name == "dcu"));
+    }
+
+    fn test_automation(id: &str, name: &str, command: &str) -> Automation {
+        Automation {
+            id: id.to_string(),
+            name: name.to_string(),
+            path: "~/Projects".to_string(),
+            steps: vec![AutomationStep {
+                id: format!("{}-step", id),
+                kind: "command".to_string(),
+                command: command.to_string(),
+                seconds: 0,
+                behavior: "wait".to_string(),
+            }],
+            favorite: false,
+            group: String::new(),
+            created_at: "2026-08-25T12:00:00.000Z".to_string(),
+            updated_at: "2026-08-25T12:00:00.000Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn accepts_a_valid_sequential_automation() {
+        let automation = Automation {
+            id: "devstart".to_string(),
+            name: "DevStart".to_string(),
+            path: "~/Projects/nava".to_string(),
+            steps: vec![
+                AutomationStep {
+                    id: "compose".to_string(),
+                    kind: "command".to_string(),
+                    command: "docker compose up -d".to_string(),
+                    seconds: 0,
+                    behavior: "wait".to_string(),
+                },
+                AutomationStep {
+                    id: "settle".to_string(),
+                    kind: "wait".to_string(),
+                    command: String::new(),
+                    seconds: 10,
+                    behavior: "wait".to_string(),
+                },
+            ],
+            favorite: false,
+            group: "Backend".to_string(),
+            created_at: "2026-08-24T18:00:00.000Z".to_string(),
+            updated_at: "2026-08-24T18:00:00.000Z".to_string(),
+        };
+
+        assert!(validate_automations(&[automation]).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_automation_steps() {
+        let automation = Automation {
+            id: "broken".to_string(),
+            name: "Broken".to_string(),
+            path: "~/Projects/nava".to_string(),
+            steps: vec![AutomationStep {
+                id: "wait".to_string(),
+                kind: "wait".to_string(),
+                command: String::new(),
+                seconds: 0,
+                behavior: "background".to_string(),
+            }],
+            favorite: false,
+            group: String::new(),
+            created_at: "2026-08-24T18:00:00.000Z".to_string(),
+            updated_at: "2026-08-24T18:00:00.000Z".to_string(),
+        };
+
+        let validation_error = validate_automations(&[automation]).unwrap_err();
+        assert!(validation_error.contains("between 1 second and 24 hours"));
+    }
+
+    #[test]
+    fn rejects_a_group_label_over_the_length_limit() {
+        let mut automation = test_automation("grouped", "Grouped", "echo hi");
+        automation.group = "g".repeat(61);
+
+        let validation_error = validate_automations(&[automation]).unwrap_err();
+        assert!(validation_error.contains("group label"));
+    }
+
+    // Reproduces the reported macOS bug this session model was built to fix: a
+    // "cd mac_src" step followed by a command that only succeeds from inside
+    // that subdirectory. Each step used to run in its own fresh shell, so the
+    // `cd` had no effect on the next step.
+    #[test]
+    fn automation_session_keeps_directory_change_across_steps() {
+        let base = env::temp_dir().join(format!(
+            "easyalias-automation-session-test-{}",
+            unix_timestamp().unwrap()
+        ));
+        let subdir = base.join("mac_src");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let mut session = spawn_automation_session(&base).unwrap();
+
+        let cd_result = execute_in_session(&mut session, "cd mac_src", false).unwrap();
+        assert_eq!(cd_result.exit_code, Some(0));
+
+        let pwd_result = execute_in_session(&mut session, "pwd", false).unwrap();
+        assert_eq!(pwd_result.exit_code, Some(0));
+        assert!(
+            pwd_result.stdout.trim().ends_with("/mac_src"),
+            "expected pwd to report the subdirectory, got: {:?}",
+            pwd_result.stdout
+        );
+
+        let _ = session.child.kill();
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn automation_session_background_command_does_not_block_next_step() {
+        let base = env::temp_dir().join(format!(
+            "easyalias-automation-session-bg-test-{}",
+            unix_timestamp().unwrap()
+        ));
+        fs::create_dir_all(&base).unwrap();
+
+        let mut session = spawn_automation_session(&base).unwrap();
+
+        let bg_result = execute_in_session(&mut session, "sleep 5", true).unwrap();
+        assert!(bg_result.process_id.is_some());
+
+        let echo_result = execute_in_session(&mut session, "echo still-here", false).unwrap();
+        assert_eq!(echo_result.exit_code, Some(0));
+        assert_eq!(echo_result.stdout.trim(), "still-here");
+
+        let _ = session.child.kill();
+        let _ = fs::remove_dir_all(&base);
     }
 }

@@ -1217,6 +1217,51 @@ textarea:focus {
   pointer-events: none;
 }
 
+.automation-favorite-button {
+  display: grid;
+  flex: 0 0 36px;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid #dce5e1;
+  border-radius: 8px;
+  color: #71807b;
+  background: #f4f8f6;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.automation-favorite-button:hover {
+  border-color: #d6b54a;
+  color: #8a6900;
+  background: #fff8d9;
+}
+
+.automation-favorite-button.active {
+  border-color: #e2bf43;
+  color: #8a6900;
+  background: #ffef9e;
+}
+
+.automation-favorite-button.active svg {
+  fill: currentColor;
+}
+
+.automation-favorite-button:focus-visible {
+  outline: 3px solid rgba(226, 191, 67, 0.32);
+  outline-offset: 2px;
+}
+
+.automation-favorite-button svg {
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
 .automation-group-button {
   display: grid;
   flex: 0 0 36px;

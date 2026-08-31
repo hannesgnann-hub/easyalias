@@ -120,6 +120,21 @@ import_alias_backup(path, selected_ids)
 scan_shell_import()
 dismiss_shell_import()
 import_shell_aliases(selected_ids, timestamp)
+
+// Automations
+load_automations()
+save_automations(automations)
+list_automation_trash()
+move_automation_to_trash(id)
+restore_trash_automation(id)
+permanently_delete_trash_automation(id)
+empty_automation_trash()
+export_automation_backup(selected_ids)
+inspect_automation_backup(path)
+import_automation_backup(path, selected_ids)
+start_automation_session(session_id, path)
+run_session_command(session_id, command, background)
+stop_automation_session(session_id)
 ```
 
 ## Import Flow
@@ -165,6 +180,48 @@ Deleted aliases move to `~/.easyalias/trash.json`. They can be restored, deleted
 - Import detection parses text without sourcing the startup file and skips nested, repeated, multiline, or option-based aliases.
 - The generated aliases file should be edited through the app, not manually.
 - Portable backup files are parsed as JSON and never sourced or executed.
+
+## Automations
+
+Automations are a separate feature from aliases: user-defined, multi-step workflows (shell commands and timed waits) that the app itself runs in a chosen working directory, independent of the alias list and its `.bashrc`/`.zshrc` integration.
+
+```ts
+type AutomationStep = {
+  id: string;
+  kind: "command" | "wait";
+  command: string;
+  seconds: number;
+  behavior: "wait" | "background";
+};
+
+type Automation = {
+  id: string;
+  name: string;
+  path: string;
+  steps: AutomationStep[];
+  favorite: boolean;
+  // Free-text label used to organize automations; empty means ungrouped.
+  group: string;
+  createdAt: string;
+  updatedAt: string;
+};
+```
+
+Automations are stored independently of aliases in `~/.easyalias/automations.json` and validated on every load and save: up to 200 automations, each with 1-100 steps, unique automation and step ids, command steps under 16 KB, and wait steps between 1 second and 24 hours.
+
+Each run gets one persistent shell process (`AutomationSessionHandle`, keyed by a frontend-generated `session_id` in the `AutomationSessions` Tauri-managed state) instead of a fresh process per step. This is what lets `cd` and exported environment variables from one step carry over to the next, the same way they would in a real terminal. The shell binary is resolved by `automation_shell_binary()`, which reuses the same `$SHELL` detection as aliases (`/bin/zsh` when `shell_setup()` detects zsh, `/bin/bash` otherwise) — an automation runs in the user's own detected shell, not a hardcoded one.
+
+- `start_automation_session` resolves the working directory (expanding a leading `~`, then `canonicalize`-ing and requiring it to exist), spawns the shell with piped stdin/stdout, and starts a background thread that streams output lines into an `mpsc` channel.
+- `run_session_command` writes the step's command to the session's stdin followed by a unique echoed sentinel, then reads from the channel until that sentinel appears. Foreground commands are wrapped as `{ command ; } 2>&1` so stderr merges into the captured output, and the sentinel carries `$?`; background commands are wrapped as `{ command ; } >/dev/null 2>&1 &` and the sentinel carries `$!`, so the step returns as soon as the job has started rather than waiting for it to finish. Captured output is truncated to 20,000 characters.
+- `stop_automation_session` kills the session's shell process specifically (not its process group), so it can interrupt a stuck foreground command without touching background jobs that process already started with `&` — those keep running detached. It is called both when the user clicks Stop and automatically once a run finishes.
+
+Automations additionally get their own favorites, groups, 30-day Trash (`~/.easyalias/automations-trash.json`), and portable JSON backup (its own `easyalias-automation-backup` envelope, so it is never confused with an alias backup) — all mirroring the equivalent alias features one-for-one, including the same validation, retention, and conflict-on-restore rules.
+
+Safety boundaries specific to automations:
+
+- Automation commands run only when the user explicitly clicks Run, execute in the automation's own shell session, and are rejected outright in browser preview mode (no `start_automation_session`/`run_session_command` backend to call).
+- Portable automation backup files are parsed as data and never executed.
+- Automation Trash provides the same 30-day recovery window as alias Trash.
 
 ## Browser Preview
 

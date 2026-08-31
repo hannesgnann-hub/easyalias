@@ -131,6 +131,8 @@ struct Automation {
     name: String,
     path: String,
     steps: Vec<AutomationStep>,
+    #[serde(default)]
+    favorite: bool,
     // A free-text label the UI groups and filters automations by. Empty
     // means "ungrouped"; older automations.json files without this field
     // default to that.
@@ -138,6 +140,37 @@ struct Automation {
     group: String,
     created_at: String,
     updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationTrashEntry {
+    automation: Automation,
+    deleted_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationTrashMutationResult {
+    automations: Vec<Automation>,
+    trash: Vec<AutomationTrashEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationBackup {
+    format: String,
+    version: u32,
+    exported_at: String,
+    automations: Vec<Automation>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationBackupImportResult {
+    automations: Vec<Automation>,
+    imported_count: usize,
+    replaced_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -170,6 +203,8 @@ const APP_ALIAS_NAME: &str = "easya";
 const IMPORT_MARKER_CONTENT: &str = "legacy command import prompt handled\n";
 const BACKUP_FORMAT: &str = "easyalias-backup";
 const BACKUP_VERSION: u32 = 1;
+const AUTOMATION_BACKUP_FORMAT: &str = "easyalias-automation-backup";
+const AUTOMATION_BACKUP_VERSION: u32 = 1;
 const MAX_BACKUP_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_BACKUP_ALIASES: usize = 5000;
 const TRASH_RETENTION_SECONDS: u64 = 30 * 24 * 60 * 60;
@@ -214,6 +249,10 @@ fn trash_file() -> Result<PathBuf, String> {
 
 fn automations_file() -> Result<PathBuf, String> {
     Ok(app_dir()?.join("automations.json"))
+}
+
+fn automation_trash_file() -> Result<PathBuf, String> {
+    Ok(app_dir()?.join("automations-trash.json"))
 }
 
 fn import_marker_file() -> Result<PathBuf, String> {
@@ -1019,6 +1058,93 @@ fn write_automation_entries(automations: &[Automation]) -> Result<(), String> {
         .map_err(|error| format!("{} could not be written: {}", path.display(), error))
 }
 
+fn validate_automation_backup_collection(automations: &[Automation]) -> Result<(), String> {
+    validate_automations(automations)?;
+
+    let mut names = HashSet::new();
+    for automation in automations {
+        if !names.insert(automation.name.as_str()) {
+            return Err(format!(
+                "Duplicate automation name in backup: {}",
+                automation.name
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn read_automation_backup(path: &Path) -> Result<AutomationBackup, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("{} could not be inspected: {}", path.display(), error))?;
+    if !metadata.is_file() {
+        return Err("Choose an EasyAlias automation JSON backup file.".to_string());
+    }
+    if metadata.len() > MAX_BACKUP_BYTES {
+        return Err("The backup is larger than 5 MB.".to_string());
+    }
+
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let backup: AutomationBackup = serde_json::from_str(&content)
+        .map_err(|error| format!("This is not a valid EasyAlias automation backup: {}", error))?;
+
+    if backup.format != AUTOMATION_BACKUP_FORMAT || backup.version != AUTOMATION_BACKUP_VERSION {
+        return Err("This EasyAlias automation backup format is not supported.".to_string());
+    }
+    if backup.exported_at.trim().is_empty() {
+        return Err("The backup has no export timestamp.".to_string());
+    }
+    validate_automation_backup_collection(&backup.automations)?;
+
+    Ok(backup)
+}
+
+fn write_automation_trash_entries(entries: &[AutomationTrashEntry]) -> Result<(), String> {
+    // Trash is a history, not an active collection. Validate every workflow,
+    // but do not apply the active-list count or cross-entry uniqueness limits.
+    for entry in entries {
+        validate_automations(std::slice::from_ref(&entry.automation))?;
+    }
+    ensure_app_files()?;
+    let json = serde_json::to_string_pretty(entries)
+        .map_err(|error| format!("Automation Trash could not be serialized: {}", error))?;
+    let path = automation_trash_file()?;
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))
+}
+
+fn load_automation_trash_entries() -> Result<Vec<AutomationTrashEntry>, String> {
+    ensure_app_files()?;
+    let path = automation_trash_file()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let mut entries: Vec<AutomationTrashEntry> =
+        serde_json::from_str(&content).map_err(|error| {
+            format!(
+                "automations-trash.json is not valid EasyAlias JSON: {}",
+                error
+            )
+        })?;
+    for entry in &entries {
+        validate_automations(std::slice::from_ref(&entry.automation))?;
+    }
+    let now = unix_timestamp()?;
+    let original_len = entries.len();
+    entries.retain(|entry| now.saturating_sub(entry.deleted_at) < TRASH_RETENTION_SECONDS);
+    entries.sort_by(|left, right| right.deleted_at.cmp(&left.deleted_at));
+
+    if entries.len() != original_len {
+        write_automation_trash_entries(&entries)?;
+    }
+
+    Ok(entries)
+}
+
 // Resolves an automation's working directory. "~" and "~/..." expand against
 // USERPROFILE, matching the tilde convention already used for alias paths
 // elsewhere in this app. Deliberately not canonicalized: canonicalize() on
@@ -1204,6 +1330,219 @@ fn load_automations() -> Result<Vec<Automation>, String> {
 fn save_automations(automations: Vec<Automation>) -> Result<Vec<Automation>, String> {
     write_automation_entries(&automations)?;
     Ok(automations)
+}
+
+#[tauri::command]
+fn list_automation_trash() -> Result<Vec<AutomationTrashEntry>, String> {
+    load_automation_trash_entries()
+}
+
+// Keep the recoverable copy before updating active storage. This mirrors the
+// alias trash behavior and avoids losing a workflow if the second write fails.
+#[tauri::command]
+fn move_automation_to_trash(id: String) -> Result<AutomationTrashMutationResult, String> {
+    let mut automations = load_automation_entries()?;
+    let index = automations
+        .iter()
+        .position(|automation| automation.id == id)
+        .ok_or_else(|| "Automation no longer exists.".to_string())?;
+    let automation = automations.remove(index);
+    let mut trash = load_automation_trash_entries()?;
+    trash.retain(|entry| entry.automation.id != automation.id);
+    trash.push(AutomationTrashEntry {
+        automation,
+        deleted_at: unix_timestamp()?,
+    });
+    trash.sort_by(|left, right| right.deleted_at.cmp(&left.deleted_at));
+
+    write_automation_trash_entries(&trash)?;
+    write_automation_entries(&automations)?;
+
+    Ok(AutomationTrashMutationResult { automations, trash })
+}
+
+// Restore into active storage first. Name and id conflicts are rejected so a
+// deleted workflow never silently replaces a newer active workflow.
+#[tauri::command]
+fn restore_trash_automation(id: String) -> Result<AutomationTrashMutationResult, String> {
+    let mut trash = load_automation_trash_entries()?;
+    let index = trash
+        .iter()
+        .position(|entry| entry.automation.id == id)
+        .ok_or_else(|| "Deleted automation no longer exists.".to_string())?;
+    let automation = trash[index].automation.clone();
+    let mut automations = load_automation_entries()?;
+
+    if automations
+        .iter()
+        .any(|existing| existing.id == automation.id)
+    {
+        return Err("An active automation already uses this id.".to_string());
+    }
+    if automations.iter().any(|existing| {
+        existing
+            .name
+            .trim()
+            .eq_ignore_ascii_case(automation.name.trim())
+    }) {
+        return Err(format!(
+            "Automation \"{}\" already exists. Rename or delete the active automation before restoring.",
+            automation.name
+        ));
+    }
+
+    automations.push(automation);
+    automations.sort_by(|left, right| {
+        right
+            .favorite
+            .cmp(&left.favorite)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    write_automation_entries(&automations)?;
+    trash.remove(index);
+    write_automation_trash_entries(&trash)?;
+
+    Ok(AutomationTrashMutationResult { automations, trash })
+}
+
+#[tauri::command]
+fn permanently_delete_trash_automation(id: String) -> Result<Vec<AutomationTrashEntry>, String> {
+    let mut trash = load_automation_trash_entries()?;
+    let original_len = trash.len();
+    trash.retain(|entry| entry.automation.id != id);
+    if trash.len() == original_len {
+        return Err("Deleted automation no longer exists.".to_string());
+    }
+    write_automation_trash_entries(&trash)?;
+    Ok(trash)
+}
+
+#[tauri::command]
+fn empty_automation_trash() -> Result<Vec<AutomationTrashEntry>, String> {
+    ensure_app_files()?;
+    write_automation_trash_entries(&[])?;
+    Ok(Vec::new())
+}
+
+// Automation backups use their own envelope so they cannot be confused with
+// alias backups. Only the workflows selected in the review dialog are written.
+#[tauri::command]
+fn export_automation_backup(
+    selected_ids: Vec<String>,
+    destination: String,
+    exported_at: String,
+) -> Result<BackupExportResult, String> {
+    if selected_ids.is_empty() {
+        return Err("Select at least one automation to export.".to_string());
+    }
+    if destination.trim().is_empty() {
+        return Err("Choose where to save the backup.".to_string());
+    }
+    if exported_at.trim().is_empty() {
+        return Err("Export timestamp is missing.".to_string());
+    }
+
+    let selected_id_set: HashSet<&str> = selected_ids.iter().map(String::as_str).collect();
+    let selected: Vec<Automation> = load_automation_entries()?
+        .into_iter()
+        .filter(|automation| selected_id_set.contains(automation.id.as_str()))
+        .collect();
+    if selected.len() != selected_id_set.len() {
+        return Err("Some automations changed. Reopen Export and try again.".to_string());
+    }
+    validate_automation_backup_collection(&selected)?;
+
+    let backup = AutomationBackup {
+        format: AUTOMATION_BACKUP_FORMAT.to_string(),
+        version: AUTOMATION_BACKUP_VERSION,
+        exported_at,
+        automations: selected,
+    };
+    let json = serde_json::to_string_pretty(&backup)
+        .map_err(|error| format!("Backup could not be serialized: {}", error))?;
+    let path = PathBuf::from(destination);
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))?;
+
+    Ok(BackupExportResult {
+        file: path.display().to_string(),
+        exported_count: backup.automations.len(),
+    })
+}
+
+#[tauri::command]
+fn inspect_automation_backup(path: String) -> Result<Vec<Automation>, String> {
+    Ok(read_automation_backup(Path::new(&path))?.automations)
+}
+
+// Import matches workflows by name. Replacing the complete workflow makes a
+// backup restore deterministic, while fresh ids prevent collisions with data
+// that was created after the backup.
+#[tauri::command]
+fn import_automation_backup(
+    path: String,
+    selected_ids: Vec<String>,
+    imported_at: String,
+) -> Result<AutomationBackupImportResult, String> {
+    if selected_ids.is_empty() {
+        return Err("Select at least one automation to import.".to_string());
+    }
+    if imported_at.trim().is_empty() {
+        return Err("Import timestamp is missing.".to_string());
+    }
+
+    let backup = read_automation_backup(Path::new(&path))?;
+    let selected_id_set: HashSet<&str> = selected_ids.iter().map(String::as_str).collect();
+    let mut selected: Vec<Automation> = backup
+        .automations
+        .into_iter()
+        .filter(|automation| selected_id_set.contains(automation.id.as_str()))
+        .collect();
+    if selected.len() != selected_id_set.len() {
+        return Err("Some selected automations are no longer present in the backup.".to_string());
+    }
+
+    let mut current = load_automation_entries()?;
+    let selected_names: HashSet<String> = selected
+        .iter()
+        .map(|automation| automation.name.clone())
+        .collect();
+    let replaced_count = current
+        .iter()
+        .filter(|automation| selected_names.contains(&automation.name))
+        .count();
+    current.retain(|automation| !selected_names.contains(&automation.name));
+
+    let timestamp = unix_timestamp()?;
+    for (automation_index, automation) in selected.iter_mut().enumerate() {
+        automation.id = format!(
+            "automation-backup-{}-{}-{}",
+            timestamp, automation_index, automation.id
+        );
+        automation.updated_at = imported_at.clone();
+        for (step_index, step) in automation.steps.iter_mut().enumerate() {
+            step.id = format!(
+                "automation-backup-step-{}-{}-{}-{}",
+                timestamp, automation_index, step_index, step.id
+            );
+        }
+    }
+
+    let imported_count = selected.len();
+    current.extend(selected);
+    current.sort_by(|left, right| {
+        right
+            .favorite
+            .cmp(&left.favorite)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    write_automation_entries(&current)?;
+
+    Ok(AutomationBackupImportResult {
+        automations: current,
+        imported_count,
+        replaced_count,
+    })
 }
 
 // The frontend generates `session_id` (mirrors how entity ids are created
@@ -1609,6 +1948,14 @@ fn main() {
             save_aliases,
             load_automations,
             save_automations,
+            list_automation_trash,
+            move_automation_to_trash,
+            restore_trash_automation,
+            permanently_delete_trash_automation,
+            empty_automation_trash,
+            export_automation_backup,
+            inspect_automation_backup,
+            import_automation_backup,
             start_automation_session,
             run_session_command,
             stop_automation_session,
@@ -1888,6 +2235,7 @@ mod tests {
                     behavior: "wait".to_string(),
                 },
             ],
+            favorite: false,
             group: "Backend".to_string(),
             created_at: "2026-08-24T18:00:00.000Z".to_string(),
             updated_at: "2026-08-24T18:00:00.000Z".to_string(),
@@ -1909,6 +2257,7 @@ mod tests {
                 seconds: 0,
                 behavior: "background".to_string(),
             }],
+            favorite: false,
             group: String::new(),
             created_at: "2026-08-24T18:00:00.000Z".to_string(),
             updated_at: "2026-08-24T18:00:00.000Z".to_string(),
@@ -1985,6 +2334,7 @@ mod tests {
                 seconds: 0,
                 behavior: "wait".to_string(),
             }],
+            favorite: false,
             group: "g".repeat(61),
             created_at: "2026-08-24T18:00:00.000Z".to_string(),
             updated_at: "2026-08-24T18:00:00.000Z".to_string(),

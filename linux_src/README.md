@@ -32,6 +32,7 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 - add the `easya` shortcut for opening the installed application
 - build `.deb`, `.rpm`, and `.AppImage` packages
 - dismiss status messages manually or let them disappear after three seconds
+- build and run multi-step Automations (bash/zsh commands and timed waits) in a chosen working directory
 - link to the website, GitHub repository, EasyAlias subreddit, and sponsor page from the footer
 
 The [shared feature tour](../README.md#feature-tour) illustrates favorites, paged suggestions, portable backups, and Trash. Its screenshots use macOS window chrome, but the workflow is the same on Linux.
@@ -141,6 +142,8 @@ The app manages these files:
 ~/.easyalias/aliases.sh
 ~/.easyalias/.shell-import-v1
 ~/.easyalias/trash.json
+~/.easyalias/automations.json
+~/.easyalias/automations-trash.json
 ```
 
 On first native startup it appends the missing lines to the detected startup file:
@@ -210,6 +213,23 @@ Wrapper aliases still accept additional arguments from bash or zsh. For example,
 Favorites stay above regular aliases, with both groups sorted alphabetically. The header export button writes all or selected aliases to a versioned EasyAlias JSON backup. Import accepts that backup through the native picker or drag and drop, validates it, and allows a selective restore. Selected matching names replace current managed entries; unselected aliases stay unchanged.
 
 Deleted aliases move to `~/.easyalias/trash.json` for 30 days. Trash can restore or permanently remove an individual entry, or empty all deleted entries immediately.
+
+## Automations
+
+The automations view (top-right play icon) is a separate workspace for repeatable, multi-step workflows, independent from the alias list.
+
+An automation has a name, a working directory, and an ordered list of steps. Each step is either:
+
+- **Command** – a shell command that runs through the detected shell (bash or zsh, same detection as aliases) in the automation's working directory. Choose whether the next step waits for the command to finish, or starts as soon as the process begins (useful for long-running dev servers).
+- **Wait** – a pause of 1 second to 24 hours before the next step runs.
+
+All command steps in one run share a single shell session started in the automation's working directory, so it behaves like one continuous terminal: a `cd` or an exported variable in one step is still in effect for every step after it, not just the one it was written in.
+
+Steps run top to bottom. Running an automation opens a progress dialog showing each step's status and captured output; a **Stop** button ends the session immediately, interrupting a command that is still running (a background process that already launched keeps running on its own). If any foreground command exits with a non-zero status, the run stops and later steps are marked skipped.
+
+Each automation can optionally carry a **group** label — a free-text tag entered in the editor (with a picker suggesting existing group names). The automations list has its own search and filter, matching aliases: search by name, working directory, command text, or group label, and filter to Favorites, Background (any step that starts a process without waiting), Git, Docker, Build, or any specific group. Choosing **Group view** in the filter dropdown replaces the list with one card per group (plus an "Ungrouped" card when applicable); clicking a card, or clicking the group chip on an automation card, filters straight to that group.
+
+Automations are stored separately from aliases in `~/.easyalias/automations.json`, keep their own 30-day Trash in `~/.easyalias/automations-trash.json`, and support the same selective JSON backup export/import as aliases. Automations are only available in the real desktop app; the browser preview keeps its automations in `localStorage` and cannot execute commands.
 
 ## Build And Export
 

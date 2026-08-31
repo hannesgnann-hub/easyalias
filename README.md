@@ -130,6 +130,7 @@ The Linux version can:
 - detect bash or zsh from `$SHELL`
 - generate `~/.easyalias/aliases.sh`
 - connect the generated file to `~/.bashrc` or `~/.zshrc`
+- build and run multi-step Automations (bash/zsh commands and timed waits) in a chosen working directory
 - build `.deb`, `.rpm`, and `.AppImage` packages
 
 ## Feature Tour

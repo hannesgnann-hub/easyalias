@@ -1,13 +1,28 @@
 import "./styles.css";
 import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
   ChevronLeft,
   ChevronRight,
+  CircleStop,
+  Clock3,
   createIcons,
   FileDown,
   FileUp,
+  Filter,
+  FolderOpen,
+  Pencil,
+  Play,
+  Plus,
   RotateCcw,
+  Save,
+  Search,
   SquareTerminal,
   Star,
+  Tag,
+  Tags,
+  Terminal,
   Trash2,
   X
 } from "lucide";
@@ -101,9 +116,80 @@ type AliasSuggestion = AliasForm & {
   description: string;
 };
 
-type PickerTarget = "create" | "edit";
+type PickerTarget = "create" | "edit" | "automation";
 type PickerKind = "file" | "folder";
 type BackupDialogMode = "export" | "import";
+type AppView = "aliases" | "automations";
+type AutomationStepKind = "command" | "wait";
+type AutomationCommandBehavior = "wait" | "background";
+type AutomationRunStepStatus = "pending" | "running" | "success" | "error" | "skipped";
+
+type AutomationStep = {
+  id: string;
+  kind: AutomationStepKind;
+  command: string;
+  seconds: number;
+  behavior: AutomationCommandBehavior;
+};
+
+type Automation = {
+  id: string;
+  name: string;
+  path: string;
+  steps: AutomationStep[];
+  favorite: boolean;
+  // Free-text label used to organize automations. Empty means ungrouped.
+  group: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AutomationTrashEntry = {
+  automation: Automation;
+  deletedAt: number;
+};
+
+type AutomationTrashMutationResult = {
+  automations: Automation[];
+  trash: AutomationTrashEntry[];
+};
+
+type AutomationBackupImportResult = {
+  automations: Automation[];
+  importedCount: number;
+  replacedCount: number;
+};
+
+type AutomationCommandResult = {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  processId: number | null;
+};
+
+type AutomationRunStep = {
+  status: AutomationRunStepStatus;
+  output: string;
+};
+
+type AutomationRunState = {
+  automationId: string;
+  sessionId: string;
+  running: boolean;
+  cancelRequested: boolean;
+  currentStep: number;
+  error: string;
+  steps: AutomationRunStep[];
+};
+
+// Filters are inferred from step commands (same patterns as the alias
+// filter) plus favorites, background steps, and groups. "groups" switches
+// the results area to a browsable group overview instead of filtering the
+// automation list directly; a `group:<name>` value (picked from a group
+// card or the dropdown) filters to that one group, where `group:` with an
+// empty name means "ungrouped".
+type AutomationStaticFilter = "all" | "favorites" | "background" | "git" | "docker" | "build" | "groups";
+type AutomationFilter = AutomationStaticFilter | `group:${string}`;
 
 const actionLabels: Record<AliasAction, string> = {
   navigate: "Go to Folder",
@@ -113,6 +199,33 @@ const actionLabels: Record<AliasAction, string> = {
   compile_maven: "Maven Build",
   custom: "Custom Command"
 };
+
+const automationFilterLabels: Record<AutomationStaticFilter, string> = {
+  all: "All automations",
+  favorites: "Favorites",
+  background: "Background",
+  git: "Git",
+  docker: "Docker",
+  build: "Build",
+  groups: "Group view"
+};
+
+function automationFilterLabel(filter: AutomationFilter): string {
+  if (filter.startsWith("group:")) {
+    const name = filter.slice("group:".length);
+    return name ? `Group: ${name}` : "Ungrouped";
+  }
+  return automationFilterLabels[filter as AutomationStaticFilter];
+}
+
+function automationGroups(automations: Automation[]) {
+  const names = new Set<string>();
+  for (const automation of automations) {
+    const trimmed = automation.group.trim();
+    if (trimmed) names.add(trimmed);
+  }
+  return [...names].sort((left, right) => left.localeCompare(right));
+}
 
 const emptyForm: AliasForm = {
   name: "",
@@ -461,6 +574,35 @@ let trashEntries: TrashEntry[] = [];
 let trashOpen = false;
 let trashBusy = false;
 let trashError = "";
+// Automations have their own view and storage. The editor keeps a detached
+// draft so cancelling never mutates a saved workflow.
+let currentView: AppView = "aliases";
+let automations: Automation[] = [];
+let automationEditor: Automation | null = null;
+let automationBusy = false;
+let automationError = "";
+let automationRun: AutomationRunState | null = null;
+let automationSearchQuery = "";
+let automationFilter: AutomationFilter = "all";
+// Only one card's quick group-picker is open at a time; the editor's picker
+// is separate since it lives in its own modal.
+let automationGroupPickerId: string | null = null;
+let automationEditorGroupPickerOpen = false;
+// Automation backups deliberately use their own state and file format. This
+// prevents a workflow backup from being mistaken for an alias backup while
+// retaining the same selective export/import experience.
+let automationBackupDialogMode: BackupDialogMode | null = null;
+let automationBackupCandidates: Automation[] = [];
+let selectedAutomationBackupIds = new Set<string>();
+let automationBackupFilePath = "";
+let automationBackupBusy = false;
+let automationBackupError = "";
+// Deleted workflows use the same 30-day recovery model as aliases, but live
+// in their own file so alias and automation data can never be mixed.
+let automationTrashEntries: AutomationTrashEntry[] = [];
+let automationTrashOpen = false;
+let automationTrashBusy = false;
+let automationTrashError = "";
 
 const trashRetentionSeconds = 30 * 24 * 60 * 60;
 
@@ -517,12 +659,23 @@ async function openPathPicker(target: PickerTarget, kind: PickerKind) {
       return;
     }
 
-    updateEditForm("path", selected);
-    const input = document.querySelector<HTMLInputElement>('input[name="edit-path"]');
-    if (input) input.value = selected;
+    if (target === "edit") {
+      updateEditForm("path", selected);
+      const input = document.querySelector<HTMLInputElement>('input[name="edit-path"]');
+      if (input) input.value = selected;
+      return;
+    }
+
+    if (automationEditor) {
+      automationEditor = { ...automationEditor, path: selected };
+      const input = document.querySelector<HTMLInputElement>('input[name="automation-path"]');
+      if (input) input.value = selected;
+    }
   } catch (pickerError) {
     const message = `Picker could not be opened: ${String(pickerError)}`;
-    if (target === "edit") {
+    if (target === "automation") {
+      automationError = message;
+    } else if (target === "edit") {
       editError = message;
     } else {
       error = message;
@@ -638,6 +791,12 @@ async function loadState() {
         trashEntries = [];
         error = `Trash could not be loaded: ${String(trashLoadError)}`;
       }
+      try {
+        automations = await invokeCommand<Automation[]>("load_automations");
+      } catch (automationLoadError) {
+        automations = [];
+        error = `Automations could not be loaded: ${String(automationLoadError)}`;
+      }
       selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
       render();
       return;
@@ -664,12 +823,40 @@ async function loadState() {
       .sort((left, right) => right.deletedAt - left.deletedAt);
     localStorage.setItem("easyalias-trash", JSON.stringify(trashEntries));
   }
+  const savedAutomations = localStorage.getItem("easyalias-automations");
+  if (savedAutomations) {
+    automations = (JSON.parse(savedAutomations) as Automation[]).map((automation) => ({
+      ...automation,
+      favorite: Boolean(automation.favorite),
+      group: automation.group ?? ""
+    }));
+  }
+  const savedAutomationTrash = localStorage.getItem("easyalias-automation-trash");
+  if (savedAutomationTrash) {
+    const cutoff = Math.floor(Date.now() / 1000) - trashRetentionSeconds;
+    automationTrashEntries = (JSON.parse(savedAutomationTrash) as AutomationTrashEntry[])
+      .map((entry) => ({
+        ...entry,
+        automation: {
+          ...entry.automation,
+          favorite: Boolean(entry.automation.favorite),
+          group: entry.automation.group ?? ""
+        }
+      }))
+      .filter((entry) => entry.deletedAt > cutoff)
+      .sort((left, right) => right.deletedAt - left.deletedAt);
+    saveBrowserAutomationTrash();
+  }
 
   render();
 }
 
 function saveBrowserTrash() {
   localStorage.setItem("easyalias-trash", JSON.stringify(trashEntries));
+}
+
+function saveBrowserAutomationTrash() {
+  localStorage.setItem("easyalias-automation-trash", JSON.stringify(automationTrashEntries));
 }
 
 // Persists current aliases. Tauri writes real files; browser preview only writes localStorage.
@@ -1373,6 +1560,11 @@ function compareAliases(left: AliasEntry, right: AliasEntry) {
   return favoriteDifference || left.name.localeCompare(right.name);
 }
 
+function compareAutomations(left: Automation, right: Automation) {
+  const favoriteDifference = Number(Boolean(right.favorite)) - Number(Boolean(left.favorite));
+  return favoriteDifference || left.name.localeCompare(right.name);
+}
+
 function formPreview() {
   return buildCommandPreview(form) || "No command generated yet";
 }
@@ -1399,9 +1591,1489 @@ function clearRenderedEditError() {
   document.querySelector(".modal-error")?.remove();
 }
 
+function createAutomationStep(kind: AutomationStepKind): AutomationStep {
+  return {
+    id: createId(),
+    kind,
+    command: "",
+    seconds: kind === "wait" ? 10 : 0,
+    behavior: "wait"
+  };
+}
+
+function openAutomationsView() {
+  clearMessages();
+  automationError = "";
+  automationGroupPickerId = null;
+  currentView = "automations";
+  render();
+}
+
+function closeAutomationsView() {
+  if (automationRun?.running) return;
+  automationEditor = null;
+  automationTrashOpen = false;
+  automationTrashError = "";
+  automationError = "";
+  automationRun = null;
+  automationGroupPickerId = null;
+  currentView = "aliases";
+  render();
+}
+
+function openAutomationEditor(id?: string) {
+  const existing = id ? automations.find((automation) => automation.id === id) : null;
+  const timestamp = nowIso();
+  automationEditor = existing
+    ? {
+        ...existing,
+        steps: existing.steps.map((step) => ({ ...step }))
+      }
+    : {
+        id: createId(),
+        name: "",
+        path: "~/Projects",
+        steps: [createAutomationStep("command")],
+        favorite: false,
+        group: "",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+  automationError = "";
+  automationEditorGroupPickerOpen = false;
+  render();
+}
+
+function closeAutomationEditor() {
+  if (automationBusy) return;
+  automationEditor = null;
+  automationError = "";
+  automationEditorGroupPickerOpen = false;
+  render();
+}
+
+function updateAutomationEditor<K extends "name" | "path" | "group">(key: K, value: Automation[K]) {
+  if (!automationEditor) return;
+  automationEditor = { ...automationEditor, [key]: value };
+  automationError = "";
+  document.querySelector(".automation-editor .modal-error")?.remove();
+}
+
+function updateAutomationStep<K extends keyof AutomationStep>(
+  index: number,
+  key: K,
+  value: AutomationStep[K],
+  rerender = false
+) {
+  if (!automationEditor || !automationEditor.steps[index]) return;
+  const steps = automationEditor.steps.map((step, stepIndex) =>
+    stepIndex === index ? { ...step, [key]: value } : step
+  );
+  automationEditor = { ...automationEditor, steps };
+  automationError = "";
+  if (rerender) render();
+}
+
+function addAutomationStep(kind: AutomationStepKind) {
+  if (!automationEditor) return;
+  automationEditor = {
+    ...automationEditor,
+    steps: [...automationEditor.steps, createAutomationStep(kind)]
+  };
+  automationError = "";
+  render();
+}
+
+function moveAutomationStep(index: number, offset: number) {
+  if (!automationEditor) return;
+  const target = index + offset;
+  if (target < 0 || target >= automationEditor.steps.length) return;
+  const steps = [...automationEditor.steps];
+  [steps[index], steps[target]] = [steps[target], steps[index]];
+  automationEditor = { ...automationEditor, steps };
+  render();
+}
+
+function removeAutomationStep(index: number) {
+  if (!automationEditor || automationEditor.steps.length === 1) {
+    automationError = "An automation needs at least one step.";
+    render();
+    return;
+  }
+  automationEditor = {
+    ...automationEditor,
+    steps: automationEditor.steps.filter((_, stepIndex) => stepIndex !== index)
+  };
+  automationError = "";
+  render();
+}
+
+function validateAutomation(automation: Automation) {
+  if (!automation.name.trim()) return "Enter a name for the automation.";
+  if (!automation.path.trim()) return "Choose a working directory.";
+  if (automation.group.trim().length > 60) return "The group label must be at most 60 characters.";
+  if (!automation.steps.length) return "Add at least one step.";
+
+  for (const [index, step] of automation.steps.entries()) {
+    if (step.kind === "command" && !step.command.trim()) {
+      return `Step ${index + 1} needs a command.`;
+    }
+    if (step.kind === "wait" && (!Number.isFinite(step.seconds) || step.seconds < 1 || step.seconds > 86400)) {
+      return `Step ${index + 1} must wait between 1 second and 24 hours.`;
+    }
+  }
+
+  return "";
+}
+
+async function persistAutomations(next: Automation[]) {
+  if (isTauriRuntime()) {
+    automations = await invokeCommand<Automation[]>("save_automations", { automations: next });
+    return;
+  }
+  automations = next;
+  localStorage.setItem("easyalias-automations", JSON.stringify(next));
+}
+
+async function saveAutomation(event: SubmitEvent) {
+  event.preventDefault();
+  if (!automationEditor || automationBusy) return;
+
+  automationError = validateAutomation(automationEditor);
+  if (automationError) {
+    render();
+    return;
+  }
+  const duplicate = automations.find(
+    (automation) =>
+      automation.id !== automationEditor?.id &&
+      automation.name.trim().toLocaleLowerCase() === automationEditor?.name.trim().toLocaleLowerCase()
+  );
+  if (duplicate) {
+    automationError = `Automation "${automationEditor.name.trim()}" already exists.`;
+    render();
+    return;
+  }
+
+  automationBusy = true;
+  render();
+  const savedAutomation: Automation = {
+    ...automationEditor,
+    name: automationEditor.name.trim(),
+    path: automationEditor.path.trim(),
+    group: automationEditor.group.trim(),
+    steps: automationEditor.steps.map((step) => ({
+      ...step,
+      command: step.kind === "command" ? step.command.trim() : "",
+      seconds: step.kind === "wait" ? Math.floor(step.seconds) : 0
+    })),
+    updatedAt: nowIso()
+  };
+  const exists = automations.some((automation) => automation.id === savedAutomation.id);
+  const next = exists
+    ? automations.map((automation) =>
+        automation.id === savedAutomation.id ? savedAutomation : automation
+      )
+    : [...automations, savedAutomation];
+
+  try {
+    await persistAutomations(next);
+    automationEditor = null;
+    notice = `Automation "${savedAutomation.name}" saved.`;
+  } catch (saveError) {
+    automationError = String(saveError);
+  } finally {
+    automationBusy = false;
+    render();
+  }
+}
+
+async function deleteAutomation(id: string) {
+  if (automationBusy || automationRun?.running) return;
+  const automation = automations.find((item) => item.id === id);
+  if (!automation || !window.confirm(`Move automation "${automation.name}" to Trash?`)) return;
+  automationBusy = true;
+  try {
+    if (isTauriRuntime()) {
+      const result = await invokeCommand<AutomationTrashMutationResult>("move_automation_to_trash", { id });
+      automations = result.automations;
+      automationTrashEntries = result.trash;
+    } else {
+      const nextAutomations = automations.filter((item) => item.id !== id);
+      await persistAutomations(nextAutomations);
+      automationTrashEntries = [
+        { automation, deletedAt: Math.floor(Date.now() / 1000) },
+        ...automationTrashEntries.filter((entry) => entry.automation.id !== id)
+      ].sort((left, right) => right.deletedAt - left.deletedAt);
+      saveBrowserAutomationTrash();
+    }
+    notice = `Automation "${automation.name}" moved to Trash.`;
+  } catch (deleteError) {
+    error = String(deleteError);
+  } finally {
+    automationBusy = false;
+    render();
+  }
+}
+
+async function openAutomationTrash() {
+  clearMessages();
+  automationTrashError = "";
+  automationTrashOpen = true;
+
+  if (isTauriRuntime()) {
+    automationTrashBusy = true;
+    render();
+    try {
+      automationTrashEntries = await invokeCommand<AutomationTrashEntry[]>("list_automation_trash");
+    } catch (trashLoadError) {
+      automationTrashError = String(trashLoadError);
+    } finally {
+      automationTrashBusy = false;
+    }
+  } else {
+    const cutoff = Math.floor(Date.now() / 1000) - trashRetentionSeconds;
+    automationTrashEntries = automationTrashEntries
+      .filter((entry) => entry.deletedAt > cutoff)
+      .sort((left, right) => right.deletedAt - left.deletedAt);
+    saveBrowserAutomationTrash();
+  }
+
+  render();
+}
+
+function closeAutomationTrash() {
+  if (automationTrashBusy) return;
+  automationTrashOpen = false;
+  automationTrashError = "";
+  render();
+}
+
+async function restoreTrashAutomation(id: string) {
+  if (automationTrashBusy) return;
+  const entry = automationTrashEntries.find((item) => item.automation.id === id);
+  if (!entry) return;
+
+  automationTrashBusy = true;
+  automationTrashError = "";
+  render();
+  try {
+    if (isTauriRuntime()) {
+      const result = await invokeCommand<AutomationTrashMutationResult>("restore_trash_automation", { id });
+      automations = result.automations;
+      automationTrashEntries = result.trash;
+    } else {
+      const duplicate = automations.find(
+        (automation) =>
+          automation.id === entry.automation.id ||
+          automation.name.trim().toLocaleLowerCase() === entry.automation.name.trim().toLocaleLowerCase()
+      );
+      if (duplicate) {
+        throw new Error(`Automation "${entry.automation.name}" already exists.`);
+      }
+      await persistAutomations([...automations, entry.automation].sort(compareAutomations));
+      automationTrashEntries = automationTrashEntries.filter((item) => item.automation.id !== id);
+      saveBrowserAutomationTrash();
+    }
+    notice = `Automation "${entry.automation.name}" restored.`;
+  } catch (restoreError) {
+    automationTrashError = String(restoreError);
+  } finally {
+    automationTrashBusy = false;
+    render();
+  }
+}
+
+async function permanentlyDeleteTrashAutomation(id: string) {
+  if (automationTrashBusy) return;
+  const entry = automationTrashEntries.find((item) => item.automation.id === id);
+  if (!entry || !window.confirm(`Permanently delete automation "${entry.automation.name}"? This cannot be undone.`)) {
+    return;
+  }
+
+  automationTrashBusy = true;
+  automationTrashError = "";
+  render();
+  try {
+    if (isTauriRuntime()) {
+      automationTrashEntries = await invokeCommand<AutomationTrashEntry[]>(
+        "permanently_delete_trash_automation",
+        { id }
+      );
+    } else {
+      automationTrashEntries = automationTrashEntries.filter((item) => item.automation.id !== id);
+      saveBrowserAutomationTrash();
+    }
+  } catch (deleteError) {
+    automationTrashError = String(deleteError);
+  } finally {
+    automationTrashBusy = false;
+    render();
+  }
+}
+
+async function emptyAutomationTrash() {
+  if (automationTrashBusy || automationTrashEntries.length === 0) return;
+  const count = automationTrashEntries.length;
+  if (!window.confirm(`Permanently delete all ${count} automation${count === 1 ? "" : "s"} in Trash? This cannot be undone.`)) {
+    return;
+  }
+
+  automationTrashBusy = true;
+  automationTrashError = "";
+  render();
+  try {
+    if (isTauriRuntime()) {
+      automationTrashEntries = await invokeCommand<AutomationTrashEntry[]>("empty_automation_trash");
+    } else {
+      automationTrashEntries = [];
+      saveBrowserAutomationTrash();
+    }
+  } catch (emptyError) {
+    automationTrashError = String(emptyError);
+  } finally {
+    automationTrashBusy = false;
+    render();
+  }
+}
+
+async function toggleAutomationFavorite(id: string) {
+  if (automationBusy || automationRun?.running) return;
+  const automation = automations.find((item) => item.id === id);
+  if (!automation) return;
+
+  automationBusy = true;
+  try {
+    await persistAutomations(
+      automations.map((item) =>
+        item.id === id
+          ? { ...item, favorite: !Boolean(item.favorite), updatedAt: nowIso() }
+          : item
+      )
+    );
+  } catch (favoriteError) {
+    error = String(favoriteError);
+  } finally {
+    automationBusy = false;
+    render();
+  }
+}
+
+function toggleAutomationGroupPicker(id: string) {
+  automationGroupPickerId = automationGroupPickerId === id ? null : id;
+  refreshAutomationResults();
+}
+
+async function assignAutomationGroup(id: string, group: string) {
+  const automation = automations.find((item) => item.id === id);
+  if (!automation) return;
+
+  const trimmedGroup = group.trim();
+  if (trimmedGroup.length > 60) {
+    error = "The group label must be at most 60 characters.";
+    render();
+    return;
+  }
+
+  automationGroupPickerId = null;
+  try {
+    await persistAutomations(
+      automations.map((item) => (item.id === id ? { ...item, group: trimmedGroup, updatedAt: nowIso() } : item))
+    );
+    notice = trimmedGroup
+      ? `Moved "${automation.name}" to "${trimmedGroup}".`
+      : `Removed "${automation.name}" from its group.`;
+  } catch (assignError) {
+    error = String(assignError);
+  }
+  render();
+}
+
+function openAutomationBackupExport() {
+  clearMessages();
+  automationBackupError = "";
+  automationBackupFilePath = "";
+  automationBackupCandidates = [...automations].sort(compareAutomations);
+  selectedAutomationBackupIds = new Set(automationBackupCandidates.map((automation) => automation.id));
+  automationBackupDialogMode = "export";
+  renderAutomationsView();
+}
+
+function openAutomationBackupImport() {
+  clearMessages();
+  automationBackupError = "";
+  automationBackupFilePath = "";
+  automationBackupCandidates = [];
+  selectedAutomationBackupIds.clear();
+  automationBackupDialogMode = "import";
+  renderAutomationsView();
+}
+
+function closeAutomationBackupDialog() {
+  if (automationBackupBusy) return;
+  automationBackupDialogMode = null;
+  automationBackupCandidates = [];
+  selectedAutomationBackupIds.clear();
+  automationBackupFilePath = "";
+  automationBackupError = "";
+  renderAutomationsView();
+}
+
+function closeAutomationBackupDialogAfterSuccess() {
+  automationBackupDialogMode = null;
+  automationBackupCandidates = [];
+  selectedAutomationBackupIds.clear();
+  automationBackupFilePath = "";
+  automationBackupError = "";
+}
+
+async function chooseAutomationBackupFile() {
+  if (automationBackupBusy || automationBackupDialogMode !== "import") return;
+  automationBackupError = "";
+
+  if (!isTauriRuntime()) {
+    automationBackupError = "Automation backup files can only be opened in the Tauri app.";
+    renderAutomationsView();
+    return;
+  }
+
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "EasyAlias Automation Backup", extensions: ["json"] }]
+    });
+    if (typeof selected === "string") await inspectAutomationBackupFile(selected);
+  } catch (fileError) {
+    automationBackupError = `Automation backup could not be selected: ${String(fileError)}`;
+    renderAutomationsView();
+  }
+}
+
+async function inspectAutomationBackupFile(path: string) {
+  if (automationBackupBusy || automationBackupDialogMode !== "import") return;
+  automationBackupBusy = true;
+  automationBackupError = "";
+  renderAutomationsView();
+
+  try {
+    automationBackupCandidates = await invokeCommand<Automation[]>("inspect_automation_backup", { path });
+    automationBackupFilePath = path;
+    selectedAutomationBackupIds = new Set(automationBackupCandidates.map((automation) => automation.id));
+  } catch (inspectError) {
+    automationBackupCandidates = [];
+    selectedAutomationBackupIds.clear();
+    automationBackupFilePath = "";
+    automationBackupError = String(inspectError);
+  }
+
+  automationBackupBusy = false;
+  renderAutomationsView();
+}
+
+async function exportSelectedAutomations(event: SubmitEvent) {
+  event.preventDefault();
+  if (automationBackupBusy || automationBackupDialogMode !== "export") return;
+  automationBackupError = "";
+
+  if (selectedAutomationBackupIds.size === 0) {
+    automationBackupError = "Select at least one automation to export.";
+    renderAutomationsView();
+    return;
+  }
+  if (!isTauriRuntime()) {
+    automationBackupError = "Automation backups can only be exported in the Tauri app.";
+    renderAutomationsView();
+    return;
+  }
+
+  try {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const destination = await save({
+      defaultPath: `EasyAlias-automations-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: "EasyAlias Automation Backup", extensions: ["json"] }]
+    });
+    if (typeof destination !== "string") return;
+
+    automationBackupBusy = true;
+    renderAutomationsView();
+    const result = await invokeCommand<BackupExportResult>("export_automation_backup", {
+      selectedIds: [...selectedAutomationBackupIds],
+      destination,
+      exportedAt: nowIso()
+    });
+    closeAutomationBackupDialogAfterSuccess();
+    notice = `${result.exportedCount} automations exported to ${result.file}.`;
+  } catch (exportError) {
+    automationBackupError = String(exportError);
+  }
+
+  automationBackupBusy = false;
+  renderAutomationsView();
+}
+
+async function importSelectedBackupAutomations(event: SubmitEvent) {
+  event.preventDefault();
+  if (automationBackupBusy || automationBackupDialogMode !== "import") return;
+  automationBackupError = "";
+
+  if (!automationBackupFilePath || selectedAutomationBackupIds.size === 0) {
+    automationBackupError = automationBackupFilePath
+      ? "Select at least one automation to import."
+      : "Choose or drop an EasyAlias automation backup first.";
+    renderAutomationsView();
+    return;
+  }
+
+  automationBackupBusy = true;
+  renderAutomationsView();
+  try {
+    const result = await invokeCommand<AutomationBackupImportResult>("import_automation_backup", {
+      path: automationBackupFilePath,
+      selectedIds: [...selectedAutomationBackupIds],
+      importedAt: nowIso()
+    });
+    automations = result.automations;
+    closeAutomationBackupDialogAfterSuccess();
+    const replacementNote = result.replacedCount
+      ? ` ${result.replacedCount} existing automations replaced.`
+      : "";
+    notice = `${result.importedCount} automations imported.${replacementNote}`;
+  } catch (backupImportError) {
+    automationBackupError = String(backupImportError);
+  }
+
+  automationBackupBusy = false;
+  renderAutomationsView();
+}
+
+async function stopAutomation() {
+  if (!automationRun?.running || automationRun.cancelRequested) return;
+  automationRun.cancelRequested = true;
+  render();
+  // Killing the session immediately interrupts a command that is still
+  // running; without this, Stop would only take effect once that command
+  // finished on its own and the loop reached its next cancellation check.
+  try {
+    await invokeCommand<void>("stop_automation_session", { sessionId: automationRun.sessionId });
+  } catch {
+    // The run loop's own cleanup will report the failure if the session is gone.
+  }
+}
+
+function closeAutomationRun() {
+  if (automationRun?.running) return;
+  automationRun = null;
+  render();
+}
+
+async function waitForAutomation(seconds: number, state: AutomationRunState) {
+  const end = Date.now() + seconds * 1000;
+  while (Date.now() < end) {
+    if (state.cancelRequested) return false;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(250, end - Date.now())));
+  }
+  return !state.cancelRequested;
+}
+
+async function runAutomation(id: string) {
+  if (automationRun?.running || automationBusy) return;
+  const automation = automations.find((item) => item.id === id);
+  if (!automation) return;
+  if (!isTauriRuntime()) {
+    error = "Automations can only run inside the EasyAlias desktop app.";
+    render();
+    return;
+  }
+
+  const runState: AutomationRunState = {
+    automationId: id,
+    sessionId: createId(),
+    running: true,
+    cancelRequested: false,
+    currentStep: 0,
+    error: "",
+    steps: automation.steps.map(() => ({ status: "pending", output: "" }))
+  };
+  automationRun = runState;
+  render();
+
+  // All command steps share this one shell session, so `cd` and exported
+  // variables from an earlier step are still in effect for later ones -
+  // the whole run behaves like one continuous terminal, not isolated calls.
+  try {
+    await invokeCommand<void>("start_automation_session", { sessionId: runState.sessionId, path: automation.path });
+  } catch (sessionError) {
+    runState.error = `Automation session could not be started: ${String(sessionError)}`;
+    runState.steps = runState.steps.map((step) => ({ ...step, status: "skipped" }));
+    runState.running = false;
+    render();
+    return;
+  }
+
+  for (const [index, step] of automation.steps.entries()) {
+    if (runState.cancelRequested) break;
+    runState.currentStep = index;
+    runState.steps[index].status = "running";
+    render();
+
+    try {
+      if (step.kind === "wait") {
+        const completed = await waitForAutomation(step.seconds, runState);
+        if (!completed) break;
+        runState.steps[index] = {
+          status: "success",
+          output: `Waited ${step.seconds} ${step.seconds === 1 ? "second" : "seconds"}.`
+        };
+      } else {
+        const result = await invokeCommand<AutomationCommandResult>("run_session_command", {
+          sessionId: runState.sessionId,
+          command: step.command,
+          background: step.behavior === "background"
+        });
+        const output = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n");
+        if (step.behavior === "background") {
+          runState.steps[index] = {
+            status: "success",
+            output: result.processId ? `Started in background (PID ${result.processId}).` : "Started in background."
+          };
+        } else if (result.exitCode === 0) {
+          runState.steps[index] = { status: "success", output: output || "Command completed." };
+        } else {
+          runState.steps[index] = {
+            status: "error",
+            output: output || `Command exited with code ${result.exitCode ?? "unknown"}.`
+          };
+          runState.error = `Step ${index + 1} failed. Remaining steps were not started.`;
+          break;
+        }
+      }
+    } catch (runError) {
+      runState.steps[index] = { status: "error", output: String(runError) };
+      runState.error = `Step ${index + 1} could not be completed.`;
+      break;
+    }
+  }
+
+  if (runState.cancelRequested) {
+    runState.error = "Automation stopped. A background process that already started keeps running.";
+  }
+  try {
+    await invokeCommand<void>("stop_automation_session", { sessionId: runState.sessionId });
+  } catch {
+    // The session's own process already exited; nothing left to clean up.
+  }
+  runState.steps = runState.steps.map((step) =>
+    step.status === "pending" ? { ...step, status: "skipped" } : step
+  );
+  runState.running = false;
+  render();
+}
+
+function automationStepLabel(step: AutomationStep) {
+  if (step.kind === "wait") return `Wait ${step.seconds}s`;
+  return step.command || "Command not configured";
+}
+
+function matchesAutomationFilter(automation: Automation) {
+  if (automationFilter.startsWith("group:")) {
+    return automation.group.trim() === automationFilter.slice("group:".length);
+  }
+
+  const commandText = automation.steps
+    .filter((step) => step.kind === "command")
+    .map((step) => step.command)
+    .join(" \n ")
+    .trim()
+    .toLocaleLowerCase();
+
+  switch (automationFilter) {
+    case "favorites":
+      return Boolean(automation.favorite);
+    case "background":
+      return automation.steps.some((step) => step.kind === "command" && step.behavior === "background");
+    case "git":
+      return /(^|[\s;&|])git(?=\s|$)/.test(commandText);
+    case "docker":
+      return /(^|[\s;&|])docker(?:-compose)?(?=\s|$)/.test(commandText);
+    case "build":
+      return (
+        /(^|[\s;&|])(?:\.\/)?(?:gradle|gradlew|mvn|mvnw|make)(?=\s|$)/.test(commandText) ||
+        /(^|[\s;&|])cargo\s+build(?=\s|$)/.test(commandText) ||
+        /(^|[\s;&|])(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+build(?=\s|$)/.test(commandText)
+      );
+    case "groups":
+    case "all":
+    default:
+      return true;
+  }
+}
+
+function filterAutomations(automations: Automation[]) {
+  const query = automationSearchQuery.trim().toLocaleLowerCase();
+
+  return automations.filter(
+    (automation) =>
+      matchesAutomationFilter(automation) &&
+      (!query ||
+        automation.name.toLocaleLowerCase().includes(query) ||
+        automation.path.toLocaleLowerCase().includes(query) ||
+        automation.group.toLocaleLowerCase().includes(query) ||
+        automation.steps.some(
+          (step) => step.kind === "command" && step.command.toLocaleLowerCase().includes(query)
+        ))
+  );
+}
+
+function automationCountLabel(total: number, filtered: number) {
+  const suffix = total === 1 ? "automation" : "automations";
+  const hasActiveFilter = automationSearchQuery.trim() || automationFilter !== "all";
+  return hasActiveFilter ? `${filtered} of ${total} ${suffix}` : `${total} ${suffix}`;
+}
+
+function automationOverviewCountLabel(sortedAutomations: Automation[]) {
+  if (automationFilter === "groups") {
+    const groupCount = automationGroups(sortedAutomations).length;
+    const hasUngrouped = sortedAutomations.some((automation) => !automation.group.trim());
+    const count = groupCount + (hasUngrouped ? 1 : 0);
+    return `${count} ${count === 1 ? "group" : "groups"}`;
+  }
+  return automationCountLabel(sortedAutomations.length, filterAutomations(sortedAutomations).length);
+}
+
+function renderAutomationEditor() {
+  if (!automationEditor) return "";
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <form class="modal-card automation-editor" id="automation-form" role="dialog" aria-modal="true" aria-labelledby="automation-editor-title">
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">Workflow</p>
+            <h2 id="automation-editor-title">${escapeHtml(automationEditor.name || "New automation")}</h2>
+          </div>
+          <button class="ghost-button modal-close" type="button" data-automation-action="close-editor" ${automationBusy ? "disabled" : ""}>Close</button>
+        </div>
+
+        <p class="automation-intro">Commands run from top to bottom in the same working directory. Background commands let long-running development servers start without blocking the next step.</p>
+        ${automationError ? `<p class="modal-error">${escapeHtml(automationError)}</p>` : ""}
+
+        <div class="automation-form-grid">
+          <label>
+            Name
+            <input name="automation-name" value="${escapeHtml(automationEditor.name)}" placeholder="Development workflow" autocomplete="off" />
+          </label>
+          <label>
+            Working Directory
+            <span class="automation-path-row">
+              <input name="automation-path" value="${escapeHtml(automationEditor.path)}" placeholder="~/Projects/my-app" autocomplete="off" />
+              <button class="picker-button automation-folder-button" type="button" title="Choose working directory" aria-label="Choose working directory" data-automation-action="pick-folder"><i data-lucide="folder-open"></i></button>
+            </span>
+          </label>
+          <label>
+            Group <span class="automation-optional">(optional)</span>
+            <span class="automation-path-row">
+              <input name="automation-group" value="${escapeHtml(automationEditor.group)}" placeholder="e.g. Backend, or type a new name" autocomplete="off" maxlength="60" />
+              <button class="picker-button automation-group-picker-button" type="button" title="Choose an existing group" aria-label="Choose an existing group" aria-expanded="${automationEditorGroupPickerOpen}" data-automation-action="toggle-editor-group-picker"><i data-lucide="tags"></i></button>
+            </span>
+            ${
+              automationEditorGroupPickerOpen
+                ? `<div class="automation-group-picker automation-group-picker-editor" role="menu" aria-label="Existing groups">
+                    ${
+                      automationGroups(automations).length
+                        ? automationGroups(automations)
+                            .map(
+                              (name) =>
+                                `<button type="button" class="automation-group-option ${automationEditor!.group.trim() === name ? "is-selected" : ""}" data-automation-action="pick-editor-group" data-group="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+                            )
+                            .join("")
+                        : `<p class="automation-group-picker-empty">No groups yet. Type a new name above.</p>`
+                    }
+                  </div>`
+                : ""
+            }
+          </label>
+        </div>
+
+        <div class="automation-step-heading">
+          <div>
+            <h3>Steps</h3>
+            <span>${automationEditor.steps.length} configured</span>
+          </div>
+          <div class="automation-add-actions">
+            <button class="ghost-button" type="button" data-automation-action="add-command"><i data-lucide="terminal"></i><span>Add command</span></button>
+            <button class="ghost-button" type="button" data-automation-action="add-wait"><i data-lucide="clock-3"></i><span>Add wait</span></button>
+          </div>
+        </div>
+
+        <div class="automation-step-list">
+          ${automationEditor.steps
+            .map(
+              (step, index) => `
+                <article class="automation-step-editor" data-step-index="${index}">
+                  <div class="automation-step-number">${index + 1}</div>
+                  <div class="automation-step-fields">
+                    <label>
+                      Step Type
+                      <select name="automation-step-kind" data-step-index="${index}">
+                        <option value="command" ${step.kind === "command" ? "selected" : ""}>Command</option>
+                        <option value="wait" ${step.kind === "wait" ? "selected" : ""}>Wait</option>
+                      </select>
+                    </label>
+                    ${
+                      step.kind === "command"
+                        ? `<label class="automation-command-field">
+                            Command
+                            <textarea name="automation-step-command" data-step-index="${index}" rows="2" placeholder="docker compose up -d">${escapeHtml(step.command)}</textarea>
+                          </label>
+                          <label>
+                            Continue When
+                            <select name="automation-step-behavior" data-step-index="${index}">
+                              <option value="wait" ${step.behavior === "wait" ? "selected" : ""}>Command finishes</option>
+                              <option value="background" ${step.behavior === "background" ? "selected" : ""}>Process starts</option>
+                            </select>
+                          </label>`
+                        : `<label class="automation-wait-field">
+                            Seconds
+                            <input name="automation-step-seconds" data-step-index="${index}" type="number" min="1" max="86400" step="1" value="${step.seconds}" />
+                          </label>`
+                    }
+                  </div>
+                  <div class="automation-step-controls">
+                    <button type="button" title="Move step up" aria-label="Move step ${index + 1} up" data-automation-action="move-step" data-step-index="${index}" data-offset="-1" ${index === 0 ? "disabled" : ""}><i data-lucide="arrow-up"></i></button>
+                    <button type="button" title="Move step down" aria-label="Move step ${index + 1} down" data-automation-action="move-step" data-step-index="${index}" data-offset="1" ${index === automationEditor!.steps.length - 1 ? "disabled" : ""}><i data-lucide="arrow-down"></i></button>
+                    <button class="danger" type="button" title="Remove step" aria-label="Remove step ${index + 1}" data-automation-action="remove-step" data-step-index="${index}"><i data-lucide="trash-2"></i></button>
+                  </div>
+                </article>`
+            )
+            .join("")}
+        </div>
+
+        <div class="modal-actions">
+          <button class="ghost-button" type="button" data-automation-action="close-editor" ${automationBusy ? "disabled" : ""}>Cancel</button>
+          <button class="primary-button" type="submit" ${automationBusy ? "disabled" : ""}><i data-lucide="save"></i><span>${automationBusy ? "Saving..." : "Save automation"}</span></button>
+        </div>
+      </form>
+    </section>`;
+}
+
+function renderAutomationRun() {
+  if (!automationRun) return "";
+  const automation = automations.find((item) => item.id === automationRun?.automationId);
+  if (!automation) return "";
+  const successful = automationRun.steps.filter((step) => step.status === "success").length;
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <section class="modal-card automation-runner" role="dialog" aria-modal="true" aria-labelledby="automation-run-title">
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">${automationRun.running ? "Running" : automationRun.error ? "Run stopped" : "Completed"}</p>
+            <h2 id="automation-run-title">${escapeHtml(automation.name)}</h2>
+          </div>
+          <span class="automation-progress">${successful} / ${automation.steps.length}</span>
+        </div>
+        <p class="automation-run-path"><i data-lucide="folder-open"></i><code>${escapeHtml(automation.path)}</code></p>
+        ${automationRun.error ? `<p class="modal-error">${escapeHtml(automationRun.error)}</p>` : ""}
+        <div class="automation-run-list">
+          ${automation.steps
+            .map((step, index) => {
+              const result = automationRun!.steps[index];
+              return `<article class="automation-run-step is-${result.status}">
+                <div class="run-step-marker">${index + 1}</div>
+                <div class="run-step-copy">
+                  <div><strong>${step.kind === "wait" ? "Wait" : "Command"}</strong><span>${result.status}</span></div>
+                  <code>${escapeHtml(automationStepLabel(step))}</code>
+                  ${result.output ? `<pre>${escapeHtml(result.output)}</pre>` : ""}
+                </div>
+              </article>`;
+            })
+            .join("")}
+        </div>
+        <div class="modal-actions">
+          ${
+            automationRun.running
+              ? `<button class="danger-button" type="button" data-automation-action="stop-run" ${automationRun.cancelRequested ? "disabled" : ""}><i data-lucide="circle-stop"></i><span>${automationRun.cancelRequested ? "Stopping..." : "Stop"}</span></button>`
+              : `<button class="ghost-button" type="button" data-automation-action="close-run">Close</button>
+                 <button class="primary-button" type="button" data-automation-action="run" data-id="${escapeHtml(automation.id)}"><i data-lucide="play"></i><span>Run again</span></button>`
+          }
+        </div>
+      </section>
+    </section>`;
+}
+
+function renderAutomationBackupDialog() {
+  if (!automationBackupDialogMode) return "";
+
+  const isExport = automationBackupDialogMode === "export";
+  const allSelected =
+    automationBackupCandidates.length > 0 &&
+    automationBackupCandidates.every((automation) => selectedAutomationBackupIds.has(automation.id));
+  const existingNames = new Set(automations.map((automation) => automation.name));
+  const fileName = automationBackupFilePath.split(/[\\/]/).pop() ?? automationBackupFilePath;
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <form
+        class="modal-card import-card backup-card"
+        id="${isExport ? "automation-backup-export-form" : "automation-backup-import-form"}"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="automation-backup-title"
+      >
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">${isExport ? "Portable Workflows" : "Restore Workflows"}</p>
+            <h2 id="automation-backup-title">${isExport ? "Export automations" : "Import automations"}</h2>
+          </div>
+          <button class="ghost-button modal-close" type="button" data-automation-action="close-backup" ${automationBackupBusy ? "disabled" : ""}>Close</button>
+        </div>
+
+        <p class="import-intro">
+          ${
+            isExport
+              ? "Choose which automations to include. The versioned JSON backup keeps every path, step, behavior, and favorite state."
+              : "Choose an EasyAlias automation backup or drop it below. You can review every workflow before anything is changed."
+          }
+        </p>
+
+        ${automationBackupError ? `<p class="modal-error">${escapeHtml(automationBackupError)}</p>` : ""}
+
+        ${
+          isExport
+            ? ""
+            : `<button class="backup-drop-zone automation-backup-drop-zone" type="button" data-automation-action="choose-backup-file" ${automationBackupBusy ? "disabled" : ""}>
+                <span class="backup-drop-icon" aria-hidden="true">&#8681;</span>
+                <strong>${automationBackupFilePath ? escapeHtml(fileName) : "Drop an automation backup here"}</strong>
+                <span>${automationBackupFilePath ? `${automationBackupCandidates.length} automations found` : "or click to choose a .json file"}</span>
+              </button>`
+        }
+
+        ${
+          automationBackupCandidates.length
+            ? `<label class="import-select-all">
+                <input type="checkbox" name="automation-backup-all" ${allSelected ? "checked" : ""} ${automationBackupBusy ? "disabled" : ""} />
+                <span>Select all</span>
+              </label>
+
+              <div class="import-list" aria-label="Automations available for ${isExport ? "export" : "import"}">
+                ${automationBackupCandidates
+                  .map((automation) => {
+                    const willReplace = !isExport && existingNames.has(automation.name);
+                    const stepLabel = `${automation.steps.length} ${automation.steps.length === 1 ? "step" : "steps"}`;
+                    return `
+                      <label class="import-row">
+                        <input
+                          type="checkbox"
+                          name="automation-backup-candidate"
+                          value="${escapeHtml(automation.id)}"
+                          ${selectedAutomationBackupIds.has(automation.id) ? "checked" : ""}
+                          ${automationBackupBusy ? "disabled" : ""}
+                        />
+                        <span class="import-alias-copy">
+                          <span class="import-alias-meta">
+                            <strong>${escapeHtml(automation.name)}</strong>
+                            <span class="${willReplace ? "backup-conflict" : ""}">${willReplace ? "Replaces existing" : stepLabel}</span>
+                          </span>
+                          <code>${escapeHtml(automation.path)}</code>
+                        </span>
+                      </label>`;
+                  })
+                  .join("")}
+              </div>`
+            : isExport
+              ? `<p class="backup-empty">No automations are available to export.</p>`
+              : ""
+        }
+
+        <p class="import-safety">
+          ${
+            isExport
+              ? "The backup contains only the automations you select."
+              : "Automations with matching names replace their current EasyAlias workflow. Unselected automations stay unchanged."
+          }
+        </p>
+
+        <div class="modal-actions import-actions">
+          <button class="ghost-button" type="button" data-automation-action="close-backup" ${automationBackupBusy ? "disabled" : ""}>Cancel</button>
+          <button class="primary-button" type="submit" data-automation-backup-submit ${selectedAutomationBackupIds.size && !automationBackupBusy ? "" : "disabled"}>
+            ${automationBackupBusy ? "Working..." : `${isExport ? "Export" : "Import"} Selected (${selectedAutomationBackupIds.size})`}
+          </button>
+        </div>
+      </form>
+    </section>`;
+}
+
+function renderAutomationTrashDialog() {
+  if (!automationTrashOpen) return "";
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <section class="modal-card trash-card" role="dialog" aria-modal="true" aria-labelledby="automation-trash-title">
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">Recovery</p>
+            <h2 id="automation-trash-title">Automation Trash</h2>
+          </div>
+          <span class="import-count">${automationTrashEntries.length} deleted</span>
+        </div>
+
+        <p class="import-intro">
+          Deleted automations stay here for 30 days. Restore a workflow at any time, or delete it permanently now.
+        </p>
+
+        ${automationTrashError ? `<p class="modal-error">${escapeHtml(automationTrashError)}</p>` : ""}
+
+        ${
+          automationTrashEntries.length
+            ? `<div class="trash-list" aria-label="Deleted automations">
+                ${automationTrashEntries
+                  .map(
+                    (entry) => `
+                      <article class="trash-row">
+                        <div class="trash-copy">
+                          <strong>${escapeHtml(entry.automation.name)}</strong>
+                          <span>${entry.automation.steps.length} ${entry.automation.steps.length === 1 ? "step" : "steps"}</span>
+                          <code>${escapeHtml(entry.automation.path)}</code>
+                          <small>Deleted ${formatDeletedDate(entry.deletedAt)} · ${trashDaysRemaining(entry.deletedAt)} days remaining</small>
+                        </div>
+                        <div class="trash-row-actions">
+                          <button
+                            class="trash-action restore"
+                            type="button"
+                            title="Restore ${escapeHtml(entry.automation.name)}"
+                            aria-label="Restore ${escapeHtml(entry.automation.name)}"
+                            data-automation-action="restore-trash"
+                            data-id="${escapeHtml(entry.automation.id)}"
+                            ${automationTrashBusy ? "disabled" : ""}
+                          ><i data-lucide="rotate-ccw"></i></button>
+                          <button
+                            class="trash-action permanent"
+                            type="button"
+                            title="Permanently delete ${escapeHtml(entry.automation.name)}"
+                            aria-label="Permanently delete ${escapeHtml(entry.automation.name)}"
+                            data-automation-action="delete-trash-permanently"
+                            data-id="${escapeHtml(entry.automation.id)}"
+                            ${automationTrashBusy ? "disabled" : ""}
+                          ><i data-lucide="trash-2"></i></button>
+                        </div>
+                      </article>`
+                  )
+                  .join("")}
+              </div>`
+            : `<div class="trash-empty"><strong>Automation Trash is empty</strong><span>Deleted workflows will stay recoverable here for 30 days.</span></div>`
+        }
+
+        <div class="modal-actions trash-footer-actions">
+          <button class="ghost-button" type="button" data-automation-action="close-trash" ${automationTrashBusy ? "disabled" : ""}>Close</button>
+          <button class="danger-button" type="button" data-automation-action="empty-trash" ${automationTrashEntries.length && !automationTrashBusy ? "" : "disabled"}>
+            <i data-lucide="trash-2"></i><span>${automationTrashBusy ? "Working..." : "Empty Trash"}</span>
+          </button>
+        </div>
+      </section>
+    </section>`;
+}
+
+// Inline card popover for quickly assigning an automation to an existing
+// group or creating a new one, without opening the full editor.
+function renderAutomationGroupPicker(automation: Automation, allAutomations: Automation[]) {
+  const currentGroup = automation.group.trim();
+  const existingGroups = automationGroups(allAutomations);
+
+  return `<div class="automation-group-picker" role="menu" aria-label="Assign ${escapeHtml(automation.name)} to a group">
+      ${
+        existingGroups.length
+          ? `<div class="automation-group-picker-list">
+              ${existingGroups
+                .map(
+                  (name) =>
+                    `<button type="button" class="automation-group-option ${currentGroup === name ? "is-selected" : ""}" data-automation-action="assign-group" data-id="${escapeHtml(automation.id)}" data-group="${escapeHtml(name)}">${escapeHtml(name)}</button>`
+                )
+                .join("")}
+            </div>`
+          : `<p class="automation-group-picker-empty">No groups yet.</p>`
+      }
+      ${
+        currentGroup
+          ? `<button type="button" class="automation-group-option is-remove" data-automation-action="assign-group" data-id="${escapeHtml(automation.id)}" data-group="">No group</button>`
+          : ""
+      }
+      <form class="automation-group-picker-create" data-automation-group-form="${escapeHtml(automation.id)}">
+        <input type="text" name="automation-group-new" placeholder="New group name" maxlength="60" autocomplete="off" />
+        <button class="ghost-button" type="submit">Create</button>
+      </form>
+    </div>`;
+}
+
+function renderAutomationGroupOverview(sortedAutomations: Automation[]) {
+  const groupNames = automationGroups(sortedAutomations);
+  const ungrouped = sortedAutomations.filter((automation) => !automation.group.trim());
+
+  const cards = groupNames.map((name) => {
+    const count = sortedAutomations.filter((automation) => automation.group.trim() === name).length;
+    return `<button class="automation-group-card" type="button" data-automation-action="select-group" data-group="${escapeHtml(name)}">
+        <i data-lucide="tag"></i>
+        <span>${escapeHtml(name)}</span>
+        <strong>${count} ${count === 1 ? "automation" : "automations"}</strong>
+      </button>`;
+  });
+
+  if (ungrouped.length) {
+    cards.push(`<button class="automation-group-card is-ungrouped" type="button" data-automation-action="select-group" data-group="">
+        <i data-lucide="tag"></i>
+        <span>Ungrouped</span>
+        <strong>${ungrouped.length} ${ungrouped.length === 1 ? "automation" : "automations"}</strong>
+      </button>`);
+  }
+
+  if (!cards.length) {
+    return `<div class="automation-empty"><strong>No groups yet</strong><span>Add a group label to an automation to see it here.</span></div>`;
+  }
+
+  return `<div class="automation-group-grid">${cards.join("")}</div>`;
+}
+
+function renderAutomationResults(sortedAutomations: Automation[]) {
+  if (!sortedAutomations.length) {
+    return `<div class="automation-empty"><div class="automation-empty-icon"><i data-lucide="play"></i></div><strong>No automations yet</strong><span>Combine project commands and waits into a repeatable workflow.</span><button class="primary-button" type="button" data-automation-action="new"><i data-lucide="plus"></i><span>Create automation</span></button></div>`;
+  }
+
+  if (automationFilter === "groups") {
+    return renderAutomationGroupOverview(sortedAutomations);
+  }
+
+  const filteredAutomations = filterAutomations(sortedAutomations);
+
+  if (!filteredAutomations.length) {
+    return `<div class="automation-empty"><strong>No matching automations</strong><span>Try another search or filter.</span></div>`;
+  }
+
+  return `<div class="automation-grid">
+      ${filteredAutomations
+        .map(
+          (automation) => `<article class="automation-card">
+              <div class="automation-card-header">
+                <div class="automation-card-title">
+                  <button
+                    class="automation-favorite-button ${automation.favorite ? "active" : ""}"
+                    type="button"
+                    title="${automation.favorite ? "Remove from favorites" : "Add to favorites"}"
+                    aria-label="${automation.favorite ? "Remove" : "Add"} ${escapeHtml(automation.name)} ${automation.favorite ? "from" : "to"} favorites"
+                    aria-pressed="${Boolean(automation.favorite)}"
+                    data-automation-action="toggle-favorite"
+                    data-id="${escapeHtml(automation.id)}"
+                    ${automationRun?.running ? "disabled" : ""}
+                  ><i data-lucide="star"></i></button>
+                  <button
+                    class="automation-group-button ${automation.group.trim() ? "has-group" : ""}"
+                    type="button"
+                    title="${automation.group.trim() ? `Change group (currently ${escapeHtml(automation.group.trim())})` : "Assign to a group"}"
+                    aria-label="${automation.group.trim() ? "Change group for" : "Assign"} ${escapeHtml(automation.name)}${automation.group.trim() ? "" : " to a group"}"
+                    aria-expanded="${automationGroupPickerId === automation.id}"
+                    data-automation-action="toggle-group-picker"
+                    data-id="${escapeHtml(automation.id)}"
+                    ${automationRun?.running ? "disabled" : ""}
+                  ><i data-lucide="tags"></i></button>
+                  <div>
+                    <strong>${escapeHtml(automation.name)}</strong>
+                    <code>${escapeHtml(automation.path)}</code>
+                    ${
+                      automation.group.trim()
+                        ? `<button class="automation-group-chip" type="button" title="Filter by group ${escapeHtml(automation.group.trim())}" data-automation-action="select-group" data-group="${escapeHtml(automation.group.trim())}"><i data-lucide="tag"></i><span>${escapeHtml(automation.group.trim())}</span></button>`
+                        : ""
+                    }
+                  </div>
+                </div>
+                <span>${automation.steps.length} ${automation.steps.length === 1 ? "step" : "steps"}</span>
+              </div>
+              ${automationGroupPickerId === automation.id ? renderAutomationGroupPicker(automation, sortedAutomations) : ""}
+              <ol class="automation-preview-list">
+                ${automation.steps
+                  .slice(0, 4)
+                  .map((step) => `<li><span>${step.kind === "wait" ? "Wait" : step.behavior === "background" ? "Start" : "Run"}</span><code>${escapeHtml(automationStepLabel(step))}</code></li>`)
+                  .join("")}
+                ${automation.steps.length > 4 ? `<li class="automation-more">+ ${automation.steps.length - 4} more</li>` : ""}
+              </ol>
+              <div class="automation-card-actions">
+                <button class="primary-button automation-run-button" type="button" data-automation-action="run" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="play"></i><span>Run</span></button>
+                <button class="header-icon-button" type="button" title="Edit ${escapeHtml(automation.name)}" aria-label="Edit ${escapeHtml(automation.name)}" data-automation-action="edit" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="pencil"></i></button>
+                <button class="header-icon-button automation-delete-button" type="button" title="Delete ${escapeHtml(automation.name)}" aria-label="Delete ${escapeHtml(automation.name)}" data-automation-action="delete" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="trash-2"></i></button>
+              </div>
+            </article>`
+        )
+        .join("")}
+    </div>`;
+}
+
+function refreshAutomationResults() {
+  const sortedAutomations = [...automations].sort(compareAutomations);
+  const count = document.querySelector<HTMLElement>("[data-automation-count]");
+  const results = document.querySelector<HTMLElement>("[data-automation-results]");
+  const filterLabel = document.querySelector<HTMLLabelElement>(".automation-filter");
+
+  if (count) count.textContent = automationOverviewCountLabel(sortedAutomations);
+  if (filterLabel) {
+    filterLabel.classList.toggle("is-active", automationFilter !== "all");
+    const select = filterLabel.querySelector("select");
+    if (select) select.title = `Filter: ${automationFilterLabel(automationFilter)}`;
+  }
+  if (!results) return;
+
+  results.innerHTML = renderAutomationResults(sortedAutomations);
+  createIcons({
+    icons: { Pencil, Play, Plus, Star, Tag, Tags, Trash2 },
+    attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
+  });
+}
+
+function renderAutomationsView() {
+  const sortedAutomations = [...automations].sort(compareAutomations);
+  const automationGroupNames = automationGroups(sortedAutomations);
+  appElement.innerHTML = `
+    <section class="shell automation-shell">
+      <header class="topbar automation-topbar">
+        <div>
+          <p class="eyebrow">Linux Workflow Runner</p>
+          <h1>Automations</h1>
+        </div>
+        <div class="topbar-actions">
+          <button class="header-icon-button" type="button" title="Back to aliases" aria-label="Back to aliases" data-automation-action="back" ${automationRun?.running ? "disabled" : ""}><i data-lucide="arrow-left"></i></button>
+          <button class="header-icon-button ${automationFilter === "groups" ? "active" : ""}" type="button" title="Group view" aria-label="Show automation groups" aria-pressed="${automationFilter === "groups"}" data-automation-action="show-groups" ${automationRun?.running ? "disabled" : ""}><i data-lucide="tags"></i></button>
+          <button class="header-icon-button" type="button" title="Export automation backup" aria-label="Export automation backup" data-automation-action="open-backup-export" ${automations.length && !automationBackupBusy && !automationRun?.running ? "" : "disabled"}><i data-lucide="file-up"></i></button>
+          <button class="header-icon-button" type="button" title="Import automation backup" aria-label="Import automation backup" data-automation-action="open-backup-import" ${automationBackupBusy || automationRun?.running ? "disabled" : ""}><i data-lucide="file-down"></i></button>
+          <button
+            class="header-icon-button trash-header-button"
+            type="button"
+            title="Automation Trash${automationTrashEntries.length ? ` (${automationTrashEntries.length})` : ""}"
+            aria-label="Open Automation Trash${automationTrashEntries.length ? ` with ${automationTrashEntries.length} deleted automations` : ""}"
+            data-automation-action="open-trash"
+            ${automationTrashBusy || automationRun?.running ? "disabled" : ""}
+          >
+            <i data-lucide="trash-2"></i>
+            ${automationTrashEntries.length ? `<span class="header-count" aria-hidden="true">${automationTrashEntries.length}</span>` : ""}
+          </button>
+          <button class="header-icon-button automation-create-button" type="button" title="Create automation" aria-label="Create automation" data-automation-action="new" ${automationRun?.running ? "disabled" : ""}><i data-lucide="plus"></i></button>
+        </div>
+      </header>
+
+      <section class="automation-summary">
+        <div><span>Automations</span><strong>${automations.length}</strong></div>
+        <div><span>Execution</span><strong>Sequential</strong></div>
+        <div><span>Shell</span><strong>${escapeHtml(appState.shellName || "bash")}</strong></div>
+      </section>
+
+      ${
+        notice
+          ? `<div class="message-banner notice" role="status"><span>${escapeHtml(notice)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-automation-action="dismiss-message"><i data-lucide="x"></i></button></div>`
+          : ""
+      }
+      ${
+        error
+          ? `<div class="message-banner error" role="alert"><span>${escapeHtml(error)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-automation-action="dismiss-message"><i data-lucide="x"></i></button></div>`
+          : ""
+      }
+
+      <section class="automation-overview">
+        <div class="automation-overview-header">
+          <div><h2>Your Automations</h2><span data-automation-count>${automationOverviewCountLabel(sortedAutomations)}</span></div>
+          <button class="primary-button" type="button" data-automation-action="new" ${automationRun?.running ? "disabled" : ""}><i data-lucide="plus"></i><span>New automation</span></button>
+        </div>
+        <div class="automation-tools">
+          <div class="automation-search" role="search">
+            <i data-lucide="search"></i>
+            <input
+              type="search"
+              name="automation-search"
+              value="${escapeHtml(automationSearchQuery)}"
+              placeholder="Search automations or commands"
+              aria-label="Search automations by name, path, or command"
+              autocomplete="off"
+              ${automations.length ? "" : "disabled"}
+            />
+          </div>
+          <label class="automation-filter ${automationFilter !== "all" ? "is-active" : ""} ${automations.length ? "" : "is-disabled"}">
+            <span class="visually-hidden">Filter automations</span>
+            <i data-lucide="filter"></i>
+            <select
+              name="automation-filter"
+              aria-label="Filter automations"
+              title="Filter: ${automationFilterLabel(automationFilter)}"
+              ${automations.length ? "" : "disabled"}
+            >
+              ${Object.entries(automationFilterLabels)
+                .map(
+                  ([value, label]) =>
+                    `<option value="${value}" ${automationFilter === value ? "selected" : ""}>${label}</option>`
+                )
+                .join("")}
+              ${
+                automationGroupNames.length
+                  ? `<optgroup label="Groups">
+                      ${automationGroupNames
+                        .map(
+                          (name) =>
+                            `<option value="group:${escapeHtml(name)}" ${automationFilter === `group:${name}` ? "selected" : ""}>${escapeHtml(name)}</option>`
+                        )
+                        .join("")}
+                    </optgroup>`
+                  : ""
+              }
+            </select>
+          </label>
+        </div>
+        <div class="automation-results" data-automation-results>
+          ${renderAutomationResults(sortedAutomations)}
+        </div>
+      </section>
+
+      ${renderAutomationEditor()}
+      ${renderAutomationRun()}
+      ${renderAutomationBackupDialog()}
+      ${renderAutomationTrashDialog()}
+
+      <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>Become a sponsor</a></aside>
+      <footer class="app-footer"><a href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>© Hannes Gnann</a><span aria-hidden="true">-</span><a href="${redditUrl}" target="_blank" rel="noreferrer" data-external-link>Reddit</a><span aria-hidden="true">-</span><a href="${websiteUrl}" target="_blank" rel="noreferrer" data-external-link>Website</a></footer>
+    </section>`;
+
+  createIcons({
+    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, FileDown, FileUp, Filter, FolderOpen, Pencil, Play, Plus, RotateCcw, Save, Search, Star, Tag, Tags, Terminal, Trash2, X },
+    attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
+  });
+  scheduleMessageDismissal();
+  bindAutomationEvents();
+}
+
+function bindAutomationEvents() {
+  document.querySelector<HTMLFormElement>("#automation-form")?.addEventListener("submit", saveAutomation);
+  document.querySelector<HTMLFormElement>("#automation-backup-export-form")?.addEventListener("submit", exportSelectedAutomations);
+  document.querySelector<HTMLFormElement>("#automation-backup-import-form")?.addEventListener("submit", importSelectedBackupAutomations);
+  document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => link.addEventListener("click", openExternalLink));
+  document.querySelector<HTMLInputElement>('input[name="automation-name"]')?.addEventListener("input", (event) => updateAutomationEditor("name", (event.target as HTMLInputElement).value));
+  document.querySelector<HTMLInputElement>('input[name="automation-path"]')?.addEventListener("input", (event) => updateAutomationEditor("path", (event.target as HTMLInputElement).value));
+  document.querySelector<HTMLInputElement>('input[name="automation-group"]')?.addEventListener("input", (event) => updateAutomationEditor("group", (event.target as HTMLInputElement).value));
+  document.querySelectorAll<HTMLSelectElement>('select[name="automation-step-kind"]').forEach((select) => select.addEventListener("change", () => updateAutomationStep(Number(select.dataset.stepIndex), "kind", select.value as AutomationStepKind, true)));
+  document.querySelectorAll<HTMLTextAreaElement>('textarea[name="automation-step-command"]').forEach((input) => input.addEventListener("input", () => updateAutomationStep(Number(input.dataset.stepIndex), "command", input.value)));
+  document.querySelectorAll<HTMLSelectElement>('select[name="automation-step-behavior"]').forEach((select) => select.addEventListener("change", () => updateAutomationStep(Number(select.dataset.stepIndex), "behavior", select.value as AutomationCommandBehavior)));
+  document.querySelectorAll<HTMLInputElement>('input[name="automation-step-seconds"]').forEach((input) => input.addEventListener("input", () => updateAutomationStep(Number(input.dataset.stepIndex), "seconds", Number(input.value))));
+
+  document.querySelector<HTMLInputElement>('input[name="automation-backup-all"]')?.addEventListener("change", (event) => {
+    const checked = (event.target as HTMLInputElement).checked;
+    selectedAutomationBackupIds = checked
+      ? new Set(automationBackupCandidates.map((automation) => automation.id))
+      : new Set();
+    document.querySelectorAll<HTMLInputElement>('input[name="automation-backup-candidate"]').forEach((checkbox) => {
+      checkbox.checked = checked;
+    });
+    syncAutomationBackupSelectionControls();
+  });
+
+  document.querySelectorAll<HTMLInputElement>('input[name="automation-backup-candidate"]').forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedAutomationBackupIds.add(checkbox.value);
+      else selectedAutomationBackupIds.delete(checkbox.value);
+      syncAutomationBackupSelectionControls();
+    });
+  });
+
+  if (automationBackupDialogMode) syncAutomationBackupSelectionControls();
+
+  document.querySelector<HTMLInputElement>('input[name="automation-search"]')?.addEventListener("input", (event) => {
+    automationSearchQuery = (event.target as HTMLInputElement).value;
+    refreshAutomationResults();
+  });
+
+  document.querySelector<HTMLSelectElement>('select[name="automation-filter"]')?.addEventListener("change", (event) => {
+    automationFilter = (event.target as HTMLSelectElement).value as AutomationFilter;
+    refreshAutomationResults();
+  });
+
+  // Card actions (favorite/run/edit/delete, plus "new" in the empty state) use
+  // delegation on the results container so live search/filter can replace
+  // those rows without rebinding handlers or disturbing the search field.
+  document.querySelector<HTMLElement>("[data-automation-results]")?.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-automation-action]");
+    if (!button) return;
+
+    const action = button.dataset.automationAction;
+    const id = button.dataset.id;
+    if (action === "new") openAutomationEditor();
+    if (action === "edit" && id) openAutomationEditor(id);
+    if (action === "delete" && id) void deleteAutomation(id);
+    if (action === "toggle-favorite" && id) void toggleAutomationFavorite(id);
+    if (action === "run" && id) void runAutomation(id);
+    if (action === "select-group") {
+      // A full render (not refreshAutomationResults) so the filter <select>
+      // picks up this group as a newly selected option and its "is-active"
+      // state, exactly as if the user had chosen it from the dropdown.
+      automationFilter = `group:${button.dataset.group ?? ""}`;
+      render();
+    }
+    if (action === "toggle-group-picker" && id) toggleAutomationGroupPicker(id);
+    if (action === "assign-group" && id) void assignAutomationGroup(id, button.dataset.group ?? "");
+  });
+
+  // The create-new-group mini form inside a card's group picker; submit
+  // bubbles up to the same results container as the click delegation above.
+  document.querySelector<HTMLElement>("[data-automation-results]")?.addEventListener("submit", (event) => {
+    const form = (event.target as HTMLElement).closest<HTMLFormElement>("[data-automation-group-form]");
+    if (!form) return;
+    event.preventDefault();
+    const id = form.dataset.automationGroupForm;
+    const input = form.querySelector<HTMLInputElement>('input[name="automation-group-new"]');
+    if (id && input) void assignAutomationGroup(id, input.value);
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-automation-action]").forEach((button) => {
+    if (button.closest("[data-automation-results]")) return;
+    button.addEventListener("click", () => {
+      const action = button.dataset.automationAction;
+      const id = button.dataset.id;
+      const index = Number(button.dataset.stepIndex);
+      if (action === "back") closeAutomationsView();
+      if (action === "open-backup-export") openAutomationBackupExport();
+      if (action === "open-backup-import") openAutomationBackupImport();
+      if (action === "close-backup") closeAutomationBackupDialog();
+      if (action === "choose-backup-file") void chooseAutomationBackupFile();
+      if (action === "open-trash") void openAutomationTrash();
+      if (action === "close-trash") closeAutomationTrash();
+      if (action === "restore-trash" && id) void restoreTrashAutomation(id);
+      if (action === "delete-trash-permanently" && id) void permanentlyDeleteTrashAutomation(id);
+      if (action === "empty-trash") void emptyAutomationTrash();
+      if (action === "new") openAutomationEditor();
+      if (action === "close-editor") closeAutomationEditor();
+      if (action === "pick-folder") void openPathPicker("automation", "folder");
+      if (action === "add-command") addAutomationStep("command");
+      if (action === "add-wait") addAutomationStep("wait");
+      if (action === "move-step") moveAutomationStep(index, Number(button.dataset.offset));
+      if (action === "remove-step") removeAutomationStep(index);
+      if (action === "stop-run") void stopAutomation();
+      if (action === "close-run") closeAutomationRun();
+      if (action === "dismiss-message") dismissMessage();
+      if (action === "show-groups") {
+        automationFilter = "groups";
+        render();
+      }
+      if (action === "toggle-editor-group-picker") {
+        automationEditorGroupPickerOpen = !automationEditorGroupPickerOpen;
+        render();
+      }
+      if (action === "pick-editor-group") {
+        updateAutomationEditor("group", button.dataset.group ?? "");
+        automationEditorGroupPickerOpen = false;
+        render();
+      }
+    });
+  });
+}
+
 // Main render function. This replaces the app HTML from state and then calls bindEvents().
 // For a larger app, this would be a good candidate to split into smaller render helpers.
 function render() {
+  if (currentView === "automations") {
+    renderAutomationsView();
+    return;
+  }
   const aliases = [...appState.aliases].sort(compareAliases);
   const existingNames = new Set(aliases.map((alias) => alias.name));
   const availableSuggestions = aliasSuggestions.filter(
@@ -1426,6 +3098,13 @@ function render() {
           <h1>EasyAlias</h1>
         </div>
         <div class="topbar-actions">
+          <button
+            class="header-icon-button"
+            type="button"
+            title="Open automations"
+            aria-label="Open automations"
+            data-action="open-automations"
+          ><i data-lucide="play"></i></button>
           <button
             class="header-icon-button"
             type="button"
@@ -1700,6 +3379,7 @@ function render() {
       SquareTerminal,
       FileDown,
       FileUp,
+      Play,
       RotateCcw,
       Star,
       Trash2,
@@ -2008,6 +3688,28 @@ function syncBackupSelectionControls() {
   }
 }
 
+function syncAutomationBackupSelectionControls() {
+  const selectedCount = automationBackupCandidates.filter((automation) =>
+    selectedAutomationBackupIds.has(automation.id)
+  ).length;
+  const selectAll = document.querySelector<HTMLInputElement>('input[name="automation-backup-all"]');
+
+  if (selectAll) {
+    selectAll.checked =
+      automationBackupCandidates.length > 0 && selectedCount === automationBackupCandidates.length;
+    selectAll.indeterminate = selectedCount > 0 && selectedCount < automationBackupCandidates.length;
+  }
+
+  const submitButton = document.querySelector<HTMLButtonElement>("[data-automation-backup-submit]");
+  if (submitButton) {
+    const actionLabel = automationBackupDialogMode === "export" ? "Export" : "Import";
+    submitButton.disabled = selectedCount === 0 || automationBackupBusy;
+    submitButton.textContent = automationBackupBusy
+      ? "Working..."
+      : `${actionLabel} Selected (${selectedCount})`;
+  }
+}
+
 // Because render() replaces the DOM, event listeners are reattached after every render.
 // Small live-preview updates skip render(), so their listeners stay intact.
 function bindEvents() {
@@ -2096,6 +3798,7 @@ function bindEvents() {
       const action = button.dataset.action;
       const id = button.dataset.id;
 
+      if (action === "open-automations") openAutomationsView();
       if (action === "open-import") void openShellImport();
       if (action === "open-backup-export") openBackupExport();
       if (action === "open-backup-import") openBackupImport();
@@ -2149,22 +3852,37 @@ async function bindNativeBackupDrop() {
   try {
     const { getCurrentWebview } = await import("@tauri-apps/api/webview");
     await getCurrentWebview().onDragDropEvent((event) => {
-      if (backupDialogMode !== "import") return;
+      const isAliasImport = backupDialogMode === "import";
+      const isAutomationImport = automationBackupDialogMode === "import";
+      if (!isAliasImport && !isAutomationImport) return;
+
+      const dropZoneSelector = isAutomationImport
+        ? ".automation-backup-drop-zone"
+        : ".backup-drop-zone";
 
       if (event.payload.type === "enter" || event.payload.type === "over") {
-        document.querySelector(".backup-drop-zone")?.classList.add("is-dragging");
+        document.querySelector(dropZoneSelector)?.classList.add("is-dragging");
         return;
       }
 
-      document.querySelector(".backup-drop-zone")?.classList.remove("is-dragging");
+      document.querySelector(dropZoneSelector)?.classList.remove("is-dragging");
       if (event.payload.type !== "drop") return;
       if (event.payload.paths.length !== 1) {
-        backupError = "Drop exactly one EasyAlias JSON backup.";
-        render();
+        if (isAutomationImport) {
+          automationBackupError = "Drop exactly one EasyAlias automation JSON backup.";
+          renderAutomationsView();
+        } else {
+          backupError = "Drop exactly one EasyAlias JSON backup.";
+          render();
+        }
         return;
       }
 
-      void inspectBackupFile(event.payload.paths[0]);
+      if (isAutomationImport) {
+        void inspectAutomationBackupFile(event.payload.paths[0]);
+      } else {
+        void inspectBackupFile(event.payload.paths[0]);
+      }
     });
   } catch (dropError) {
     console.warn("Native backup drop could not be initialized", dropError);
