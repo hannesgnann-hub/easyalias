@@ -199,6 +199,38 @@ struct AutomationSessions(Mutex<HashMap<String, AutomationSessionHandle>>);
 const AUTOMATION_DONE_MARKER: &str = "__EASYALIAS_AUTOMATION_DONE__";
 const AUTOMATION_BG_MARKER: &str = "__EASYALIAS_AUTOMATION_BG__";
 
+// A timed automation schedules an existing Automation to run at a wall-clock
+// time, optionally on specific weekdays, through the OS's own scheduler
+// (launchd on macOS) so it fires even while EasyAlias is not running.
+// `days` uses lowercase three-letter abbreviations ("mon".."sun"); empty
+// means every day. Run history is intentionally just the most recent
+// attempt - there is no UI for a full log, only "did the last run work".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TimedAutomation {
+    id: String,
+    automation_id: String,
+    time: String,
+    #[serde(default)]
+    days: Vec<String>,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    created_at: String,
+    updated_at: String,
+    #[serde(default)]
+    last_run_at: Option<u64>,
+    #[serde(default)]
+    last_run_status: Option<String>,
+    #[serde(default)]
+    last_run_output: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+const WEEKDAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
 // Keep the established aliases.zsh path for backwards compatibility. The file
 // contains syntax understood by both zsh and Bash, regardless of its extension.
 const SOURCE_LINE: &str = "source ~/.easyalias/aliases.zsh";
@@ -274,6 +306,14 @@ fn automations_file() -> Result<PathBuf, String> {
 
 fn automation_trash_file() -> Result<PathBuf, String> {
     Ok(app_dir()?.join("automations-trash.json"))
+}
+
+fn timed_automations_file() -> Result<PathBuf, String> {
+    Ok(app_dir()?.join("timed-automations.json"))
+}
+
+fn timed_automation_log_dir() -> Result<PathBuf, String> {
+    Ok(app_dir()?.join("timed-automation-logs"))
 }
 
 fn import_marker_file(_setup: &ShellSetup) -> Result<PathBuf, String> {
@@ -874,6 +914,275 @@ fn write_automation_entries(automations: &[Automation]) -> Result<(), String> {
         .map_err(|error| format!("{} could not be written: {}", path.display(), error))
 }
 
+fn parse_time_of_day(value: &str) -> Result<(u32, u32), String> {
+    let parts: Vec<&str> = value.split(':').collect();
+    if parts.len() != 2 {
+        return Err(format!("\"{}\" is not a valid time (expected HH:MM).", value));
+    }
+    let hour = parts[0]
+        .parse::<u32>()
+        .map_err(|_| format!("\"{}\" is not a valid time (expected HH:MM).", value))?;
+    let minute = parts[1]
+        .parse::<u32>()
+        .map_err(|_| format!("\"{}\" is not a valid time (expected HH:MM).", value))?;
+    if hour > 23 || minute > 59 {
+        return Err(format!("\"{}\" is not a valid time (expected HH:MM).", value));
+    }
+    Ok((hour, minute))
+}
+
+fn validate_timed_automation(entry: &TimedAutomation, automations: &[Automation]) -> Result<(), String> {
+    if entry.id.trim().is_empty() {
+        return Err("Every timed automation needs an id.".to_string());
+    }
+    if !automations
+        .iter()
+        .any(|automation| automation.id == entry.automation_id)
+    {
+        return Err("Choose an automation to schedule.".to_string());
+    }
+    parse_time_of_day(&entry.time)?;
+    for day in &entry.days {
+        if !WEEKDAYS.contains(&day.as_str()) {
+            return Err(format!("\"{}\" is not a valid weekday.", day));
+        }
+    }
+    Ok(())
+}
+
+fn load_timed_automation_entries() -> Result<Vec<TimedAutomation>, String> {
+    ensure_app_files()?;
+    let path = timed_automations_file()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let entries: Vec<TimedAutomation> = serde_json::from_str(&content)
+        .map_err(|error| format!("timed-automations.json is not valid EasyAlias JSON: {}", error))?;
+    Ok(entries)
+}
+
+fn write_timed_automation_entries(entries: &[TimedAutomation]) -> Result<(), String> {
+    ensure_app_files()?;
+    let json = serde_json::to_string_pretty(entries)
+        .map_err(|error| format!("Timed automations could not be serialized: {}", error))?;
+    let path = timed_automations_file()?;
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))
+}
+
+// launchd Weekday integers: 0 (or 7) = Sunday, 1 = Monday, ... 6 = Saturday.
+fn weekday_to_launchd(day: &str) -> u32 {
+    match day {
+        "sun" => 0,
+        "mon" => 1,
+        "tue" => 2,
+        "wed" => 3,
+        "thu" => 4,
+        "fri" => 5,
+        "sat" => 6,
+        _ => 0,
+    }
+}
+
+fn timed_automation_launchd_label(id: &str) -> String {
+    format!("dev.hannesgnann.easyalias.timed.{}", id)
+}
+
+fn timed_automation_plist_path(id: &str) -> Result<PathBuf, String> {
+    Ok(home_dir()?
+        .join("Library/LaunchAgents")
+        .join(format!("{}.plist", timed_automation_launchd_label(id))))
+}
+
+// Removes any existing launchd job for this timed automation, regardless of
+// whether one is currently loaded - safe to call even if nothing was ever
+// scheduled. Called both on delete and before every re-schedule, since
+// launchd does not pick up an edited plist without an unload/load cycle.
+fn unschedule_timed_automation_macos(id: &str) -> Result<(), String> {
+    let plist_path = timed_automation_plist_path(id)?;
+    if plist_path.exists() {
+        let _ = Command::new("launchctl")
+            .arg("unload")
+            .arg("-w")
+            .arg(&plist_path)
+            .output();
+        fs::remove_file(&plist_path).map_err(|error| {
+            format!("{} could not be removed: {}", plist_path.display(), error)
+        })?;
+    }
+    Ok(())
+}
+
+// Writes a launchd LaunchAgent that invokes this same executable with
+// `--run-timed-automation <id>` at the configured time (and weekdays, if
+// any), then loads it. This is what lets a timed automation fire even when
+// EasyAlias itself is not open - launchd, not the app, owns the clock.
+fn schedule_timed_automation_macos(entry: &TimedAutomation) -> Result<(), String> {
+    unschedule_timed_automation_macos(&entry.id)?;
+    if !entry.enabled {
+        return Ok(());
+    }
+
+    let exe = env::current_exe()
+        .map_err(|error| format!("Application path could not be determined: {}", error))?;
+    let (hour, minute) = parse_time_of_day(&entry.time)?;
+
+    let log_dir = timed_automation_log_dir()?;
+    fs::create_dir_all(&log_dir)
+        .map_err(|error| format!("{} could not be created: {}", log_dir.display(), error))?;
+    let log_path = log_dir.join(format!("{}.log", entry.id));
+
+    let intervals = if entry.days.is_empty() {
+        format!(
+            "    <dict>\n      <key>Hour</key><integer>{}</integer>\n      <key>Minute</key><integer>{}</integer>\n    </dict>\n",
+            hour, minute
+        )
+    } else {
+        entry
+            .days
+            .iter()
+            .map(|day| {
+                format!(
+                    "    <dict>\n      <key>Hour</key><integer>{}</integer>\n      <key>Minute</key><integer>{}</integer>\n      <key>Weekday</key><integer>{}</integer>\n    </dict>\n",
+                    hour, minute, weekday_to_launchd(day)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    let plist = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+  <key>Label</key>\n\
+  <string>{label}</string>\n\
+  <key>ProgramArguments</key>\n\
+  <array>\n\
+    <string>{exe}</string>\n\
+    <string>--run-timed-automation</string>\n\
+    <string>{id}</string>\n\
+  </array>\n\
+  <key>StartCalendarInterval</key>\n\
+  <array>\n\
+{intervals}\
+  </array>\n\
+  <key>StandardOutPath</key>\n\
+  <string>{log}</string>\n\
+  <key>StandardErrorPath</key>\n\
+  <string>{log}</string>\n\
+  <key>RunAtLoad</key>\n\
+  <false/>\n\
+</dict>\n\
+</plist>\n",
+        label = timed_automation_launchd_label(&entry.id),
+        exe = exe.display(),
+        id = entry.id,
+        intervals = intervals,
+        log = log_path.display()
+    );
+
+    let plist_path = timed_automation_plist_path(&entry.id)?;
+    if let Some(parent) = plist_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("{} could not be created: {}", parent.display(), error))?;
+    }
+    fs::write(&plist_path, plist)
+        .map_err(|error| format!("{} could not be written: {}", plist_path.display(), error))?;
+
+    let output = Command::new("launchctl")
+        .arg("load")
+        .arg("-w")
+        .arg(&plist_path)
+        .output()
+        .map_err(|error| format!("launchctl could not be started: {}", error))?;
+    if !output.status.success() {
+        return Err(format!(
+            "launchctl load failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(())
+}
+
+// Runs every step of `automation` sequentially through one persistent shell
+// session, exactly like an interactive run, but with no frontend to report
+// progress to - only the final outcome is recorded by the caller.
+fn run_automation_steps_headless(automation: &Automation) -> Result<(), String> {
+    let working_directory = automation_working_directory(&automation.path)?;
+    let mut session = spawn_automation_session(&working_directory)?;
+
+    for (index, step) in automation.steps.iter().enumerate() {
+        if step.kind == "wait" {
+            thread::sleep(std::time::Duration::from_secs(step.seconds));
+            continue;
+        }
+
+        match execute_in_session(&mut session, &step.command, step.behavior == "background") {
+            Ok(result) if step.behavior == "background" || result.exit_code == Some(0) => {}
+            Ok(result) => {
+                let _ = session.child.kill();
+                return Err(format!(
+                    "Step {} failed (exit code {}): {}",
+                    index + 1,
+                    result
+                        .exit_code
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    limited_output(result.stdout.as_bytes())
+                ));
+            }
+            Err(error) => {
+                let _ = session.child.kill();
+                return Err(error);
+            }
+        }
+    }
+
+    let _ = session.child.kill();
+    Ok(())
+}
+
+// Entry point for `--run-timed-automation <id>`: no Tauri runtime, no
+// window, just load the schedule and the automation it points to, run it,
+// and record the outcome so the app can show "last run" next time it opens.
+fn run_timed_automation_headless(id: &str) -> Result<(), String> {
+    let mut entries = load_timed_automation_entries()?;
+    let index = entries
+        .iter()
+        .position(|entry| entry.id == id)
+        .ok_or_else(|| "Timed automation no longer exists.".to_string())?;
+    let automation_id = entries[index].automation_id.clone();
+
+    let automations = load_automation_entries()?;
+    let automation = automations
+        .into_iter()
+        .find(|automation| automation.id == automation_id)
+        .ok_or_else(|| "Automation no longer exists.".to_string())?;
+
+    let run_result = run_automation_steps_headless(&automation);
+
+    entries[index].last_run_at = unix_timestamp().ok();
+    match &run_result {
+        Ok(()) => {
+            entries[index].last_run_status = Some("success".to_string());
+            entries[index].last_run_output = None;
+        }
+        Err(message) => {
+            entries[index].last_run_status = Some("error".to_string());
+            entries[index].last_run_output = Some(message.chars().take(500).collect());
+        }
+    }
+    write_timed_automation_entries(&entries)?;
+
+    run_result
+}
+
 fn write_automation_trash_entries(entries: &[AutomationTrashEntry]) -> Result<(), String> {
     // Trash is a history, not an active collection. Validate every workflow,
     // but do not apply the active-list count or cross-entry uniqueness limits.
@@ -1405,6 +1714,44 @@ fn stop_automation_session(
 }
 
 #[tauri::command]
+fn list_timed_automations() -> Result<Vec<TimedAutomation>, String> {
+    load_timed_automation_entries()
+}
+
+// Validates against the current automation list, persists, and re-syncs the
+// launchd job so the OS schedule always matches what was just saved -
+// editing the time/days/enabled state takes effect immediately, not just
+// after the app restarts.
+#[tauri::command]
+fn save_timed_automation(entry: TimedAutomation) -> Result<Vec<TimedAutomation>, String> {
+    let automations = load_automation_entries()?;
+    validate_timed_automation(&entry, &automations)?;
+
+    let mut entries = load_timed_automation_entries()?;
+    match entries.iter().position(|existing| existing.id == entry.id) {
+        Some(index) => entries[index] = entry.clone(),
+        None => entries.push(entry.clone()),
+    }
+    write_timed_automation_entries(&entries)?;
+    schedule_timed_automation_macos(&entry)?;
+
+    Ok(entries)
+}
+
+#[tauri::command]
+fn delete_timed_automation(id: String) -> Result<Vec<TimedAutomation>, String> {
+    let mut entries = load_timed_automation_entries()?;
+    let original_len = entries.len();
+    entries.retain(|entry| entry.id != id);
+    if entries.len() == original_len {
+        return Err("Timed automation no longer exists.".to_string());
+    }
+    write_timed_automation_entries(&entries)?;
+    unschedule_timed_automation_macos(&id)?;
+    Ok(entries)
+}
+
+#[tauri::command]
 fn list_trash() -> Result<Vec<TrashEntry>, String> {
     load_trash_entries()
 }
@@ -1726,6 +2073,21 @@ fn import_shell_aliases(
 }
 
 fn main() {
+    // launchd invokes this same executable to fire a timed automation, with
+    // no window and no Tauri runtime - handle that before anything else
+    // touches the GUI, then exit without ever starting the app.
+    let args: Vec<String> = env::args().collect();
+    if args.len() >= 3 && args[1] == "--run-timed-automation" {
+        let exit_code = match run_timed_automation_headless(&args[2]) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("Timed automation {} failed: {}", args[2], error);
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
+
     // Register native plugins before exposing commands to the frontend.
     // dialog = file/folder picker, opener = open GitHub in the system browser.
     tauri::Builder::default()
@@ -1748,6 +2110,9 @@ fn main() {
             start_automation_session,
             run_session_command,
             stop_automation_session,
+            list_timed_automations,
+            save_timed_automation,
+            delete_timed_automation,
             list_trash,
             move_alias_to_trash,
             restore_trash_alias,
@@ -2350,5 +2715,98 @@ mod tests {
 
         let validation_error = validate_automations(&[automation]).unwrap_err();
         assert!(validation_error.contains("group label"));
+    }
+
+    #[test]
+    fn parses_valid_and_rejects_invalid_times() {
+        assert_eq!(parse_time_of_day("09:30").unwrap(), (9, 30));
+        assert_eq!(parse_time_of_day("00:00").unwrap(), (0, 0));
+        assert_eq!(parse_time_of_day("23:59").unwrap(), (23, 59));
+        assert!(parse_time_of_day("24:00").is_err());
+        assert!(parse_time_of_day("9:30").is_ok()); // single-digit hour is fine, just parsed as u32
+        assert!(parse_time_of_day("09:60").is_err());
+        assert!(parse_time_of_day("not-a-time").is_err());
+    }
+
+    #[test]
+    fn validates_timed_automation_against_its_target() {
+        let automation = test_automation("devstart", "DevStart", "echo hi");
+        let mut entry = TimedAutomation {
+            id: "timed-1".to_string(),
+            automation_id: "devstart".to_string(),
+            time: "09:00".to_string(),
+            days: vec!["mon".to_string(), "wed".to_string()],
+            enabled: true,
+            created_at: "2026-08-24T18:00:00.000Z".to_string(),
+            updated_at: "2026-08-24T18:00:00.000Z".to_string(),
+            last_run_at: None,
+            last_run_status: None,
+            last_run_output: None,
+        };
+        assert!(validate_timed_automation(&entry, &[automation.clone()]).is_ok());
+
+        entry.automation_id = "missing".to_string();
+        assert!(validate_timed_automation(&entry, &[automation.clone()])
+            .unwrap_err()
+            .contains("Choose an automation"));
+
+        entry.automation_id = "devstart".to_string();
+        entry.days = vec!["someday".to_string()];
+        assert!(validate_timed_automation(&entry, &[automation])
+            .unwrap_err()
+            .contains("weekday"));
+    }
+
+    // Exercises the real macOS scheduler end to end: writes a LaunchAgent
+    // plist, loads it with the actual `launchctl`, confirms launchd reports
+    // it as registered, then removes it and confirms launchd forgets it.
+    // Uses a temporary HOME so the plist never touches the developer's real
+    // ~/Library/LaunchAgents.
+    #[test]
+    fn schedules_and_unschedules_a_real_launchd_job() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let home = TemporaryHome::create();
+
+        let entry = TimedAutomation {
+            id: format!("test-schedule-{}", unix_timestamp().unwrap()),
+            automation_id: "devstart".to_string(),
+            time: "03:17".to_string(),
+            days: vec!["mon".to_string()],
+            enabled: true,
+            created_at: "2026-08-24T18:00:00.000Z".to_string(),
+            updated_at: "2026-08-24T18:00:00.000Z".to_string(),
+            last_run_at: None,
+            last_run_status: None,
+            last_run_output: None,
+        };
+
+        schedule_timed_automation_macos(&entry).unwrap();
+
+        let plist_path = timed_automation_plist_path(&entry.id).unwrap();
+        assert!(plist_path.exists(), "plist was not written");
+        let plist_content = fs::read_to_string(&plist_path).unwrap();
+        assert!(plist_content.contains(&timed_automation_launchd_label(&entry.id)));
+        assert!(plist_content.contains("<integer>3</integer>"));
+        assert!(plist_content.contains("<integer>17</integer>"));
+        assert!(plist_content.contains("<integer>1</integer>")); // Monday
+
+        let label = timed_automation_launchd_label(&entry.id);
+        let list_output = Command::new("launchctl").arg("list").arg(&label).output().unwrap();
+        assert!(
+            list_output.status.success(),
+            "launchctl does not report the job as loaded: {}",
+            String::from_utf8_lossy(&list_output.stderr)
+        );
+
+        unschedule_timed_automation_macos(&entry.id).unwrap();
+        assert!(!plist_path.exists(), "plist was not removed");
+
+        let list_after = Command::new("launchctl").arg("list").arg(&label).output().unwrap();
+        assert!(
+            !list_after.status.success(),
+            "launchctl still reports the job as loaded after unscheduling"
+        );
+
+        drop(home);
     }
 }

@@ -188,6 +188,34 @@ type AutomationRunState = {
   steps: AutomationRunStep[];
 };
 
+// Schedules an existing Automation to run at a wall-clock time through the
+// OS's own scheduler (launchd on macOS), so it fires even while EasyAlias
+// itself is not running. `days` uses lowercase three-letter abbreviations;
+// an empty array means every day.
+type TimedAutomation = {
+  id: string;
+  automationId: string;
+  time: string;
+  days: string[];
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt: number | null;
+  lastRunStatus: "success" | "error" | null;
+  lastRunOutput: string | null;
+};
+
+const weekdayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+const weekdayLabels: Record<(typeof weekdayOrder)[number], string> = {
+  mon: "Mon",
+  tue: "Tue",
+  wed: "Wed",
+  thu: "Thu",
+  fri: "Fri",
+  sat: "Sat",
+  sun: "Sun"
+};
+
 // Filters are inferred from step commands (same patterns as the alias
 // filter) plus favorites, background steps, and groups. "groups" switches
 // the results area to a browsable group overview instead of filtering the
@@ -632,6 +660,12 @@ let automationTrashEntries: AutomationTrashEntry[] = [];
 let automationTrashOpen = false;
 let automationTrashBusy = false;
 let automationTrashError = "";
+// Timed automations are their own small list within the placeholder view.
+// The editor keeps a detached draft, same pattern as the automation editor.
+let timedAutomations: TimedAutomation[] = [];
+let timedAutomationEditor: TimedAutomation | null = null;
+let timedAutomationBusy = false;
+let timedAutomationError = "";
 
 const trashRetentionSeconds = 30 * 24 * 60 * 60;
 
@@ -832,6 +866,12 @@ async function loadState() {
         automationTrashEntries = [];
         error = `Automation Trash could not be loaded: ${String(automationTrashLoadError)}`;
       }
+      try {
+        timedAutomations = await invokeCommand<TimedAutomation[]>("list_timed_automations");
+      } catch (timedAutomationLoadError) {
+        timedAutomations = [];
+        error = `Timed automations could not be loaded: ${String(timedAutomationLoadError)}`;
+      }
       selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
       render();
       return;
@@ -880,8 +920,16 @@ async function loadState() {
       .sort((left, right) => right.deletedAt - left.deletedAt);
     saveBrowserAutomationTrash();
   }
+  const savedTimedAutomations = localStorage.getItem("easyalias-timed-automations");
+  if (savedTimedAutomations) {
+    timedAutomations = JSON.parse(savedTimedAutomations) as TimedAutomation[];
+  }
 
   render();
+}
+
+function saveBrowserTimedAutomations() {
+  localStorage.setItem("easyalias-timed-automations", JSON.stringify(timedAutomations));
 }
 
 function saveBrowserTrash() {
@@ -2050,44 +2098,343 @@ function closeAutomationsView() {
 // branch. Intentionally empty; fill in as the feature takes shape.
 function openTimedAutomationsView() {
   clearMessages();
+  timedAutomationError = "";
   currentView = "timed-automations";
   render();
 }
 
 function closeTimedAutomationsView() {
+  if (timedAutomationBusy) return;
+  timedAutomationEditor = null;
+  timedAutomationError = "";
   currentView = "aliases";
   render();
 }
 
+function openTimedAutomationEditor(id?: string) {
+  const existing = id ? timedAutomations.find((entry) => entry.id === id) : null;
+  const timestamp = nowIso();
+  timedAutomationEditor = existing
+    ? { ...existing }
+    : {
+        id: createId(),
+        automationId: automations[0]?.id ?? "",
+        time: "09:00",
+        days: [],
+        enabled: true,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        lastRunAt: null,
+        lastRunStatus: null,
+        lastRunOutput: null
+      };
+  timedAutomationError = "";
+  render();
+}
+
+function closeTimedAutomationEditor() {
+  if (timedAutomationBusy) return;
+  timedAutomationEditor = null;
+  timedAutomationError = "";
+  render();
+}
+
+function updateTimedAutomationEditor<K extends "automationId" | "time">(key: K, value: TimedAutomation[K]) {
+  if (!timedAutomationEditor) return;
+  timedAutomationEditor = { ...timedAutomationEditor, [key]: value };
+  timedAutomationError = "";
+}
+
+function toggleTimedAutomationDay(day: string) {
+  if (!timedAutomationEditor) return;
+  const days = timedAutomationEditor.days.includes(day)
+    ? timedAutomationEditor.days.filter((existing) => existing !== day)
+    : [...timedAutomationEditor.days, day];
+  timedAutomationEditor = { ...timedAutomationEditor, days };
+  render();
+}
+
+function setTimedAutomationEveryDay() {
+  if (!timedAutomationEditor) return;
+  timedAutomationEditor = { ...timedAutomationEditor, days: [] };
+  render();
+}
+
+function validateTimedAutomation(entry: TimedAutomation) {
+  if (!entry.automationId) return "Choose an automation to schedule.";
+  if (!entry.time) return "Choose a time.";
+  return "";
+}
+
+async function saveTimedAutomationEntry(event: SubmitEvent) {
+  event.preventDefault();
+  if (!timedAutomationEditor || timedAutomationBusy) return;
+
+  timedAutomationError = validateTimedAutomation(timedAutomationEditor);
+  if (timedAutomationError) {
+    render();
+    return;
+  }
+
+  timedAutomationBusy = true;
+  render();
+  const savedEntry: TimedAutomation = { ...timedAutomationEditor, updatedAt: nowIso() };
+  try {
+    if (isTauriRuntime()) {
+      timedAutomations = await invokeCommand<TimedAutomation[]>("save_timed_automation", { entry: savedEntry });
+    } else {
+      const exists = timedAutomations.some((item) => item.id === savedEntry.id);
+      timedAutomations = exists
+        ? timedAutomations.map((item) => (item.id === savedEntry.id ? savedEntry : item))
+        : [...timedAutomations, savedEntry];
+      saveBrowserTimedAutomations();
+    }
+    timedAutomationEditor = null;
+    notice = "Timed automation saved.";
+  } catch (saveError) {
+    timedAutomationError = String(saveError);
+  } finally {
+    timedAutomationBusy = false;
+    render();
+  }
+}
+
+async function deleteTimedAutomationEntry(id: string) {
+  if (timedAutomationBusy) return;
+  if (!window.confirm("Delete this timed automation?")) return;
+
+  timedAutomationBusy = true;
+  render();
+  try {
+    if (isTauriRuntime()) {
+      timedAutomations = await invokeCommand<TimedAutomation[]>("delete_timed_automation", { id });
+    } else {
+      timedAutomations = timedAutomations.filter((item) => item.id !== id);
+      saveBrowserTimedAutomations();
+    }
+    notice = "Timed automation deleted.";
+  } catch (deleteError) {
+    error = String(deleteError);
+  } finally {
+    timedAutomationBusy = false;
+    render();
+  }
+}
+
+async function toggleTimedAutomationEnabled(id: string) {
+  if (timedAutomationBusy) return;
+  const entry = timedAutomations.find((item) => item.id === id);
+  if (!entry) return;
+
+  timedAutomationBusy = true;
+  render();
+  const updated: TimedAutomation = { ...entry, enabled: !entry.enabled, updatedAt: nowIso() };
+  try {
+    if (isTauriRuntime()) {
+      timedAutomations = await invokeCommand<TimedAutomation[]>("save_timed_automation", { entry: updated });
+    } else {
+      timedAutomations = timedAutomations.map((item) => (item.id === id ? updated : item));
+      saveBrowserTimedAutomations();
+    }
+  } catch (toggleError) {
+    error = String(toggleError);
+  } finally {
+    timedAutomationBusy = false;
+    render();
+  }
+}
+
+function formatTimedAutomationDays(days: string[]) {
+  if (!days.length) return "Every day";
+  return weekdayOrder
+    .filter((day) => days.includes(day))
+    .map((day) => weekdayLabels[day])
+    .join(", ");
+}
+
+function automationNameForId(automationId: string) {
+  return automations.find((automation) => automation.id === automationId)?.name ?? "Deleted automation";
+}
+
+function renderTimedAutomationEditor() {
+  if (!timedAutomationEditor) return "";
+  const entry = timedAutomationEditor;
+  const isNew = !timedAutomations.some((item) => item.id === entry.id);
+
+  return `
+    <section class="modal-layer" role="presentation">
+      <form class="modal-card automation-editor" id="timed-automation-form" role="dialog" aria-modal="true" aria-labelledby="timed-automation-editor-title">
+        <div class="modal-title">
+          <div>
+            <p class="eyebrow">Schedule</p>
+            <h2 id="timed-automation-editor-title">${isNew ? "New timed automation" : "Edit timed automation"}</h2>
+          </div>
+          <button class="ghost-button modal-close" type="button" data-timed-action="close-editor" ${timedAutomationBusy ? "disabled" : ""}>Close</button>
+        </div>
+
+        <p class="automation-intro">Runs through the operating system's own scheduler, so it fires at the chosen time even while EasyAlias is closed.</p>
+        ${timedAutomationError ? `<p class="modal-error">${escapeHtml(timedAutomationError)}</p>` : ""}
+
+        <div class="automation-form-grid">
+          <label>
+            Automation
+            <select name="timed-automation-automation">
+              ${automations
+                .map(
+                  (automation) =>
+                    `<option value="${escapeHtml(automation.id)}" ${entry.automationId === automation.id ? "selected" : ""}>${escapeHtml(automation.name)}</option>`
+                )
+                .join("")}
+            </select>
+          </label>
+          <label>
+            Time
+            <input type="time" name="timed-automation-time" value="${escapeHtml(entry.time)}" />
+          </label>
+        </div>
+
+        <div class="timed-automation-days">
+          <span class="automation-optional">Repeat</span>
+          <div class="timed-automation-day-chips">
+            <button type="button" class="timed-automation-day-chip ${entry.days.length === 0 ? "is-selected" : ""}" data-timed-action="every-day">Every day</button>
+            ${weekdayOrder
+              .map(
+                (day) =>
+                  `<button type="button" class="timed-automation-day-chip ${entry.days.includes(day) ? "is-selected" : ""}" data-timed-action="toggle-day" data-day="${day}">${weekdayLabels[day]}</button>`
+              )
+              .join("")}
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button class="ghost-button" type="button" data-timed-action="close-editor" ${timedAutomationBusy ? "disabled" : ""}>Cancel</button>
+          <button class="primary-button" type="submit" ${timedAutomationBusy ? "disabled" : ""}><i data-lucide="save"></i><span>${timedAutomationBusy ? "Saving..." : "Save"}</span></button>
+        </div>
+      </form>
+    </section>`;
+}
+
 function renderTimedAutomationsView() {
+  const sortedEntries = [...timedAutomations].sort((left, right) => left.time.localeCompare(right.time));
+
   appElement.innerHTML = `
     <section class="shell automation-shell">
       <header class="topbar automation-topbar">
         <div>
-          <p class="eyebrow">Coming Soon</p>
+          <p class="eyebrow">Runs Even While EasyAlias Is Closed</p>
           <h1>Timed Automations</h1>
         </div>
         <div class="topbar-actions">
           <button class="header-icon-button" type="button" title="Back to aliases" aria-label="Back to aliases" data-action="close-timed-automations"><i data-lucide="arrow-left"></i></button>
+          <button class="header-icon-button" type="button" title="New timed automation" aria-label="New timed automation" data-action="new-timed-automation" ${automations.length ? "" : "disabled"}><i data-lucide="plus"></i></button>
         </div>
       </header>
 
-      <div class="empty-state">
-        <strong>Nothing here yet</strong>
-        <span>This page is a placeholder for the timed-automations feature.</span>
-      </div>
+      ${
+        notice
+          ? `<div class="message-banner notice" role="status"><span>${escapeHtml(notice)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-action="dismiss-message"><i data-lucide="x"></i></button></div>`
+          : ""
+      }
+      ${
+        error
+          ? `<div class="message-banner error" role="alert"><span>${escapeHtml(error)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-action="dismiss-message"><i data-lucide="x"></i></button></div>`
+          : ""
+      }
+
+      ${
+        !automations.length
+          ? `<div class="empty-state"><strong>Create an automation first</strong><span>Timed automations schedule an existing workflow - open Automations to build one.</span><button class="primary-button" type="button" data-action="open-automations"><i data-lucide="play"></i><span>Open automations</span></button></div>`
+          : sortedEntries.length
+            ? `<div class="timed-automation-list">
+                ${sortedEntries
+                  .map(
+                    (entry) => `
+                      <article class="timed-automation-row ${entry.enabled ? "" : "is-disabled"}">
+                        <div class="timed-automation-time">
+                          <strong>${escapeHtml(entry.time)}</strong>
+                          <span>${escapeHtml(formatTimedAutomationDays(entry.days))}</span>
+                        </div>
+                        <div class="timed-automation-copy">
+                          <strong>${escapeHtml(automationNameForId(entry.automationId))}</strong>
+                          ${
+                            entry.lastRunAt
+                              ? `<span class="timed-automation-last-run is-${entry.lastRunStatus ?? "unknown"}">Last run ${formatDeletedDate(entry.lastRunAt)} · ${entry.lastRunStatus === "error" ? "failed" : "succeeded"}</span>`
+                              : `<span class="timed-automation-last-run">Never run yet</span>`
+                          }
+                          ${
+                            entry.lastRunStatus === "error" && entry.lastRunOutput
+                              ? `<pre class="timed-automation-error-output">${escapeHtml(entry.lastRunOutput)}</pre>`
+                              : ""
+                          }
+                        </div>
+                        <div class="timed-automation-actions">
+                          <label class="timed-automation-toggle">
+                            <input type="checkbox" ${entry.enabled ? "checked" : ""} data-timed-action="toggle-enabled" data-id="${escapeHtml(entry.id)}" ${timedAutomationBusy ? "disabled" : ""} />
+                            <span>${entry.enabled ? "On" : "Off"}</span>
+                          </label>
+                          <button class="header-icon-button" type="button" title="Edit" aria-label="Edit timed automation" data-timed-action="edit" data-id="${escapeHtml(entry.id)}" ${timedAutomationBusy ? "disabled" : ""}><i data-lucide="pencil"></i></button>
+                          <button class="header-icon-button automation-delete-button" type="button" title="Delete" aria-label="Delete timed automation" data-timed-action="delete" data-id="${escapeHtml(entry.id)}" ${timedAutomationBusy ? "disabled" : ""}><i data-lucide="trash-2"></i></button>
+                        </div>
+                      </article>`
+                  )
+                  .join("")}
+              </div>`
+            : `<div class="empty-state"><strong>No timed automations yet</strong><span>Schedule an automation to run automatically, even while EasyAlias is closed.</span><button class="primary-button" type="button" data-action="new-timed-automation"><i data-lucide="plus"></i><span>New timed automation</span></button></div>`
+      }
+
+      ${renderTimedAutomationEditor()}
 
       <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>Become a sponsor</a></aside>
       <footer class="app-footer"><a href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>© Hannes Gnann</a><span aria-hidden="true">-</span><a href="${redditUrl}" target="_blank" rel="noreferrer" data-external-link>Reddit</a><span aria-hidden="true">-</span><a href="${websiteUrl}" target="_blank" rel="noreferrer" data-external-link>Website</a></footer>
     </section>`;
 
   createIcons({
-    icons: { ArrowLeft },
+    icons: { ArrowLeft, Pencil, Play, Plus, Save, Trash2, X },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
 
-  document.querySelector<HTMLButtonElement>('[data-action="close-timed-automations"]')?.addEventListener("click", closeTimedAutomationsView);
+  scheduleMessageDismissal();
+  bindTimedAutomationEvents();
+}
+
+function bindTimedAutomationEvents() {
+  document.querySelector<HTMLFormElement>("#timed-automation-form")?.addEventListener("submit", saveTimedAutomationEntry);
   document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => link.addEventListener("click", openExternalLink));
+
+  document.querySelector<HTMLSelectElement>('select[name="timed-automation-automation"]')?.addEventListener("change", (event) => {
+    updateTimedAutomationEditor("automationId", (event.target as HTMLSelectElement).value);
+  });
+  document.querySelector<HTMLInputElement>('input[name="timed-automation-time"]')?.addEventListener("input", (event) => {
+    updateTimedAutomationEditor("time", (event.target as HTMLInputElement).value);
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-timed-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.timedAction;
+      const id = button.dataset.id;
+      if (action === "close-editor") closeTimedAutomationEditor();
+      if (action === "every-day") setTimedAutomationEveryDay();
+      if (action === "toggle-day" && button.dataset.day) toggleTimedAutomationDay(button.dataset.day);
+      if (action === "edit" && id) openTimedAutomationEditor(id);
+      if (action === "delete" && id) void deleteTimedAutomationEntry(id);
+    });
+  });
+
+  document.querySelectorAll<HTMLInputElement>('[data-timed-action="toggle-enabled"]').forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      const id = checkbox.dataset.id;
+      if (id) void toggleTimedAutomationEnabled(id);
+    });
+  });
+
+  document.querySelector<HTMLButtonElement>('[data-action="close-timed-automations"]')?.addEventListener("click", closeTimedAutomationsView);
+  document.querySelectorAll<HTMLButtonElement>('[data-action="new-timed-automation"]').forEach((button) => {
+    button.addEventListener("click", () => openTimedAutomationEditor());
+  });
+  document.querySelector<HTMLButtonElement>('[data-action="open-automations"]')?.addEventListener("click", openAutomationsView);
+  document.querySelectorAll<HTMLButtonElement>('[data-action="dismiss-message"]').forEach((button) => {
+    button.addEventListener("click", dismissMessage);
+  });
 }
 
 function openAutomationEditor(id?: string) {

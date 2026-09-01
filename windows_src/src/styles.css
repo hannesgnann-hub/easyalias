@@ -1502,6 +1502,130 @@ textarea:focus {
   background: #d9f4ef;
 }
 
+.timed-automation-list {
+  display: grid;
+  gap: 10px;
+}
+
+.timed-automation-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid #dce5e1;
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.timed-automation-row.is-disabled {
+  opacity: 0.6;
+}
+
+.timed-automation-time {
+  display: grid;
+  gap: 2px;
+}
+
+.timed-automation-time strong {
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.timed-automation-time span {
+  color: #66736f;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.timed-automation-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.timed-automation-last-run {
+  color: #66736f;
+  font-size: 0.78rem;
+}
+
+.timed-automation-last-run.is-error {
+  color: #8a302b;
+}
+
+.timed-automation-last-run.is-success {
+  color: #17423d;
+}
+
+.timed-automation-error-output {
+  max-height: 120px;
+  overflow: auto;
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  color: #dff7ef;
+  background: #10241f;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.timed-automation-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.timed-automation-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid #d7e1dd;
+  border-radius: 999px;
+  color: #45534f;
+  font-size: 0.76rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.timed-automation-toggle input {
+  accent-color: #0f766e;
+}
+
+.timed-automation-days {
+  display: grid;
+  gap: 8px;
+}
+
+.timed-automation-day-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.timed-automation-day-chip {
+  padding: 6px 12px;
+  border: 1px solid #d7e1dd;
+  border-radius: 999px;
+  color: #45534f;
+  background: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.timed-automation-day-chip:hover {
+  border-color: #8fb8ad;
+  background: #e8f5f1;
+}
+
+.timed-automation-day-chip.is-selected {
+  color: #fff;
+  border-color: #0f766e;
+  background: #0f766e;
+}
+
 .automation-editor,
 .automation-runner {
   width: min(940px, 100%);
@@ -1847,6 +1971,15 @@ textarea:focus {
     grid-column: 2;
     display: flex;
     justify-content: flex-end;
+  }
+
+  .timed-automation-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .timed-automation-actions {
+    justify-content: space-between;
   }
 
   .primary-button,
