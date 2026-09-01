@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleStop,
+  Clock,
   Clock3,
   createIcons,
   FileDown,
@@ -124,7 +125,7 @@ type AliasSuggestion = AliasForm & {
 type PickerTarget = "create" | "edit" | "automation";
 type PickerKind = "file" | "folder";
 type BackupDialogMode = "export" | "import";
-type AppView = "aliases" | "automations";
+type AppView = "aliases" | "automations" | "timed-automations";
 type AutomationStepKind = "command" | "wait";
 type AutomationCommandBehavior = "wait" | "background";
 type AutomationRunStepStatus = "pending" | "running" | "success" | "error" | "skipped";
@@ -1630,6 +1631,50 @@ function closeAutomationsView() {
   render();
 }
 
+// Placeholder view for the timed-automations feature being built on this
+// branch. Intentionally empty; fill in as the feature takes shape.
+function openTimedAutomationsView() {
+  clearMessages();
+  currentView = "timed-automations";
+  render();
+}
+
+function closeTimedAutomationsView() {
+  currentView = "aliases";
+  render();
+}
+
+function renderTimedAutomationsView() {
+  appElement.innerHTML = `
+    <section class="shell automation-shell">
+      <header class="topbar automation-topbar">
+        <div>
+          <p class="eyebrow">Coming Soon</p>
+          <h1>Timed Automations</h1>
+        </div>
+        <div class="topbar-actions">
+          <button class="header-icon-button" type="button" title="Back to aliases" aria-label="Back to aliases" data-action="close-timed-automations"><i data-lucide="arrow-left"></i></button>
+        </div>
+      </header>
+
+      <div class="empty-state">
+        <strong>Nothing here yet</strong>
+        <span>This page is a placeholder for the timed-automations feature.</span>
+      </div>
+
+      <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>Become a sponsor</a></aside>
+      <footer class="app-footer"><a href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>© Hannes Gnann</a><span aria-hidden="true">-</span><a href="${redditUrl}" target="_blank" rel="noreferrer" data-external-link>Reddit</a><span aria-hidden="true">-</span><a href="${websiteUrl}" target="_blank" rel="noreferrer" data-external-link>Website</a></footer>
+    </section>`;
+
+  createIcons({
+    icons: { ArrowLeft },
+    attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
+  });
+
+  document.querySelector<HTMLButtonElement>('[data-action="close-timed-automations"]')?.addEventListener("click", closeTimedAutomationsView);
+  document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => link.addEventListener("click", openExternalLink));
+}
+
 function openAutomationEditor(id?: string) {
   const existing = id ? automations.find((automation) => automation.id === id) : null;
   const timestamp = nowIso();
@@ -3085,6 +3130,10 @@ function render() {
     renderAutomationsView();
     return;
   }
+  if (currentView === "timed-automations") {
+    renderTimedAutomationsView();
+    return;
+  }
   const aliases = [...appState.aliases].sort(compareAliases);
   const existingNames = new Set(aliases.map((alias) => alias.name.toLowerCase()));
   const availableSuggestions = aliasSuggestions.filter(
@@ -3109,6 +3158,13 @@ function render() {
           <h1>EasyAlias</h1>
         </div>
         <div class="topbar-actions">
+          <button
+            class="header-icon-button"
+            type="button"
+            title="Timed automations"
+            aria-label="Open timed automations"
+            data-action="open-timed-automations"
+          ><i data-lucide="clock"></i></button>
           <button
             class="header-icon-button"
             type="button"
@@ -3407,6 +3463,7 @@ function render() {
     icons: {
       ChevronLeft,
       ChevronRight,
+      Clock,
       SquareTerminal,
       FileDown,
       FileUp,
@@ -3877,6 +3934,7 @@ function bindEvents() {
       const action = button.dataset.action;
       const id = button.dataset.id;
 
+      if (action === "open-timed-automations") openTimedAutomationsView();
       if (action === "open-automations") openAutomationsView();
       if (action === "open-import") void openCommandFileImport();
       if (action === "open-backup-export") openBackupExport();
