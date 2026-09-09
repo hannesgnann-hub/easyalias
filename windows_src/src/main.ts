@@ -21,6 +21,7 @@ import {
   Search,
   SquareTerminal,
   Star,
+  SunMoon,
   Tag,
   Tags,
   Terminal,
@@ -125,7 +126,7 @@ type AliasSuggestion = AliasForm & {
 type PickerTarget = "create" | "edit" | "automation";
 type PickerKind = "file" | "folder";
 type BackupDialogMode = "export" | "import";
-type AppView = "aliases" | "automations" | "timed-automations";
+type AppView = "aliases" | "automations" | "vscode-theme-schedule";
 type AutomationStepKind = "command" | "wait";
 type AutomationCommandBehavior = "wait" | "background";
 type AutomationRunStepStatus = "pending" | "running" | "success" | "error" | "skipped";
@@ -215,6 +216,21 @@ const weekdayLabels: Record<(typeof weekdayOrder)[number], string> = {
   sat: "Sat",
   sun: "Sun"
 };
+
+// A single global schedule that switches VS Code's color theme by time of
+// day, running through the OS's own scheduler (Windows Task Scheduler) so
+// it self-corrects even while VS Code is already open. `lightStart`/
+// `darkStart` are "HH:MM"; the window between them may wrap past midnight.
+type VscodeThemeSchedule = {
+  enabled: boolean;
+  lightTheme: string;
+  darkTheme: string;
+  lightStart: string;
+  darkStart: string;
+  updatedAt: string;
+};
+
+const VSCODE_THEME_CHECK_INTERVAL_MINUTES = 10;
 
 // Filters are inferred from step commands (same patterns as the alias
 // filter, minus favorites, which this automation model does not have yet)
@@ -621,6 +637,9 @@ let automationFilter: AutomationFilter = "all";
 // is separate since it lives in its own modal.
 let automationGroupPickerId: string | null = null;
 let automationEditorGroupPickerOpen = false;
+// Only one card's quick schedule-picker is open at a time, same as the
+// group picker above.
+let scheduleEditorAutomationId: string | null = null;
 // Automation backups deliberately use their own state and file format. This
 // prevents a workflow backup from being mistaken for an alias backup while
 // retaining the same selective export/import experience.
@@ -642,6 +661,18 @@ let timedAutomations: TimedAutomation[] = [];
 let timedAutomationEditor: TimedAutomation | null = null;
 let timedAutomationBusy = false;
 let timedAutomationError = "";
+// A single settings-panel-style form; there is nothing to select or list,
+// so unlike timedAutomationEditor this is edited in place, not as a draft.
+let vscodeThemeSchedule: VscodeThemeSchedule = {
+  enabled: false,
+  lightTheme: "Default Light+",
+  darkTheme: "Default Dark+",
+  lightStart: "06:00",
+  darkStart: "17:00",
+  updatedAt: ""
+};
+let vscodeThemeScheduleBusy = false;
+let vscodeThemeScheduleError = "";
 
 const trashRetentionSeconds = 30 * 24 * 60 * 60;
 
@@ -859,6 +890,11 @@ async function loadState() {
         timedAutomations = [];
         error = `Timed automations could not be loaded: ${String(timedAutomationLoadError)}`;
       }
+      try {
+        vscodeThemeSchedule = await invokeCommand<VscodeThemeSchedule>("load_vscode_theme_schedule_state");
+      } catch (vscodeThemeScheduleLoadError) {
+        error = `VS Code theme schedule could not be loaded: ${String(vscodeThemeScheduleLoadError)}`;
+      }
       selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
       render();
       return;
@@ -896,8 +932,16 @@ async function loadState() {
   if (savedTimedAutomations) {
     timedAutomations = JSON.parse(savedTimedAutomations) as TimedAutomation[];
   }
+  const savedVscodeThemeSchedule = localStorage.getItem("easyalias-vscode-theme-schedule");
+  if (savedVscodeThemeSchedule) {
+    vscodeThemeSchedule = JSON.parse(savedVscodeThemeSchedule) as VscodeThemeSchedule;
+  }
 
   render();
+}
+
+function saveBrowserVscodeThemeSchedule() {
+  localStorage.setItem("easyalias-vscode-theme-schedule", JSON.stringify(vscodeThemeSchedule));
 }
 
 function saveBrowserTimedAutomations() {
@@ -1665,6 +1709,8 @@ function openAutomationsView() {
   clearMessages();
   automationError = "";
   automationGroupPickerId = null;
+  scheduleEditorAutomationId = null;
+  timedAutomationEditor = null;
   currentView = "automations";
   render();
 }
@@ -1675,33 +1721,26 @@ function closeAutomationsView() {
   automationError = "";
   automationRun = null;
   automationGroupPickerId = null;
-  currentView = "aliases";
-  render();
-}
-
-function openTimedAutomationsView() {
-  clearMessages();
-  timedAutomationError = "";
-  currentView = "timed-automations";
-  render();
-}
-
-function closeTimedAutomationsView() {
-  if (timedAutomationBusy) return;
+  scheduleEditorAutomationId = null;
   timedAutomationEditor = null;
-  timedAutomationError = "";
   currentView = "aliases";
   render();
 }
 
-function openTimedAutomationEditor(id?: string) {
-  const existing = id ? timedAutomations.find((entry) => entry.id === id) : null;
+// Opens/closes an automation card's inline schedule popover - same pattern
+// as toggleAutomationGroupPicker, so only one card's popover is open at a
+// time and it collapses back into the card flow instead of a full page.
+// Opens the schedule modal for one automation - a real modal (not an inline
+// card popover) so its content never has to fit inside a grid cell, which
+// is what caused the picker to overflow into neighboring cards.
+function openAutomationSchedulePicker(automationId: string) {
+  const existing = timedAutomations.find((entry) => entry.automationId === automationId);
   const timestamp = nowIso();
   timedAutomationEditor = existing
     ? { ...existing }
     : {
         id: createId(),
-        automationId: automations[0]?.id ?? "",
+        automationId,
         time: "09:00",
         days: [],
         enabled: true,
@@ -1711,21 +1750,29 @@ function openTimedAutomationEditor(id?: string) {
         lastRunStatus: null,
         lastRunOutput: null
       };
+  scheduleEditorAutomationId = automationId;
   timedAutomationError = "";
   render();
 }
 
-function closeTimedAutomationEditor() {
+function closeAutomationSchedulePicker() {
   if (timedAutomationBusy) return;
+  scheduleEditorAutomationId = null;
   timedAutomationEditor = null;
   timedAutomationError = "";
   render();
 }
 
-function updateTimedAutomationEditor<K extends "automationId" | "time">(key: K, value: TimedAutomation[K]) {
+function updateTimedAutomationEditorTime(time: string) {
   if (!timedAutomationEditor) return;
-  timedAutomationEditor = { ...timedAutomationEditor, [key]: value };
+  timedAutomationEditor = { ...timedAutomationEditor, time };
   timedAutomationError = "";
+}
+
+function setTimedAutomationEditorEnabled(enabled: boolean) {
+  if (!timedAutomationEditor) return;
+  timedAutomationEditor = { ...timedAutomationEditor, enabled };
+  render();
 }
 
 function toggleTimedAutomationDay(day: string) {
@@ -1772,8 +1819,9 @@ async function saveTimedAutomationEntry(event: SubmitEvent) {
         : [...timedAutomations, savedEntry];
       saveBrowserTimedAutomations();
     }
+    scheduleEditorAutomationId = null;
     timedAutomationEditor = null;
-    notice = "Timed automation saved.";
+    notice = "Schedule saved.";
   } catch (saveError) {
     timedAutomationError = String(saveError);
   } finally {
@@ -1782,45 +1830,26 @@ async function saveTimedAutomationEntry(event: SubmitEvent) {
   }
 }
 
-async function deleteTimedAutomationEntry(id: string) {
+async function deleteAutomationSchedule(automationId: string) {
   if (timedAutomationBusy) return;
-  if (!window.confirm("Delete this timed automation?")) return;
+  const entry = timedAutomations.find((item) => item.automationId === automationId);
+  if (!entry) return;
+  if (!window.confirm("Remove this automation's schedule?")) return;
 
   timedAutomationBusy = true;
   render();
   try {
     if (isTauriRuntime()) {
-      timedAutomations = await invokeCommand<TimedAutomation[]>("delete_timed_automation", { id });
+      timedAutomations = await invokeCommand<TimedAutomation[]>("delete_timed_automation", { id: entry.id });
     } else {
-      timedAutomations = timedAutomations.filter((item) => item.id !== id);
+      timedAutomations = timedAutomations.filter((item) => item.id !== entry.id);
       saveBrowserTimedAutomations();
     }
-    notice = "Timed automation deleted.";
+    scheduleEditorAutomationId = null;
+    timedAutomationEditor = null;
+    notice = "Schedule removed.";
   } catch (deleteError) {
     error = String(deleteError);
-  } finally {
-    timedAutomationBusy = false;
-    render();
-  }
-}
-
-async function toggleTimedAutomationEnabled(id: string) {
-  if (timedAutomationBusy) return;
-  const entry = timedAutomations.find((item) => item.id === id);
-  if (!entry) return;
-
-  timedAutomationBusy = true;
-  render();
-  const updated: TimedAutomation = { ...entry, enabled: !entry.enabled, updatedAt: nowIso() };
-  try {
-    if (isTauriRuntime()) {
-      timedAutomations = await invokeCommand<TimedAutomation[]>("save_timed_automation", { entry: updated });
-    } else {
-      timedAutomations = timedAutomations.map((item) => (item.id === id ? updated : item));
-      saveBrowserTimedAutomations();
-    }
-  } catch (toggleError) {
-    error = String(toggleError);
   } finally {
     timedAutomationBusy = false;
     render();
@@ -1835,14 +1864,16 @@ function formatTimedAutomationDays(days: string[]) {
     .join(", ");
 }
 
-function automationNameForId(automationId: string) {
-  return automations.find((automation) => automation.id === automationId)?.name ?? "Deleted automation";
-}
-
-function renderTimedAutomationEditor() {
-  if (!timedAutomationEditor) return "";
+// Modal for scheduling one automation to run at a wall-clock time
+// (optionally on specific weekdays). Rendered once at the view level (like
+// the main automation editor modal), not inside a card, so its content
+// never has to squeeze into a grid cell.
+function renderAutomationScheduleModal() {
+  if (!timedAutomationEditor || !scheduleEditorAutomationId) return "";
+  const automation = automations.find((item) => item.id === scheduleEditorAutomationId);
+  if (!automation) return "";
   const entry = timedAutomationEditor;
-  const isNew = !timedAutomations.some((item) => item.id === entry.id);
+  const existingEntry = timedAutomations.find((item) => item.automationId === automation.id);
 
   return `
     <section class="modal-layer" role="presentation">
@@ -1850,66 +1881,180 @@ function renderTimedAutomationEditor() {
         <div class="modal-title">
           <div>
             <p class="eyebrow">Schedule</p>
-            <h2 id="timed-automation-editor-title">${isNew ? "New timed automation" : "Edit timed automation"}</h2>
+            <h2 id="timed-automation-editor-title">${escapeHtml(automation.name)}</h2>
           </div>
-          <button class="ghost-button modal-close" type="button" data-timed-action="close-editor" ${timedAutomationBusy ? "disabled" : ""}>Close</button>
+          <button class="ghost-button modal-close" type="button" data-timed-action="close" ${timedAutomationBusy ? "disabled" : ""}>Close</button>
         </div>
 
         <p class="automation-intro">Runs through the operating system's own scheduler, so it fires at the chosen time even while EasyAlias is closed.</p>
         ${timedAutomationError ? `<p class="modal-error">${escapeHtml(timedAutomationError)}</p>` : ""}
 
         <div class="automation-form-grid">
-          <label>
-            Automation
-            <select name="timed-automation-automation">
-              ${automations
-                .map(
-                  (automation) =>
-                    `<option value="${escapeHtml(automation.id)}" ${entry.automationId === automation.id ? "selected" : ""}>${escapeHtml(automation.name)}</option>`
-                )
-                .join("")}
-            </select>
+          <label class="timed-automation-toggle">
+            <input type="checkbox" ${entry.enabled ? "checked" : ""} data-timed-action="toggle-enabled" ${timedAutomationBusy ? "disabled" : ""} />
+            <span>${entry.enabled ? "Enabled" : "Disabled"}</span>
           </label>
           <label>
             Time
-            <input type="time" name="timed-automation-time" value="${escapeHtml(entry.time)}" />
+            <input type="time" name="timed-automation-time" value="${escapeHtml(entry.time)}" ${timedAutomationBusy ? "disabled" : ""} />
           </label>
         </div>
 
         <div class="timed-automation-days">
           <span class="automation-optional">Repeat</span>
           <div class="timed-automation-day-chips">
-            <button type="button" class="timed-automation-day-chip ${entry.days.length === 0 ? "is-selected" : ""}" data-timed-action="every-day">Every day</button>
+            <button type="button" class="timed-automation-day-chip ${entry.days.length === 0 ? "is-selected" : ""}" data-timed-action="every-day" ${timedAutomationBusy ? "disabled" : ""}>Every day</button>
             ${weekdayOrder
               .map(
                 (day) =>
-                  `<button type="button" class="timed-automation-day-chip ${entry.days.includes(day) ? "is-selected" : ""}" data-timed-action="toggle-day" data-day="${day}">${weekdayLabels[day]}</button>`
+                  `<button type="button" class="timed-automation-day-chip ${entry.days.includes(day) ? "is-selected" : ""}" data-timed-action="toggle-day" data-day="${day}" ${timedAutomationBusy ? "disabled" : ""}>${weekdayLabels[day]}</button>`
               )
               .join("")}
           </div>
         </div>
 
+        ${
+          existingEntry?.lastRunAt
+            ? `<span class="timed-automation-last-run is-${existingEntry.lastRunStatus ?? "unknown"}">Last run ${formatDeletedDate(existingEntry.lastRunAt)} · ${existingEntry.lastRunStatus === "error" ? "failed" : "succeeded"}</span>`
+            : ""
+        }
+        ${
+          existingEntry?.lastRunStatus === "error" && existingEntry.lastRunOutput
+            ? `<pre class="timed-automation-error-output">${escapeHtml(existingEntry.lastRunOutput)}</pre>`
+            : ""
+        }
+
         <div class="modal-actions">
-          <button class="ghost-button" type="button" data-timed-action="close-editor" ${timedAutomationBusy ? "disabled" : ""}>Cancel</button>
+          ${
+            existingEntry
+              ? `<button class="ghost-button automation-delete-button" type="button" data-timed-action="delete" ${timedAutomationBusy ? "disabled" : ""}>Remove schedule</button>`
+              : `<button class="ghost-button" type="button" data-timed-action="close" ${timedAutomationBusy ? "disabled" : ""}>Cancel</button>`
+          }
           <button class="primary-button" type="submit" ${timedAutomationBusy ? "disabled" : ""}><i data-lucide="save"></i><span>${timedAutomationBusy ? "Saving..." : "Save"}</span></button>
         </div>
       </form>
     </section>`;
 }
 
-function renderTimedAutomationsView() {
-  const sortedEntries = [...timedAutomations].sort((left, right) => left.time.localeCompare(right.time));
+// Whether `now` falls in the light window `[lightStart, darkStart)`. Mirrors
+// the Rust `is_light_window` the backend actually schedules against, so the
+// UI's live preview always agrees with what the OS scheduler will apply.
+function isLightWindow(lightStart: string, darkStart: string, now: Date): boolean {
+  const toMinutes = (value: string) => {
+    const [hours, minutes] = value.split(":").map(Number);
+    return hours * 60 + minutes;
+  };
+  const light = toMinutes(lightStart);
+  const dark = toMinutes(darkStart);
+  const current = now.getHours() * 60 + now.getMinutes();
+  return light < dark ? current >= light && current < dark : current >= light || current < dark;
+}
+
+function resolveVscodeThemePreview(schedule: VscodeThemeSchedule): string {
+  return isLightWindow(schedule.lightStart, schedule.darkStart, new Date()) ? schedule.lightTheme : schedule.darkTheme;
+}
+
+// Updates just the live preview text in place instead of a full render(),
+// so typing a start time or theme name does not steal focus from the field
+// mid-edit - same pattern as updateEditPreview() for the alias command preview.
+function updateVscodeThemeSchedulePreview() {
+  const preview = document.querySelector<HTMLElement>(".vscode-theme-schedule-preview strong");
+  if (preview) {
+    preview.textContent = resolveVscodeThemePreview(vscodeThemeSchedule);
+  }
+}
+
+function openVscodeThemeScheduleView() {
+  clearMessages();
+  vscodeThemeScheduleError = "";
+  currentView = "vscode-theme-schedule";
+  render();
+}
+
+function closeVscodeThemeScheduleView() {
+  if (vscodeThemeScheduleBusy) return;
+  vscodeThemeScheduleError = "";
+  currentView = "aliases";
+  render();
+}
+
+function updateVscodeThemeScheduleField<K extends keyof VscodeThemeSchedule>(key: K, value: VscodeThemeSchedule[K]) {
+  vscodeThemeSchedule = { ...vscodeThemeSchedule, [key]: value };
+  vscodeThemeScheduleError = "";
+}
+
+function validateVscodeThemeScheduleForm(schedule: VscodeThemeSchedule) {
+  if (!schedule.lightTheme.trim()) return "Enter the light theme's exact VS Code name.";
+  if (!schedule.darkTheme.trim()) return "Enter the dark theme's exact VS Code name.";
+  if (!schedule.lightStart || !schedule.darkStart) return "Choose both start times.";
+  if (schedule.lightStart === schedule.darkStart) return "Light and dark start times must be different.";
+  return "";
+}
+
+async function saveVscodeThemeSchedule(event: SubmitEvent) {
+  event.preventDefault();
+  if (vscodeThemeScheduleBusy) return;
+
+  vscodeThemeScheduleError = validateVscodeThemeScheduleForm(vscodeThemeSchedule);
+  if (vscodeThemeScheduleError) {
+    render();
+    return;
+  }
+
+  vscodeThemeScheduleBusy = true;
+  render();
+  const nextSchedule: VscodeThemeSchedule = { ...vscodeThemeSchedule, updatedAt: nowIso() };
+  try {
+    if (isTauriRuntime()) {
+      vscodeThemeSchedule = await invokeCommand<VscodeThemeSchedule>("save_vscode_theme_schedule", { schedule: nextSchedule });
+    } else {
+      vscodeThemeSchedule = nextSchedule;
+      saveBrowserVscodeThemeSchedule();
+    }
+    notice = vscodeThemeSchedule.enabled
+      ? "VS Code theme schedule saved and running."
+      : "VS Code theme schedule saved (disabled).";
+  } catch (saveError) {
+    vscodeThemeScheduleError = String(saveError);
+  } finally {
+    vscodeThemeScheduleBusy = false;
+    render();
+  }
+}
+
+async function checkVscodeThemeNow() {
+  if (vscodeThemeScheduleBusy || !vscodeThemeSchedule.enabled) return;
+
+  vscodeThemeScheduleBusy = true;
+  render();
+  try {
+    if (isTauriRuntime()) {
+      vscodeThemeSchedule = await invokeCommand<VscodeThemeSchedule>("check_vscode_theme_now");
+      notice = "Checked now - VS Code's theme is up to date.";
+    } else {
+      notice = "Apply now only runs in the desktop app.";
+    }
+  } catch (checkError) {
+    error = String(checkError);
+  } finally {
+    vscodeThemeScheduleBusy = false;
+    render();
+  }
+}
+
+function renderVscodeThemeScheduleView() {
+  const schedule = vscodeThemeSchedule;
+  const previewTheme = resolveVscodeThemePreview(schedule);
 
   appElement.innerHTML = `
     <section class="shell automation-shell">
       <header class="topbar automation-topbar">
         <div>
-          <p class="eyebrow">Runs Even While EasyAlias Is Closed</p>
-          <h1>Timed Automations</h1>
+          <p class="eyebrow">Switches VS Code's Theme By Time Of Day</p>
+          <h1>VS Code Theme Schedule</h1>
         </div>
         <div class="topbar-actions">
-          <button class="header-icon-button" type="button" title="Back to aliases" aria-label="Back to aliases" data-action="close-timed-automations"><i data-lucide="arrow-left"></i></button>
-          <button class="header-icon-button" type="button" title="New timed automation" aria-label="New timed automation" data-action="new-timed-automation" ${automations.length ? "" : "disabled"}><i data-lucide="plus"></i></button>
+          <button class="header-icon-button" type="button" title="Back to aliases" aria-label="Back to aliases" data-action="close-vscode-theme-schedule"><i data-lucide="arrow-left"></i></button>
         </div>
       </header>
 
@@ -1924,97 +2069,82 @@ function renderTimedAutomationsView() {
           : ""
       }
 
-      ${
-        !automations.length
-          ? `<div class="empty-state"><strong>Create an automation first</strong><span>Timed automations schedule an existing workflow - open Automations to build one.</span><button class="primary-button" type="button" data-action="open-automations"><i data-lucide="play"></i><span>Open automations</span></button></div>`
-          : sortedEntries.length
-            ? `<div class="timed-automation-list">
-                ${sortedEntries
-                  .map(
-                    (entry) => `
-                      <article class="timed-automation-row ${entry.enabled ? "" : "is-disabled"}">
-                        <div class="timed-automation-time">
-                          <strong>${escapeHtml(entry.time)}</strong>
-                          <span>${escapeHtml(formatTimedAutomationDays(entry.days))}</span>
-                        </div>
-                        <div class="timed-automation-copy">
-                          <strong>${escapeHtml(automationNameForId(entry.automationId))}</strong>
-                          ${
-                            entry.lastRunAt
-                              ? `<span class="timed-automation-last-run is-${entry.lastRunStatus ?? "unknown"}">Last run ${formatDeletedDate(entry.lastRunAt)} · ${entry.lastRunStatus === "error" ? "failed" : "succeeded"}</span>`
-                              : `<span class="timed-automation-last-run">Never run yet</span>`
-                          }
-                          ${
-                            entry.lastRunStatus === "error" && entry.lastRunOutput
-                              ? `<pre class="timed-automation-error-output">${escapeHtml(entry.lastRunOutput)}</pre>`
-                              : ""
-                          }
-                        </div>
-                        <div class="timed-automation-actions">
-                          <label class="timed-automation-toggle">
-                            <input type="checkbox" ${entry.enabled ? "checked" : ""} data-timed-action="toggle-enabled" data-id="${escapeHtml(entry.id)}" ${timedAutomationBusy ? "disabled" : ""} />
-                            <span>${entry.enabled ? "On" : "Off"}</span>
-                          </label>
-                          <button class="header-icon-button" type="button" title="Edit" aria-label="Edit timed automation" data-timed-action="edit" data-id="${escapeHtml(entry.id)}" ${timedAutomationBusy ? "disabled" : ""}><i data-lucide="pencil"></i></button>
-                          <button class="header-icon-button automation-delete-button" type="button" title="Delete" aria-label="Delete timed automation" data-timed-action="delete" data-id="${escapeHtml(entry.id)}" ${timedAutomationBusy ? "disabled" : ""}><i data-lucide="trash-2"></i></button>
-                        </div>
-                      </article>`
-                  )
-                  .join("")}
-              </div>`
-            : `<div class="empty-state"><strong>No timed automations yet</strong><span>Schedule an automation to run automatically, even while EasyAlias is closed.</span><button class="primary-button" type="button" data-action="new-timed-automation"><i data-lucide="plus"></i><span>New timed automation</span></button></div>`
-      }
+      <form class="modal-card vscode-theme-schedule-form" id="vscode-theme-schedule-form">
+        <p class="automation-intro">Runs through the operating system's own scheduler - checks every ${VSCODE_THEME_CHECK_INTERVAL_MINUTES} minutes and once at startup, so VS Code corrects itself even if it was already open when the window changed.</p>
+        ${vscodeThemeScheduleError ? `<p class="modal-error">${escapeHtml(vscodeThemeScheduleError)}</p>` : ""}
 
-      ${renderTimedAutomationEditor()}
+        <label class="timed-automation-toggle vscode-theme-schedule-toggle">
+          <input type="checkbox" ${schedule.enabled ? "checked" : ""} data-vscode-theme-action="toggle-enabled" />
+          <span>${schedule.enabled ? "Enabled" : "Disabled"}</span>
+        </label>
+
+        <div class="automation-form-grid">
+          <label>
+            Light theme
+            <input type="text" name="vscode-light-theme" value="${escapeHtml(schedule.lightTheme)}" placeholder="Default Light+" />
+          </label>
+          <label>
+            Dark theme
+            <input type="text" name="vscode-dark-theme" value="${escapeHtml(schedule.darkTheme)}" placeholder="Default Dark+" />
+          </label>
+          <label>
+            Light starts at
+            <input type="time" name="vscode-light-start" value="${escapeHtml(schedule.lightStart)}" />
+          </label>
+          <label>
+            Dark starts at
+            <input type="time" name="vscode-dark-start" value="${escapeHtml(schedule.darkStart)}" />
+          </label>
+        </div>
+
+        <p class="vscode-theme-schedule-preview">Right now this schedule would set: <strong>${escapeHtml(previewTheme)}</strong></p>
+
+        <div class="modal-actions">
+          <button class="ghost-button" type="button" data-vscode-theme-action="check-now" ${!schedule.enabled || vscodeThemeScheduleBusy ? "disabled" : ""}>Apply now</button>
+          <button class="primary-button" type="submit" ${vscodeThemeScheduleBusy ? "disabled" : ""}><i data-lucide="save"></i><span>${vscodeThemeScheduleBusy ? "Saving..." : "Save"}</span></button>
+        </div>
+      </form>
 
       <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>Become a sponsor</a></aside>
       <footer class="app-footer"><a href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>© Hannes Gnann</a><span aria-hidden="true">-</span><a href="${redditUrl}" target="_blank" rel="noreferrer" data-external-link>Reddit</a><span aria-hidden="true">-</span><a href="${websiteUrl}" target="_blank" rel="noreferrer" data-external-link>Website</a></footer>
     </section>`;
 
   createIcons({
-    icons: { ArrowLeft, Pencil, Play, Plus, Save, Trash2, X },
+    icons: { ArrowLeft, Save, X },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
 
   scheduleMessageDismissal();
-  bindTimedAutomationEvents();
+  bindVscodeThemeScheduleEvents();
 }
 
-function bindTimedAutomationEvents() {
-  document.querySelector<HTMLFormElement>("#timed-automation-form")?.addEventListener("submit", saveTimedAutomationEntry);
+function bindVscodeThemeScheduleEvents() {
+  document.querySelector<HTMLFormElement>("#vscode-theme-schedule-form")?.addEventListener("submit", saveVscodeThemeSchedule);
   document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => link.addEventListener("click", openExternalLink));
 
-  document.querySelector<HTMLSelectElement>('select[name="timed-automation-automation"]')?.addEventListener("change", (event) => {
-    updateTimedAutomationEditor("automationId", (event.target as HTMLSelectElement).value);
+  document.querySelector<HTMLInputElement>('[data-vscode-theme-action="toggle-enabled"]')?.addEventListener("change", (event) => {
+    updateVscodeThemeScheduleField("enabled", (event.target as HTMLInputElement).checked);
+    render();
   });
-  document.querySelector<HTMLInputElement>('input[name="timed-automation-time"]')?.addEventListener("input", (event) => {
-    updateTimedAutomationEditor("time", (event.target as HTMLInputElement).value);
+  document.querySelector<HTMLInputElement>('input[name="vscode-light-theme"]')?.addEventListener("input", (event) => {
+    updateVscodeThemeScheduleField("lightTheme", (event.target as HTMLInputElement).value);
+    updateVscodeThemeSchedulePreview();
   });
-
-  document.querySelectorAll<HTMLButtonElement>("[data-timed-action]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const action = button.dataset.timedAction;
-      const id = button.dataset.id;
-      if (action === "close-editor") closeTimedAutomationEditor();
-      if (action === "every-day") setTimedAutomationEveryDay();
-      if (action === "toggle-day" && button.dataset.day) toggleTimedAutomationDay(button.dataset.day);
-      if (action === "edit" && id) openTimedAutomationEditor(id);
-      if (action === "delete" && id) void deleteTimedAutomationEntry(id);
-    });
+  document.querySelector<HTMLInputElement>('input[name="vscode-dark-theme"]')?.addEventListener("input", (event) => {
+    updateVscodeThemeScheduleField("darkTheme", (event.target as HTMLInputElement).value);
+    updateVscodeThemeSchedulePreview();
   });
-
-  document.querySelectorAll<HTMLInputElement>('[data-timed-action="toggle-enabled"]').forEach((checkbox) => {
-    checkbox.addEventListener("change", () => {
-      const id = checkbox.dataset.id;
-      if (id) void toggleTimedAutomationEnabled(id);
-    });
+  document.querySelector<HTMLInputElement>('input[name="vscode-light-start"]')?.addEventListener("input", (event) => {
+    updateVscodeThemeScheduleField("lightStart", (event.target as HTMLInputElement).value);
+    updateVscodeThemeSchedulePreview();
+  });
+  document.querySelector<HTMLInputElement>('input[name="vscode-dark-start"]')?.addEventListener("input", (event) => {
+    updateVscodeThemeScheduleField("darkStart", (event.target as HTMLInputElement).value);
+    updateVscodeThemeSchedulePreview();
   });
 
-  document.querySelector<HTMLButtonElement>('[data-action="close-timed-automations"]')?.addEventListener("click", closeTimedAutomationsView);
-  document.querySelectorAll<HTMLButtonElement>('[data-action="new-timed-automation"]').forEach((button) => {
-    button.addEventListener("click", () => openTimedAutomationEditor());
-  });
-  document.querySelector<HTMLButtonElement>('[data-action="open-automations"]')?.addEventListener("click", openAutomationsView);
+  document.querySelector<HTMLButtonElement>('[data-vscode-theme-action="check-now"]')?.addEventListener("click", () => void checkVscodeThemeNow());
+  document.querySelector<HTMLButtonElement>('[data-action="close-vscode-theme-schedule"]')?.addEventListener("click", closeVscodeThemeScheduleView);
   document.querySelectorAll<HTMLButtonElement>('[data-action="dismiss-message"]').forEach((button) => {
     button.addEventListener("click", dismissMessage);
   });
@@ -2136,6 +2266,9 @@ async function persistAutomations(next: Automation[]) {
 
 function toggleAutomationGroupPicker(id: string) {
   automationGroupPickerId = automationGroupPickerId === id ? null : id;
+  // Only one card popover (group or schedule) is open at a time.
+  scheduleEditorAutomationId = null;
+  timedAutomationEditor = null;
   refreshAutomationResults();
 }
 
@@ -3152,8 +3285,14 @@ function renderAutomationResults(sortedAutomations: Automation[]) {
 
   return `<div class="automation-grid">
       ${filteredAutomations
-        .map(
-          (automation) => `<article class="automation-card">
+        .map((automation) => {
+          const scheduleEntry = timedAutomations.find((entry) => entry.automationId === automation.id);
+          const scheduleSummary = scheduleEntry ? `${scheduleEntry.time} · ${formatTimedAutomationDays(scheduleEntry.days)}` : "";
+          const scheduleTitle = scheduleEntry
+            ? `Change schedule (currently ${scheduleSummary}${scheduleEntry.enabled ? "" : ", disabled"})`
+            : "Schedule this automation";
+
+          return `<article class="automation-card">
               <div class="automation-card-header">
                 <div class="automation-card-title">
                   <button
@@ -3176,6 +3315,16 @@ function renderAutomationResults(sortedAutomations: Automation[]) {
                     data-id="${escapeHtml(automation.id)}"
                     ${automationRun?.running ? "disabled" : ""}
                   ><i data-lucide="tags"></i></button>
+                  <button
+                    class="automation-schedule-button ${scheduleEntry?.enabled ? "has-schedule" : ""}"
+                    type="button"
+                    title="${escapeHtml(scheduleTitle)}"
+                    aria-label="${scheduleEntry ? "Change schedule for" : "Schedule"} ${escapeHtml(automation.name)}"
+                    aria-expanded="${scheduleEditorAutomationId === automation.id}"
+                    data-automation-action="toggle-schedule-picker"
+                    data-id="${escapeHtml(automation.id)}"
+                    ${automationRun?.running ? "disabled" : ""}
+                  ><i data-lucide="clock"></i></button>
                   <div>
                     <strong>${escapeHtml(automation.name)}</strong>
                     <code>${escapeHtml(automation.path)}</code>
@@ -3201,8 +3350,8 @@ function renderAutomationResults(sortedAutomations: Automation[]) {
                 <button class="header-icon-button" type="button" title="Edit ${escapeHtml(automation.name)}" aria-label="Edit ${escapeHtml(automation.name)}" data-automation-action="edit" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="pencil"></i></button>
                 <button class="header-icon-button automation-delete-button" type="button" title="Delete ${escapeHtml(automation.name)}" aria-label="Delete ${escapeHtml(automation.name)}" data-automation-action="delete" data-id="${escapeHtml(automation.id)}" ${automationRun?.running ? "disabled" : ""}><i data-lucide="trash-2"></i></button>
               </div>
-            </article>`
-        )
+            </article>`;
+        })
         .join("")}
     </div>`;
 }
@@ -3223,7 +3372,7 @@ function refreshAutomationResults() {
 
   results.innerHTML = renderAutomationResults(sortedAutomations);
   createIcons({
-    icons: { Pencil, Play, Plus, Star, Tag, Tags, Trash2 },
+    icons: { Clock, Pencil, Play, Plus, Star, Tag, Tags, Trash2 },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
 }
@@ -3329,6 +3478,7 @@ function renderAutomationsView() {
       </section>
 
       ${renderAutomationEditor()}
+      ${renderAutomationScheduleModal()}
       ${renderAutomationRun()}
       ${renderAutomationBackupDialog()}
       ${renderAutomationTrashDialog()}
@@ -3338,7 +3488,7 @@ function renderAutomationsView() {
     </section>`;
 
   createIcons({
-    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock3, FileDown, FileUp, Filter, FolderOpen, Pencil, Play, Plus, RotateCcw, Save, Search, Star, Tag, Tags, Terminal, Trash2, X },
+    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock, Clock3, FileDown, FileUp, Filter, FolderOpen, Pencil, Play, Plus, RotateCcw, Save, Search, Star, Tag, Tags, Terminal, Trash2, X },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
   scheduleMessageDismissal();
@@ -3412,6 +3562,7 @@ function bindAutomationEvents() {
     }
     if (action === "toggle-group-picker" && id) toggleAutomationGroupPicker(id);
     if (action === "assign-group" && id) void assignAutomationGroup(id, button.dataset.group ?? "");
+    if (action === "toggle-schedule-picker" && id) openAutomationSchedulePicker(id);
   });
 
   // The create-new-group mini form inside a card's group picker; submit
@@ -3423,6 +3574,26 @@ function bindAutomationEvents() {
     const id = form.dataset.automationGroupForm;
     const input = form.querySelector<HTMLInputElement>('input[name="automation-group-new"]');
     if (id && input) void assignAutomationGroup(id, input.value);
+  });
+
+  // The schedule modal - rendered once at the view level (not inside a
+  // card), so its fields are bound directly here rather than delegated,
+  // same as the main automation editor's fields just below.
+  document.querySelector<HTMLFormElement>("#timed-automation-form")?.addEventListener("submit", saveTimedAutomationEntry);
+  document.querySelector<HTMLInputElement>('input[name="timed-automation-time"]')?.addEventListener("input", (event) => {
+    updateTimedAutomationEditorTime((event.target as HTMLInputElement).value);
+  });
+  document.querySelector<HTMLInputElement>('[data-timed-action="toggle-enabled"]')?.addEventListener("change", (event) => {
+    setTimedAutomationEditorEnabled((event.target as HTMLInputElement).checked);
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-timed-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.timedAction;
+      if (action === "close") closeAutomationSchedulePicker();
+      if (action === "every-day") setTimedAutomationEveryDay();
+      if (action === "toggle-day" && button.dataset.day) toggleTimedAutomationDay(button.dataset.day);
+      if (action === "delete" && scheduleEditorAutomationId) void deleteAutomationSchedule(scheduleEditorAutomationId);
+    });
   });
 
   document.querySelectorAll<HTMLButtonElement>("[data-automation-action]").forEach((button) => {
@@ -3475,8 +3646,8 @@ function render() {
     renderAutomationsView();
     return;
   }
-  if (currentView === "timed-automations") {
-    renderTimedAutomationsView();
+  if (currentView === "vscode-theme-schedule") {
+    renderVscodeThemeScheduleView();
     return;
   }
   const aliases = [...appState.aliases].sort(compareAliases);
@@ -3506,10 +3677,10 @@ function render() {
           <button
             class="header-icon-button"
             type="button"
-            title="Timed automations"
-            aria-label="Open timed automations"
-            data-action="open-timed-automations"
-          ><i data-lucide="clock"></i></button>
+            title="VS Code theme schedule"
+            aria-label="Open VS Code theme schedule"
+            data-action="open-vscode-theme-schedule"
+          ><i data-lucide="sun-moon"></i></button>
           <button
             class="header-icon-button"
             type="button"
@@ -3808,13 +3979,13 @@ function render() {
     icons: {
       ChevronLeft,
       ChevronRight,
-      Clock,
       SquareTerminal,
       FileDown,
       FileUp,
       Play,
       RotateCcw,
       Star,
+      SunMoon,
       Trash2,
       X
     },
@@ -4279,7 +4450,7 @@ function bindEvents() {
       const action = button.dataset.action;
       const id = button.dataset.id;
 
-      if (action === "open-timed-automations") openTimedAutomationsView();
+      if (action === "open-vscode-theme-schedule") openVscodeThemeScheduleView();
       if (action === "open-automations") openAutomationsView();
       if (action === "open-import") void openCommandFileImport();
       if (action === "open-backup-export") openBackupExport();

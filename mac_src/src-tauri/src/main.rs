@@ -231,6 +231,38 @@ fn default_true() -> bool {
 
 const WEEKDAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
+// A single global schedule (not a list - there is only ever one VS Code
+// installation to manage) that switches VS Code's color theme by time of
+// day. `light_start`/`dark_start` are "HH:MM"; the window between them may
+// wrap past midnight (e.g. light at 22:00, dark at 06:00).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VscodeThemeSchedule {
+    enabled: bool,
+    light_theme: String,
+    dark_theme: String,
+    light_start: String,
+    dark_start: String,
+    updated_at: String,
+}
+
+fn default_vscode_theme_schedule() -> VscodeThemeSchedule {
+    VscodeThemeSchedule {
+        enabled: false,
+        light_theme: "Default Light+".to_string(),
+        dark_theme: "Default Dark+".to_string(),
+        light_start: "06:00".to_string(),
+        dark_start: "17:00".to_string(),
+        updated_at: String::new(),
+    }
+}
+
+// How often the OS scheduler re-checks and, if needed, corrects VS Code's
+// theme. Also applied once at login/boot (RunAtLoad on macOS) so a machine
+// left asleep across a boundary time self-corrects promptly rather than
+// waiting up to a full interval.
+const VSCODE_THEME_CHECK_INTERVAL_SECONDS: u64 = 600;
+
 // Keep the established aliases.zsh path for backwards compatibility. The file
 // contains syntax understood by both zsh and Bash, regardless of its extension.
 const SOURCE_LINE: &str = "source ~/.easyalias/aliases.zsh";
@@ -314,6 +346,17 @@ fn timed_automations_file() -> Result<PathBuf, String> {
 
 fn timed_automation_log_dir() -> Result<PathBuf, String> {
     Ok(app_dir()?.join("timed-automation-logs"))
+}
+
+fn vscode_theme_schedule_file() -> Result<PathBuf, String> {
+    Ok(app_dir()?.join("vscode-theme-schedule.json"))
+}
+
+// VS Code's user settings.json on macOS. VS Code live-reloads this file, so
+// writing a new `workbench.colorTheme` here is enough - no need to restart
+// or otherwise signal VS Code.
+fn vscode_settings_file() -> Result<PathBuf, String> {
+    Ok(home_dir()?.join("Library/Application Support/Code/User/settings.json"))
 }
 
 fn import_marker_file(_setup: &ShellSetup) -> Result<PathBuf, String> {
@@ -971,6 +1014,288 @@ fn write_timed_automation_entries(entries: &[TimedAutomation]) -> Result<(), Str
     let path = timed_automations_file()?;
     fs::write(&path, format!("{}\n", json))
         .map_err(|error| format!("{} could not be written: {}", path.display(), error))
+}
+
+fn validate_vscode_theme_schedule(schedule: &VscodeThemeSchedule) -> Result<(), String> {
+    if schedule.light_theme.trim().is_empty() {
+        return Err("Enter the light theme's exact VS Code name.".to_string());
+    }
+    if schedule.dark_theme.trim().is_empty() {
+        return Err("Enter the dark theme's exact VS Code name.".to_string());
+    }
+    parse_time_of_day(&schedule.light_start)?;
+    parse_time_of_day(&schedule.dark_start)?;
+    if schedule.light_start == schedule.dark_start {
+        return Err("Light and dark start times must be different.".to_string());
+    }
+    Ok(())
+}
+
+fn load_vscode_theme_schedule() -> Result<VscodeThemeSchedule, String> {
+    ensure_app_files()?;
+    let path = vscode_theme_schedule_file()?;
+    if !path.exists() {
+        return Ok(default_vscode_theme_schedule());
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let schedule: VscodeThemeSchedule = serde_json::from_str(&content).map_err(|error| {
+        format!(
+            "vscode-theme-schedule.json is not valid EasyAlias JSON: {}",
+            error
+        )
+    })?;
+    Ok(schedule)
+}
+
+fn write_vscode_theme_schedule(schedule: &VscodeThemeSchedule) -> Result<(), String> {
+    ensure_app_files()?;
+    let json = serde_json::to_string_pretty(schedule)
+        .map_err(|error| format!("VS Code theme schedule could not be serialized: {}", error))?;
+    let path = vscode_theme_schedule_file()?;
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))
+}
+
+// Whether wall-clock time `now` falls in the light window `[light, dark)`.
+// The window may wrap past midnight (e.g. light starts 22:00, dark starts
+// 06:00), so a simple `light <= now < dark` is not enough on its own.
+fn is_light_window(light_start: (u32, u32), dark_start: (u32, u32), now: (u32, u32)) -> bool {
+    let to_minutes = |value: (u32, u32)| value.0 * 60 + value.1;
+    let light = to_minutes(light_start);
+    let dark = to_minutes(dark_start);
+    let current = to_minutes(now);
+    if light < dark {
+        current >= light && current < dark
+    } else {
+        current >= light || current < dark
+    }
+}
+
+fn resolve_scheduled_theme(schedule: &VscodeThemeSchedule, now: (u32, u32)) -> Result<String, String> {
+    let light_start = parse_time_of_day(&schedule.light_start)?;
+    let dark_start = parse_time_of_day(&schedule.dark_start)?;
+    Ok(if is_light_window(light_start, dark_start, now) {
+        schedule.light_theme.clone()
+    } else {
+        schedule.dark_theme.clone()
+    })
+}
+
+// The system's current local wall-clock time. Shells out to `date` instead
+// of adding a timezone-aware date/time crate dependency, matching how the
+// rest of this file already shells out to launchctl/systemctl-equivalents
+// rather than depending on a crate for OS integration.
+fn current_local_time() -> Result<(u32, u32), String> {
+    let output = Command::new("date")
+        .arg("+%H:%M")
+        .output()
+        .map_err(|error| format!("Local time could not be read: {}", error))?;
+    if !output.status.success() {
+        return Err("Local time could not be read.".to_string());
+    }
+    parse_time_of_day(String::from_utf8_lossy(&output.stdout).trim())
+}
+
+// Escapes `value` for embedding inside a JSON string literal. Theme names
+// are plain human text; this covers the characters that would otherwise
+// break the surrounding quotes.
+fn escape_json_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+// Sets `"workbench.colorTheme"` inside VS Code's settings.json text by
+// editing only that one key, so the user's own formatting, ordering, and
+// comments (settings.json is JSONC) survive untouched - this deliberately
+// does not round-trip the file through a JSON parser/serializer. Returns
+// `None` when the value already matches, so the caller can skip an
+// unnecessary write: VS Code live-reloads this file on change, and a
+// no-op write would still cause a visible flicker.
+fn set_vscode_color_theme(content: &str, theme: &str) -> Option<String> {
+    let key = "\"workbench.colorTheme\"";
+    if let Some(key_index) = content.find(key) {
+        let after_key = key_index + key.len();
+        let colon_index = content[after_key..].find(':').map(|offset| after_key + offset)?;
+        let rest = &content[colon_index + 1..];
+        let value_start = colon_index + 1 + rest.find('"')? + 1;
+
+        let mut value_end = None;
+        let mut escaped = false;
+        for (offset, character) in content[value_start..].char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match character {
+                '\\' => escaped = true,
+                '"' => {
+                    value_end = Some(value_start + offset);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let value_end = value_end?;
+
+        if &content[value_start..value_end] == theme {
+            return None;
+        }
+
+        let mut updated = String::with_capacity(content.len());
+        updated.push_str(&content[..value_start]);
+        updated.push_str(&escape_json_string(theme));
+        updated.push_str(&content[value_end..]);
+        Some(updated)
+    } else {
+        let brace_index = content.find('{')?;
+        let is_empty_object = content[brace_index + 1..].trim_start().starts_with('}');
+        let insertion = if is_empty_object {
+            format!("\n  \"workbench.colorTheme\": \"{}\"\n", escape_json_string(theme))
+        } else {
+            format!("\n  \"workbench.colorTheme\": \"{}\",", escape_json_string(theme))
+        };
+        let mut updated = String::with_capacity(content.len() + insertion.len());
+        updated.push_str(&content[..=brace_index]);
+        updated.push_str(&insertion);
+        updated.push_str(&content[brace_index + 1..]);
+        Some(updated)
+    }
+}
+
+// Applies the current schedule to VS Code's settings.json if enabled and
+// the resolved theme differs from what is already set. Called both by the
+// periodic/login OS scheduler (headless) and by the frontend's "Apply now".
+fn apply_vscode_theme_schedule() -> Result<(), String> {
+    let schedule = load_vscode_theme_schedule()?;
+    if !schedule.enabled {
+        return Ok(());
+    }
+    validate_vscode_theme_schedule(&schedule)?;
+
+    let now = current_local_time()?;
+    let theme = resolve_scheduled_theme(&schedule, now)?;
+
+    let settings_path = vscode_settings_file()?;
+    let existing = if settings_path.exists() {
+        fs::read_to_string(&settings_path)
+            .map_err(|error| format!("{} could not be read: {}", settings_path.display(), error))?
+    } else {
+        String::new()
+    };
+    let base = if existing.trim().is_empty() {
+        "{}".to_string()
+    } else {
+        existing
+    };
+
+    if let Some(updated) = set_vscode_color_theme(&base, &theme) {
+        if let Some(parent) = settings_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("{} could not be created: {}", parent.display(), error))?;
+        }
+        fs::write(&settings_path, updated)
+            .map_err(|error| format!("{} could not be written: {}", settings_path.display(), error))?;
+    }
+
+    Ok(())
+}
+
+fn vscode_theme_schedule_launchd_label() -> String {
+    "dev.hannesgnann.easyalias.vscode-theme-schedule".to_string()
+}
+
+fn vscode_theme_schedule_plist_path() -> Result<PathBuf, String> {
+    Ok(home_dir()?
+        .join("Library/LaunchAgents")
+        .join(format!("{}.plist", vscode_theme_schedule_launchd_label())))
+}
+
+// Removes the launchd job that periodically checks the VS Code theme
+// schedule, if one is currently loaded - safe to call even if nothing was
+// ever scheduled.
+fn unschedule_vscode_theme_schedule_macos() -> Result<(), String> {
+    let plist_path = vscode_theme_schedule_plist_path()?;
+    if plist_path.exists() {
+        let _ = Command::new("launchctl")
+            .arg("unload")
+            .arg("-w")
+            .arg(&plist_path)
+            .output();
+        fs::remove_file(&plist_path).map_err(|error| {
+            format!("{} could not be removed: {}", plist_path.display(), error)
+        })?;
+    }
+    Ok(())
+}
+
+// Writes a launchd LaunchAgent that invokes this same executable with
+// `--apply-vscode-theme` every VSCODE_THEME_CHECK_INTERVAL_SECONDS, and once
+// immediately at login (RunAtLoad) - this is what lets the theme
+// self-correct shortly after the Mac wakes or the user logs in, not just at
+// the next periodic tick.
+fn schedule_vscode_theme_schedule_macos() -> Result<(), String> {
+    unschedule_vscode_theme_schedule_macos()?;
+
+    let exe = env::current_exe()
+        .map_err(|error| format!("Application path could not be determined: {}", error))?;
+
+    let plist = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+  <key>Label</key>\n\
+  <string>{label}</string>\n\
+  <key>ProgramArguments</key>\n\
+  <array>\n\
+    <string>{exe}</string>\n\
+    <string>--apply-vscode-theme</string>\n\
+  </array>\n\
+  <key>StartInterval</key>\n\
+  <integer>{interval}</integer>\n\
+  <key>RunAtLoad</key>\n\
+  <true/>\n\
+</dict>\n\
+</plist>\n",
+        label = vscode_theme_schedule_launchd_label(),
+        exe = exe.display(),
+        interval = VSCODE_THEME_CHECK_INTERVAL_SECONDS
+    );
+
+    let plist_path = vscode_theme_schedule_plist_path()?;
+    if let Some(parent) = plist_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("{} could not be created: {}", parent.display(), error))?;
+    }
+    fs::write(&plist_path, plist)
+        .map_err(|error| format!("{} could not be written: {}", plist_path.display(), error))?;
+
+    let output = Command::new("launchctl")
+        .arg("load")
+        .arg("-w")
+        .arg(&plist_path)
+        .output()
+        .map_err(|error| format!("launchctl could not be started: {}", error))?;
+    if !output.status.success() {
+        return Err(format!(
+            "launchctl load failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(())
 }
 
 // launchd Weekday integers: 0 (or 7) = Sunday, 1 = Monday, ... 6 = Saturday.
@@ -1752,6 +2077,37 @@ fn delete_timed_automation(id: String) -> Result<Vec<TimedAutomation>, String> {
 }
 
 #[tauri::command]
+fn load_vscode_theme_schedule_state() -> Result<VscodeThemeSchedule, String> {
+    load_vscode_theme_schedule()
+}
+
+// Validates, persists, applies immediately (so enabling/editing takes
+// effect right away instead of waiting for the next periodic check), and
+// re-syncs the launchd job - enabling schedules it, disabling removes it.
+#[tauri::command]
+fn save_vscode_theme_schedule(schedule: VscodeThemeSchedule) -> Result<VscodeThemeSchedule, String> {
+    validate_vscode_theme_schedule(&schedule)?;
+    write_vscode_theme_schedule(&schedule)?;
+
+    if schedule.enabled {
+        schedule_vscode_theme_schedule_macos()?;
+        apply_vscode_theme_schedule()?;
+    } else {
+        unschedule_vscode_theme_schedule_macos()?;
+    }
+
+    Ok(schedule)
+}
+
+// Backs the "Apply now" button: re-runs the same check the OS scheduler
+// runs periodically, immediately, regardless of the check interval.
+#[tauri::command]
+fn check_vscode_theme_now() -> Result<VscodeThemeSchedule, String> {
+    apply_vscode_theme_schedule()?;
+    load_vscode_theme_schedule()
+}
+
+#[tauri::command]
 fn list_trash() -> Result<Vec<TrashEntry>, String> {
     load_trash_entries()
 }
@@ -2087,6 +2443,16 @@ fn main() {
         };
         std::process::exit(exit_code);
     }
+    if args.len() >= 2 && args[1] == "--apply-vscode-theme" {
+        let exit_code = match apply_vscode_theme_schedule() {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("VS Code theme schedule check failed: {}", error);
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
 
     // Register native plugins before exposing commands to the frontend.
     // dialog = file/folder picker, opener = open GitHub in the system browser.
@@ -2113,6 +2479,9 @@ fn main() {
             list_timed_automations,
             save_timed_automation,
             delete_timed_automation,
+            load_vscode_theme_schedule_state,
+            save_vscode_theme_schedule,
+            check_vscode_theme_now,
             list_trash,
             move_alias_to_trash,
             restore_trash_alias,
@@ -2806,6 +3175,179 @@ mod tests {
             !list_after.status.success(),
             "launchctl still reports the job as loaded after unscheduling"
         );
+
+        drop(home);
+    }
+
+    fn test_vscode_theme_schedule(light_start: &str, dark_start: &str) -> VscodeThemeSchedule {
+        VscodeThemeSchedule {
+            enabled: true,
+            light_theme: "Default Light+".to_string(),
+            dark_theme: "Default Dark+".to_string(),
+            light_start: light_start.to_string(),
+            dark_start: dark_start.to_string(),
+            updated_at: "2026-08-31T18:00:00.000Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn resolves_the_scheduled_theme_including_overnight_wraparound() {
+        let daytime = test_vscode_theme_schedule("06:00", "17:00");
+        assert_eq!(
+            resolve_scheduled_theme(&daytime, (5, 59)).unwrap(),
+            "Default Dark+"
+        );
+        assert_eq!(
+            resolve_scheduled_theme(&daytime, (6, 0)).unwrap(),
+            "Default Light+"
+        );
+        assert_eq!(
+            resolve_scheduled_theme(&daytime, (14, 0)).unwrap(),
+            "Default Light+"
+        );
+        assert_eq!(
+            resolve_scheduled_theme(&daytime, (16, 59)).unwrap(),
+            "Default Light+"
+        );
+        assert_eq!(
+            resolve_scheduled_theme(&daytime, (17, 0)).unwrap(),
+            "Default Dark+"
+        );
+        assert_eq!(
+            resolve_scheduled_theme(&daytime, (23, 30)).unwrap(),
+            "Default Dark+"
+        );
+
+        // Light window wraps past midnight.
+        let overnight = test_vscode_theme_schedule("22:00", "06:00");
+        assert_eq!(
+            resolve_scheduled_theme(&overnight, (23, 0)).unwrap(),
+            "Default Light+"
+        );
+        assert_eq!(
+            resolve_scheduled_theme(&overnight, (2, 0)).unwrap(),
+            "Default Light+"
+        );
+        assert_eq!(
+            resolve_scheduled_theme(&overnight, (12, 0)).unwrap(),
+            "Default Dark+"
+        );
+    }
+
+    #[test]
+    fn rejects_identical_light_and_dark_start_times() {
+        let schedule = test_vscode_theme_schedule("09:00", "09:00");
+        assert!(validate_vscode_theme_schedule(&schedule)
+            .unwrap_err()
+            .contains("must be different"));
+    }
+
+    #[test]
+    fn sets_the_color_theme_key_in_place_and_skips_a_no_op_write() {
+        let content = "{\n  \"editor.fontSize\": 14,\n  \"workbench.colorTheme\": \"Default Dark+\",\n  \"files.autoSave\": \"off\"\n}\n";
+        let updated = set_vscode_color_theme(content, "Default Light+").unwrap();
+        assert!(updated.contains("\"workbench.colorTheme\": \"Default Light+\""));
+        assert!(updated.contains("\"editor.fontSize\": 14"));
+        assert!(updated.contains("\"files.autoSave\": \"off\""));
+
+        // Re-applying the same theme is a no-op - no write should happen.
+        assert!(set_vscode_color_theme(&updated, "Default Light+").is_none());
+    }
+
+    #[test]
+    fn inserts_the_color_theme_key_when_missing() {
+        let with_other_keys = "{\n  \"editor.fontSize\": 14\n}\n";
+        let updated = set_vscode_color_theme(with_other_keys, "One Dark Pro").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&updated).unwrap();
+        assert_eq!(parsed["workbench.colorTheme"], "One Dark Pro");
+        assert_eq!(parsed["editor.fontSize"], 14);
+
+        let empty_object = "{}";
+        let updated_empty = set_vscode_color_theme(empty_object, "One Dark Pro").unwrap();
+        let parsed_empty: serde_json::Value = serde_json::from_str(&updated_empty).unwrap();
+        assert_eq!(parsed_empty["workbench.colorTheme"], "One Dark Pro");
+    }
+
+    // Exercises the real macOS scheduler end to end for the VS Code theme
+    // check, the same way schedules_and_unschedules_a_real_launchd_job does
+    // for timed automations: writes a LaunchAgent plist, loads it with the
+    // actual `launchctl`, confirms launchd reports it as registered, then
+    // removes it. Uses a temporary HOME so nothing touches the developer's
+    // real ~/Library/LaunchAgents.
+    #[test]
+    fn schedules_and_unschedules_the_real_vscode_theme_launchd_job() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let home = TemporaryHome::create();
+
+        schedule_vscode_theme_schedule_macos().unwrap();
+
+        let plist_path = vscode_theme_schedule_plist_path().unwrap();
+        assert!(plist_path.exists(), "plist was not written");
+        let plist_content = fs::read_to_string(&plist_path).unwrap();
+        assert!(plist_content.contains(&vscode_theme_schedule_launchd_label()));
+        assert!(plist_content.contains("--apply-vscode-theme"));
+        assert!(plist_content.contains(&format!(
+            "<integer>{}</integer>",
+            VSCODE_THEME_CHECK_INTERVAL_SECONDS
+        )));
+        assert!(plist_content.contains("<key>RunAtLoad</key>"));
+
+        let label = vscode_theme_schedule_launchd_label();
+        let list_output = Command::new("launchctl").arg("list").arg(&label).output().unwrap();
+        assert!(
+            list_output.status.success(),
+            "launchctl does not report the job as loaded: {}",
+            String::from_utf8_lossy(&list_output.stderr)
+        );
+
+        unschedule_vscode_theme_schedule_macos().unwrap();
+        assert!(!plist_path.exists(), "plist was not removed");
+
+        let list_after = Command::new("launchctl").arg("list").arg(&label).output().unwrap();
+        assert!(
+            !list_after.status.success(),
+            "launchctl still reports the job as loaded after unscheduling"
+        );
+
+        drop(home);
+    }
+
+    // End-to-end (minus the OS scheduler itself): a disabled schedule is
+    // written but never touches settings.json; enabling it and applying
+    // writes the theme for the current time into a fake settings.json
+    // living under the temporary HOME.
+    #[test]
+    fn apply_writes_the_resolved_theme_into_settings_json() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let home = TemporaryHome::create();
+
+        let now = current_local_time().unwrap();
+        let (light_start, dark_start, expected_theme) = if now.0 * 60 + now.1 < 12 * 60 {
+            // Before noon: make "now" the light window so the test is
+            // deterministic regardless of the wall-clock time it runs at.
+            ("00:00".to_string(), "12:00".to_string(), "Default Light+")
+        } else {
+            ("00:00".to_string(), "12:00".to_string(), "Default Dark+")
+        };
+
+        let mut schedule = test_vscode_theme_schedule(&light_start, &dark_start);
+        schedule.enabled = false;
+        write_vscode_theme_schedule(&schedule).unwrap();
+        apply_vscode_theme_schedule().unwrap();
+        assert!(
+            !vscode_settings_file().unwrap().exists(),
+            "a disabled schedule must not touch settings.json"
+        );
+
+        schedule.enabled = true;
+        write_vscode_theme_schedule(&schedule).unwrap();
+        apply_vscode_theme_schedule().unwrap();
+
+        let settings_path = vscode_settings_file().unwrap();
+        assert!(settings_path.exists(), "settings.json was not created");
+        let content = fs::read_to_string(&settings_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed["workbench.colorTheme"], expected_theme);
 
         drop(home);
     }
