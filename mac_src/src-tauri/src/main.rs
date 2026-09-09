@@ -200,16 +200,27 @@ const AUTOMATION_DONE_MARKER: &str = "__EASYALIAS_AUTOMATION_DONE__";
 const AUTOMATION_BG_MARKER: &str = "__EASYALIAS_AUTOMATION_BG__";
 
 // A timed automation schedules an existing Automation to run at a wall-clock
-// time, optionally on specific weekdays, through the OS's own scheduler
-// (launchd on macOS) so it fires even while EasyAlias is not running.
-// `days` uses lowercase three-letter abbreviations ("mon".."sun"); empty
-// means every day. Run history is intentionally just the most recent
-// attempt - there is no UI for a full log, only "did the last run work".
+// time, or at that day's actual sunrise/sunset, optionally on specific
+// weekdays, through the OS's own scheduler (launchd on macOS) so it fires
+// even while EasyAlias is not running. `days` uses lowercase three-letter
+// abbreviations ("mon".."sun"); empty means every day. Run history is
+// intentionally just the most recent attempt - there is no UI for a full
+// log, only "did the last run work".
+//
+// Clock-time entries each get their own exact-fire launchd job (unchanged
+// from before). Sunrise/sunset entries instead ride along on one shared
+// periodic "sun checker" job, since their fire time shifts by roughly a
+// minute a day and so can't be baked into a fixed OS calendar trigger;
+// `last_triggered_date` stops that periodic check from firing an entry more
+// than once on the same calendar day.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TimedAutomation {
     id: String,
     automation_id: String,
+    #[serde(default = "default_trigger_kind")]
+    trigger_kind: String,
+    #[serde(default)]
     time: String,
     #[serde(default)]
     days: Vec<String>,
@@ -223,6 +234,12 @@ struct TimedAutomation {
     last_run_status: Option<String>,
     #[serde(default)]
     last_run_output: Option<String>,
+    #[serde(default)]
+    last_triggered_date: Option<String>,
+}
+
+fn default_trigger_kind() -> String {
+    "clock".to_string()
 }
 
 fn default_true() -> bool {
@@ -231,37 +248,52 @@ fn default_true() -> bool {
 
 const WEEKDAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
-// A single global schedule (not a list - there is only ever one VS Code
-// installation to manage) that switches VS Code's color theme by time of
-// day. `light_start`/`dark_start` are "HH:MM"; the window between them may
-// wrap past midnight (e.g. light at 22:00, dark at 06:00).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct VscodeThemeSchedule {
-    enabled: bool,
-    light_theme: String,
-    dark_theme: String,
-    light_start: String,
-    dark_start: String,
-    updated_at: String,
+// Sunrise/sunset triggers only need an approximate location - close enough
+// that "sunrise" fires within a few minutes of the real one - not a precise
+// street address, so this is a small fixed table of region keys mapped to a
+// representative city's coordinates, picked from a dropdown instead of
+// typing exact latitude/longitude.
+const SUN_REGIONS: &[(&str, &str, f64, f64)] = &[
+    ("us-pacific", "US Pacific (Los Angeles)", 34.05, -118.24),
+    ("us-mountain", "US Mountain (Denver)", 39.74, -104.99),
+    ("us-central", "US Central (Chicago)", 41.88, -87.63),
+    ("us-eastern", "US Eastern (New York)", 40.71, -74.01),
+    ("uk-ireland", "UK & Ireland (London)", 51.51, -0.13),
+    ("eu-west", "EU West (Paris)", 48.86, 2.35),
+    ("eu-central", "EU Central (Berlin)", 52.52, 13.40),
+    ("eu-east", "EU East (Kyiv)", 50.45, 30.52),
+    ("asia-east", "East Asia (Tokyo)", 35.68, 139.69),
+    ("asia-south", "South Asia (Delhi)", 28.61, 77.21),
+    ("australia", "Australia (Sydney)", -33.87, 151.21),
+];
+
+fn sun_region_coordinates(region: &str) -> Option<(f64, f64)> {
+    SUN_REGIONS
+        .iter()
+        .find(|(key, _, _, _)| *key == region)
+        .map(|(_, _, latitude, longitude)| (*latitude, *longitude))
 }
 
-fn default_vscode_theme_schedule() -> VscodeThemeSchedule {
-    VscodeThemeSchedule {
-        enabled: false,
-        light_theme: "Default Light+".to_string(),
-        dark_theme: "Default Dark+".to_string(),
-        light_start: "06:00".to_string(),
-        dark_start: "17:00".to_string(),
-        updated_at: String::new(),
+// A single global setting (not per-automation - the user has one physical
+// location) that all sunrise/sunset timed automations share.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SunLocationSetting {
+    region: String,
+}
+
+fn default_sun_location() -> SunLocationSetting {
+    SunLocationSetting {
+        region: "eu-central".to_string(),
     }
 }
 
-// How often the OS scheduler re-checks and, if needed, corrects VS Code's
-// theme. Also applied once at login/boot (RunAtLoad on macOS) so a machine
-// left asleep across a boundary time self-corrects promptly rather than
-// waiting up to a full interval.
-const VSCODE_THEME_CHECK_INTERVAL_SECONDS: u64 = 600;
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SunRegionOption {
+    value: String,
+    label: String,
+}
 
 // Keep the established aliases.zsh path for backwards compatibility. The file
 // contains syntax understood by both zsh and Bash, regardless of its extension.
@@ -281,6 +313,10 @@ const MAX_AUTOMATION_STEPS: usize = 100;
 const MAX_AUTOMATION_COMMAND_BYTES: usize = 16 * 1024;
 const MAX_AUTOMATION_OUTPUT_CHARS: usize = 20_000;
 const MAX_WAIT_SECONDS: u64 = 24 * 60 * 60;
+// How often the shared sunrise/sunset checker job re-evaluates every
+// sun-triggered timed automation. Tighter than a cosmetic theme check would
+// need, since this actually drives real automation runs.
+const SUN_CHECK_INTERVAL_SECONDS: u64 = 300;
 
 fn default_command_behavior() -> String {
     "wait".to_string()
@@ -348,15 +384,8 @@ fn timed_automation_log_dir() -> Result<PathBuf, String> {
     Ok(app_dir()?.join("timed-automation-logs"))
 }
 
-fn vscode_theme_schedule_file() -> Result<PathBuf, String> {
-    Ok(app_dir()?.join("vscode-theme-schedule.json"))
-}
-
-// VS Code's user settings.json on macOS. VS Code live-reloads this file, so
-// writing a new `workbench.colorTheme` here is enough - no need to restart
-// or otherwise signal VS Code.
-fn vscode_settings_file() -> Result<PathBuf, String> {
-    Ok(home_dir()?.join("Library/Application Support/Code/User/settings.json"))
+fn sun_location_file() -> Result<PathBuf, String> {
+    Ok(app_dir()?.join("sun-location.json"))
 }
 
 fn import_marker_file(_setup: &ShellSetup) -> Result<PathBuf, String> {
@@ -984,13 +1013,47 @@ fn validate_timed_automation(entry: &TimedAutomation, automations: &[Automation]
     {
         return Err("Choose an automation to schedule.".to_string());
     }
-    parse_time_of_day(&entry.time)?;
+    match entry.trigger_kind.as_str() {
+        "clock" => {
+            parse_time_of_day(&entry.time)?;
+        }
+        "sunrise" | "sunset" => {
+            let location = load_sun_location()?;
+            if sun_region_coordinates(&location.region).is_none() {
+                return Err("Choose a region for sunrise/sunset scheduling.".to_string());
+            }
+        }
+        other => return Err(format!("\"{}\" is not a valid trigger.", other)),
+    }
     for day in &entry.days {
         if !WEEKDAYS.contains(&day.as_str()) {
             return Err(format!("\"{}\" is not a valid weekday.", day));
         }
     }
     Ok(())
+}
+
+fn load_sun_location() -> Result<SunLocationSetting, String> {
+    ensure_app_files()?;
+    let path = sun_location_file()?;
+    if !path.exists() {
+        return Ok(default_sun_location());
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let setting: SunLocationSetting = serde_json::from_str(&content)
+        .map_err(|error| format!("sun-location.json is not valid EasyAlias JSON: {}", error))?;
+    Ok(setting)
+}
+
+fn write_sun_location(setting: &SunLocationSetting) -> Result<(), String> {
+    ensure_app_files()?;
+    let json = serde_json::to_string_pretty(setting)
+        .map_err(|error| format!("Location could not be serialized: {}", error))?;
+    let path = sun_location_file()?;
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))
 }
 
 fn load_timed_automation_entries() -> Result<Vec<TimedAutomation>, String> {
@@ -1016,73 +1079,6 @@ fn write_timed_automation_entries(entries: &[TimedAutomation]) -> Result<(), Str
         .map_err(|error| format!("{} could not be written: {}", path.display(), error))
 }
 
-fn validate_vscode_theme_schedule(schedule: &VscodeThemeSchedule) -> Result<(), String> {
-    if schedule.light_theme.trim().is_empty() {
-        return Err("Enter the light theme's exact VS Code name.".to_string());
-    }
-    if schedule.dark_theme.trim().is_empty() {
-        return Err("Enter the dark theme's exact VS Code name.".to_string());
-    }
-    parse_time_of_day(&schedule.light_start)?;
-    parse_time_of_day(&schedule.dark_start)?;
-    if schedule.light_start == schedule.dark_start {
-        return Err("Light and dark start times must be different.".to_string());
-    }
-    Ok(())
-}
-
-fn load_vscode_theme_schedule() -> Result<VscodeThemeSchedule, String> {
-    ensure_app_files()?;
-    let path = vscode_theme_schedule_file()?;
-    if !path.exists() {
-        return Ok(default_vscode_theme_schedule());
-    }
-
-    let content = fs::read_to_string(&path)
-        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
-    let schedule: VscodeThemeSchedule = serde_json::from_str(&content).map_err(|error| {
-        format!(
-            "vscode-theme-schedule.json is not valid EasyAlias JSON: {}",
-            error
-        )
-    })?;
-    Ok(schedule)
-}
-
-fn write_vscode_theme_schedule(schedule: &VscodeThemeSchedule) -> Result<(), String> {
-    ensure_app_files()?;
-    let json = serde_json::to_string_pretty(schedule)
-        .map_err(|error| format!("VS Code theme schedule could not be serialized: {}", error))?;
-    let path = vscode_theme_schedule_file()?;
-    fs::write(&path, format!("{}\n", json))
-        .map_err(|error| format!("{} could not be written: {}", path.display(), error))
-}
-
-// Whether wall-clock time `now` falls in the light window `[light, dark)`.
-// The window may wrap past midnight (e.g. light starts 22:00, dark starts
-// 06:00), so a simple `light <= now < dark` is not enough on its own.
-fn is_light_window(light_start: (u32, u32), dark_start: (u32, u32), now: (u32, u32)) -> bool {
-    let to_minutes = |value: (u32, u32)| value.0 * 60 + value.1;
-    let light = to_minutes(light_start);
-    let dark = to_minutes(dark_start);
-    let current = to_minutes(now);
-    if light < dark {
-        current >= light && current < dark
-    } else {
-        current >= light || current < dark
-    }
-}
-
-fn resolve_scheduled_theme(schedule: &VscodeThemeSchedule, now: (u32, u32)) -> Result<String, String> {
-    let light_start = parse_time_of_day(&schedule.light_start)?;
-    let dark_start = parse_time_of_day(&schedule.dark_start)?;
-    Ok(if is_light_window(light_start, dark_start, now) {
-        schedule.light_theme.clone()
-    } else {
-        schedule.dark_theme.clone()
-    })
-}
-
 // The system's current local wall-clock time. Shells out to `date` instead
 // of adding a timezone-aware date/time crate dependency, matching how the
 // rest of this file already shells out to launchctl/systemctl-equivalents
@@ -1098,204 +1094,159 @@ fn current_local_time() -> Result<(u32, u32), String> {
     parse_time_of_day(String::from_utf8_lossy(&output.stdout).trim())
 }
 
-// Escapes `value` for embedding inside a JSON string literal. Theme names
-// are plain human text; this covers the characters that would otherwise
-// break the surrounding quotes.
-fn escape_json_string(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        match character {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            _ => escaped.push(character),
-        }
-    }
-    escaped
-}
-
-// Sets `"workbench.colorTheme"` inside VS Code's settings.json text by
-// editing only that one key, so the user's own formatting, ordering, and
-// comments (settings.json is JSONC) survive untouched - this deliberately
-// does not round-trip the file through a JSON parser/serializer. Returns
-// `None` when the value already matches, so the caller can skip an
-// unnecessary write: VS Code live-reloads this file on change, and a
-// no-op write would still cause a visible flicker.
-fn set_vscode_color_theme(content: &str, theme: &str) -> Option<String> {
-    let key = "\"workbench.colorTheme\"";
-    if let Some(key_index) = content.find(key) {
-        let after_key = key_index + key.len();
-        let colon_index = content[after_key..].find(':').map(|offset| after_key + offset)?;
-        let rest = &content[colon_index + 1..];
-        let value_start = colon_index + 1 + rest.find('"')? + 1;
-
-        let mut value_end = None;
-        let mut escaped = false;
-        for (offset, character) in content[value_start..].char_indices() {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            match character {
-                '\\' => escaped = true,
-                '"' => {
-                    value_end = Some(value_start + offset);
-                    break;
-                }
-                _ => {}
-            }
-        }
-        let value_end = value_end?;
-
-        if &content[value_start..value_end] == theme {
-            return None;
-        }
-
-        let mut updated = String::with_capacity(content.len());
-        updated.push_str(&content[..value_start]);
-        updated.push_str(&escape_json_string(theme));
-        updated.push_str(&content[value_end..]);
-        Some(updated)
-    } else {
-        let brace_index = content.find('{')?;
-        let is_empty_object = content[brace_index + 1..].trim_start().starts_with('}');
-        let insertion = if is_empty_object {
-            format!("\n  \"workbench.colorTheme\": \"{}\"\n", escape_json_string(theme))
-        } else {
-            format!("\n  \"workbench.colorTheme\": \"{}\",", escape_json_string(theme))
-        };
-        let mut updated = String::with_capacity(content.len() + insertion.len());
-        updated.push_str(&content[..=brace_index]);
-        updated.push_str(&insertion);
-        updated.push_str(&content[brace_index + 1..]);
-        Some(updated)
-    }
-}
-
-// Applies the current schedule to VS Code's settings.json if enabled and
-// the resolved theme differs from what is already set. Called both by the
-// periodic/login OS scheduler (headless) and by the frontend's "Apply now".
-fn apply_vscode_theme_schedule() -> Result<(), String> {
-    let schedule = load_vscode_theme_schedule()?;
-    if !schedule.enabled {
-        return Ok(());
-    }
-    validate_vscode_theme_schedule(&schedule)?;
-
-    let now = current_local_time()?;
-    let theme = resolve_scheduled_theme(&schedule, now)?;
-
-    let settings_path = vscode_settings_file()?;
-    let existing = if settings_path.exists() {
-        fs::read_to_string(&settings_path)
-            .map_err(|error| format!("{} could not be read: {}", settings_path.display(), error))?
-    } else {
-        String::new()
-    };
-    let base = if existing.trim().is_empty() {
-        "{}".to_string()
-    } else {
-        existing
-    };
-
-    if let Some(updated) = set_vscode_color_theme(&base, &theme) {
-        if let Some(parent) = settings_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| format!("{} could not be created: {}", parent.display(), error))?;
-        }
-        fs::write(&settings_path, updated)
-            .map_err(|error| format!("{} could not be written: {}", settings_path.display(), error))?;
-    }
-
-    Ok(())
-}
-
-fn vscode_theme_schedule_launchd_label() -> String {
-    "dev.hannesgnann.easyalias.vscode-theme-schedule".to_string()
-}
-
-fn vscode_theme_schedule_plist_path() -> Result<PathBuf, String> {
-    Ok(home_dir()?
-        .join("Library/LaunchAgents")
-        .join(format!("{}.plist", vscode_theme_schedule_launchd_label())))
-}
-
-// Removes the launchd job that periodically checks the VS Code theme
-// schedule, if one is currently loaded - safe to call even if nothing was
-// ever scheduled.
-fn unschedule_vscode_theme_schedule_macos() -> Result<(), String> {
-    let plist_path = vscode_theme_schedule_plist_path()?;
-    if plist_path.exists() {
-        let _ = Command::new("launchctl")
-            .arg("unload")
-            .arg("-w")
-            .arg(&plist_path)
-            .output();
-        fs::remove_file(&plist_path).map_err(|error| {
-            format!("{} could not be removed: {}", plist_path.display(), error)
-        })?;
-    }
-    Ok(())
-}
-
-// Writes a launchd LaunchAgent that invokes this same executable with
-// `--apply-vscode-theme` every VSCODE_THEME_CHECK_INTERVAL_SECONDS, and once
-// immediately at login (RunAtLoad) - this is what lets the theme
-// self-correct shortly after the Mac wakes or the user logs in, not just at
-// the next periodic tick.
-fn schedule_vscode_theme_schedule_macos() -> Result<(), String> {
-    unschedule_vscode_theme_schedule_macos()?;
-
-    let exe = env::current_exe()
-        .map_err(|error| format!("Application path could not be determined: {}", error))?;
-
-    let plist = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
-<plist version=\"1.0\">\n\
-<dict>\n\
-  <key>Label</key>\n\
-  <string>{label}</string>\n\
-  <key>ProgramArguments</key>\n\
-  <array>\n\
-    <string>{exe}</string>\n\
-    <string>--apply-vscode-theme</string>\n\
-  </array>\n\
-  <key>StartInterval</key>\n\
-  <integer>{interval}</integer>\n\
-  <key>RunAtLoad</key>\n\
-  <true/>\n\
-</dict>\n\
-</plist>\n",
-        label = vscode_theme_schedule_launchd_label(),
-        exe = exe.display(),
-        interval = VSCODE_THEME_CHECK_INTERVAL_SECONDS
-    );
-
-    let plist_path = vscode_theme_schedule_plist_path()?;
-    if let Some(parent) = plist_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("{} could not be created: {}", parent.display(), error))?;
-    }
-    fs::write(&plist_path, plist)
-        .map_err(|error| format!("{} could not be written: {}", plist_path.display(), error))?;
-
-    let output = Command::new("launchctl")
-        .arg("load")
-        .arg("-w")
-        .arg(&plist_path)
+fn today_date_string() -> Result<String, String> {
+    let output = Command::new("date")
+        .arg("+%Y-%m-%d")
         .output()
-        .map_err(|error| format!("launchctl could not be started: {}", error))?;
+        .map_err(|error| format!("Today's date could not be read: {}", error))?;
     if !output.status.success() {
-        return Err(format!(
-            "launchctl load failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        return Err("Today's date could not be read.".to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn day_of_year() -> Result<u32, String> {
+    let output = Command::new("date")
+        .arg("+%j")
+        .output()
+        .map_err(|error| format!("Day of year could not be read: {}", error))?;
+    if !output.status.success() {
+        return Err("Day of year could not be read.".to_string());
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u32>()
+        .map_err(|error| format!("Day of year could not be parsed: {}", error))
+}
+
+// `%a` is locale-dependent ("Lun" in French, "Mo" in German, ...); forcing
+// LC_ALL=C keeps it in English so it matches the lowercase WEEKDAYS keys
+// regardless of the system's configured locale.
+fn current_weekday_abbrev() -> Result<String, String> {
+    let output = Command::new("date")
+        .env("LC_ALL", "C")
+        .arg("+%a")
+        .output()
+        .map_err(|error| format!("Weekday could not be read: {}", error))?;
+    if !output.status.success() {
+        return Err("Weekday could not be read.".to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_lowercase())
+}
+
+// Parses `date +%z` output ("+0200", "-0530", ...) into a UTC offset in
+// minutes. Extracted as its own pure function so it can be unit tested
+// without depending on the system's actual timezone.
+fn parse_utc_offset(text: &str) -> Result<i64, String> {
+    let trimmed = text.trim();
+    if trimmed.len() != 5 || !(trimmed.starts_with('+') || trimmed.starts_with('-')) {
+        return Err(format!("\"{}\" is not a valid UTC offset (expected +HHMM).", text));
+    }
+    let sign: i64 = if trimmed.starts_with('-') { -1 } else { 1 };
+    let hours: i64 = trimmed[1..3]
+        .parse()
+        .map_err(|_| format!("\"{}\" is not a valid UTC offset (expected +HHMM).", text))?;
+    let minutes: i64 = trimmed[3..5]
+        .parse()
+        .map_err(|_| format!("\"{}\" is not a valid UTC offset (expected +HHMM).", text))?;
+    Ok(sign * (hours * 60 + minutes))
+}
+
+fn system_utc_offset_minutes() -> Result<i64, String> {
+    let output = Command::new("date")
+        .arg("+%z")
+        .output()
+        .map_err(|error| format!("UTC offset could not be read: {}", error))?;
+    if !output.status.success() {
+        return Err("UTC offset could not be read.".to_string());
+    }
+    parse_utc_offset(String::from_utf8_lossy(&output.stdout).trim())
+}
+
+// The classic "Sunrise/Sunset Algorithm" (Almanac for Computers, 1990, as
+// popularized by edwilliams.org/sunrise_sunset_algorithm.htm). Pure and
+// self-contained so it can be unit tested against known reference values
+// without needing a real date or timezone. Returns the event as UTC
+// minutes-since-midnight, or `None` when the sun does not rise/set that day
+// at that latitude (polar day/night).
+fn sun_event_utc_minutes(day_of_year: u32, latitude: f64, longitude: f64, is_sunrise: bool) -> Option<f64> {
+    const ZENITH: f64 = 90.833; // official zenith for sunrise/sunset (includes refraction + solar radius)
+    let to_radians = std::f64::consts::PI / 180.0;
+    let to_degrees = 180.0 / std::f64::consts::PI;
+
+    let lng_hour = longitude / 15.0;
+    let hour_anchor = if is_sunrise { 6.0 } else { 18.0 };
+    let t = day_of_year as f64 + ((hour_anchor - lng_hour) / 24.0);
+
+    let mean_anomaly = (0.9856 * t) - 3.289;
+
+    let mut true_longitude = mean_anomaly
+        + (1.916 * (mean_anomaly * to_radians).sin())
+        + (0.020 * (2.0 * mean_anomaly * to_radians).sin())
+        + 282.634;
+    true_longitude = ((true_longitude % 360.0) + 360.0) % 360.0;
+
+    let mut right_ascension = to_degrees * (0.91764 * (true_longitude * to_radians).tan()).atan();
+    right_ascension = ((right_ascension % 360.0) + 360.0) % 360.0;
+    let longitude_quadrant = (true_longitude / 90.0).floor() * 90.0;
+    let ascension_quadrant = (right_ascension / 90.0).floor() * 90.0;
+    right_ascension += longitude_quadrant - ascension_quadrant;
+    right_ascension /= 15.0;
+
+    let sin_declination = 0.39782 * (true_longitude * to_radians).sin();
+    let cos_declination = sin_declination.asin().cos();
+
+    let cos_hour_angle = ((ZENITH * to_radians).cos() - (sin_declination * (latitude * to_radians).sin()))
+        / (cos_declination * (latitude * to_radians).cos());
+    if !(-1.0..=1.0).contains(&cos_hour_angle) {
+        return None;
     }
 
-    Ok(())
+    let hour_angle_degrees = if is_sunrise {
+        360.0 - to_degrees * cos_hour_angle.acos()
+    } else {
+        to_degrees * cos_hour_angle.acos()
+    };
+    let hour_angle = hour_angle_degrees / 15.0;
+
+    let local_mean_time = hour_angle + right_ascension - (0.06571 * t) - 6.622;
+
+    let mut utc_hours = local_mean_time - lng_hour;
+    utc_hours = ((utc_hours % 24.0) + 24.0) % 24.0;
+
+    Some(utc_hours * 60.0)
+}
+
+// Combines a UTC sun-event time with a UTC offset to get local (hour, minute).
+fn sun_event_local_time(utc_minutes: f64, utc_offset_minutes: i64) -> (u32, u32) {
+    let local = utc_minutes + utc_offset_minutes as f64;
+    let normalized = (((local % 1440.0) + 1440.0) % 1440.0).round() as i64 % 1440;
+    ((normalized / 60) as u32, (normalized % 60) as u32)
+}
+
+// Resolves what time a timed automation should fire at *today*: a fixed
+// clock time, or today's actual sunrise/sunset for the configured region.
+// `None` for a sun trigger means the sun does not rise/set there today
+// (polar day/night) - the caller should just skip it for today.
+fn resolve_trigger_time_today(
+    entry: &TimedAutomation,
+    today_day_of_year: u32,
+    utc_offset_minutes: i64,
+) -> Result<Option<(u32, u32)>, String> {
+    match entry.trigger_kind.as_str() {
+        "clock" => Ok(Some(parse_time_of_day(&entry.time)?)),
+        "sunrise" | "sunset" => {
+            let location = load_sun_location()?;
+            let (latitude, longitude) = sun_region_coordinates(&location.region)
+                .ok_or_else(|| format!("\"{}\" is not a known region.", location.region))?;
+            let is_sunrise = entry.trigger_kind == "sunrise";
+            match sun_event_utc_minutes(today_day_of_year, latitude, longitude, is_sunrise) {
+                Some(utc_minutes) => Ok(Some(sun_event_local_time(utc_minutes, utc_offset_minutes))),
+                None => Ok(None),
+            }
+        }
+        other => Err(format!("\"{}\" is not a valid trigger.", other)),
+    }
 }
 
 // launchd Weekday integers: 0 (or 7) = Sunday, 1 = Monday, ... 6 = Saturday.
@@ -1435,6 +1386,106 @@ fn schedule_timed_automation_macos(entry: &TimedAutomation) -> Result<(), String
     Ok(())
 }
 
+fn sun_timed_automations_checker_launchd_label() -> String {
+    "dev.hannesgnann.easyalias.sun-timed-automations".to_string()
+}
+
+fn sun_timed_automations_checker_plist_path() -> Result<PathBuf, String> {
+    Ok(home_dir()?
+        .join("Library/LaunchAgents")
+        .join(format!("{}.plist", sun_timed_automations_checker_launchd_label())))
+}
+
+// Removes the shared launchd job that periodically checks sunrise/sunset
+// timed automations, if one is currently loaded - safe to call even if
+// nothing was ever scheduled.
+fn unschedule_sun_timed_automations_checker_macos() -> Result<(), String> {
+    let plist_path = sun_timed_automations_checker_plist_path()?;
+    if plist_path.exists() {
+        let _ = Command::new("launchctl")
+            .arg("unload")
+            .arg("-w")
+            .arg(&plist_path)
+            .output();
+        fs::remove_file(&plist_path).map_err(|error| {
+            format!("{} could not be removed: {}", plist_path.display(), error)
+        })?;
+    }
+    Ok(())
+}
+
+// Writes a launchd LaunchAgent that invokes this same executable with
+// `--check-sun-timed-automations` every SUN_CHECK_INTERVAL_SECONDS, and once
+// immediately at login (RunAtLoad). One shared job serves every
+// sunrise/sunset timed automation, since none of them can be baked into a
+// fixed OS calendar trigger the way a clock-time one can.
+fn schedule_sun_timed_automations_checker_macos() -> Result<(), String> {
+    unschedule_sun_timed_automations_checker_macos()?;
+
+    let exe = env::current_exe()
+        .map_err(|error| format!("Application path could not be determined: {}", error))?;
+
+    let plist = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+  <key>Label</key>\n\
+  <string>{label}</string>\n\
+  <key>ProgramArguments</key>\n\
+  <array>\n\
+    <string>{exe}</string>\n\
+    <string>--check-sun-timed-automations</string>\n\
+  </array>\n\
+  <key>StartInterval</key>\n\
+  <integer>{interval}</integer>\n\
+  <key>RunAtLoad</key>\n\
+  <true/>\n\
+</dict>\n\
+</plist>\n",
+        label = sun_timed_automations_checker_launchd_label(),
+        exe = exe.display(),
+        interval = SUN_CHECK_INTERVAL_SECONDS
+    );
+
+    let plist_path = sun_timed_automations_checker_plist_path()?;
+    if let Some(parent) = plist_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("{} could not be created: {}", parent.display(), error))?;
+    }
+    fs::write(&plist_path, plist)
+        .map_err(|error| format!("{} could not be written: {}", plist_path.display(), error))?;
+
+    let output = Command::new("launchctl")
+        .arg("load")
+        .arg("-w")
+        .arg(&plist_path)
+        .output()
+        .map_err(|error| format!("launchctl could not be started: {}", error))?;
+    if !output.status.success() {
+        return Err(format!(
+            "launchctl load failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    Ok(())
+}
+
+// Keeps the shared checker job's scheduled state in sync with whether any
+// enabled sunrise/sunset timed automation currently exists - called after
+// every save/delete since any of those can change the answer.
+fn sync_sun_timed_automations_checker_macos(entries: &[TimedAutomation]) -> Result<(), String> {
+    let needed = entries
+        .iter()
+        .any(|entry| entry.enabled && (entry.trigger_kind == "sunrise" || entry.trigger_kind == "sunset"));
+    if needed {
+        schedule_sun_timed_automations_checker_macos()
+    } else {
+        unschedule_sun_timed_automations_checker_macos()
+    }
+}
+
 // Runs every step of `automation` sequentially through one persistent shell
 // session, exactly like an interactive run, but with no frontend to report
 // progress to - only the final outcome is recorded by the caller.
@@ -1506,6 +1557,75 @@ fn run_timed_automation_headless(id: &str) -> Result<(), String> {
     write_timed_automation_entries(&entries)?;
 
     run_result
+}
+
+// Entry point for `--check-sun-timed-automations`: no Tauri runtime, no
+// window. Runs on the shared periodic checker (unlike clock-time entries,
+// which each get their own exact-fire launchd job). For every enabled
+// sunrise/sunset entry that hasn't already fired today and whose target
+// time for today has passed, runs it and records the outcome, same as the
+// exact-time path.
+fn check_sun_timed_automations() -> Result<(), String> {
+    let mut entries = load_timed_automation_entries()?;
+    let automations = load_automation_entries()?;
+    let now = current_local_time()?;
+    let now_minutes = now.0 * 60 + now.1;
+    let today = today_date_string()?;
+    let today_day_of_year = day_of_year()?;
+    let today_weekday = current_weekday_abbrev()?;
+    let utc_offset_minutes = system_utc_offset_minutes()?;
+    let mut changed = false;
+
+    for index in 0..entries.len() {
+        let entry = entries[index].clone();
+        if !entry.enabled {
+            continue;
+        }
+        if entry.trigger_kind != "sunrise" && entry.trigger_kind != "sunset" {
+            continue;
+        }
+        if entry.last_triggered_date.as_deref() == Some(today.as_str()) {
+            continue;
+        }
+        if !entry.days.is_empty() && !entry.days.iter().any(|day| day == &today_weekday) {
+            continue;
+        }
+
+        let target = match resolve_trigger_time_today(&entry, today_day_of_year, utc_offset_minutes) {
+            Ok(Some(target)) => target,
+            Ok(None) => continue, // polar day/night - no event today
+            Err(_) => continue,   // don't let one bad entry block the rest of the batch
+        };
+        if now_minutes < (target.0 * 60 + target.1) {
+            continue;
+        }
+
+        let automation = match automations.iter().find(|item| item.id == entry.automation_id) {
+            Some(automation) => automation,
+            None => continue,
+        };
+
+        let run_result = run_automation_steps_headless(automation);
+        entries[index].last_triggered_date = Some(today.clone());
+        entries[index].last_run_at = unix_timestamp().ok();
+        match &run_result {
+            Ok(()) => {
+                entries[index].last_run_status = Some("success".to_string());
+                entries[index].last_run_output = None;
+            }
+            Err(message) => {
+                entries[index].last_run_status = Some("error".to_string());
+                entries[index].last_run_output = Some(message.chars().take(500).collect());
+            }
+        }
+        changed = true;
+    }
+
+    if changed {
+        write_timed_automation_entries(&entries)?;
+    }
+
+    Ok(())
 }
 
 fn write_automation_trash_entries(entries: &[AutomationTrashEntry]) -> Result<(), String> {
@@ -2044,9 +2164,11 @@ fn list_timed_automations() -> Result<Vec<TimedAutomation>, String> {
 }
 
 // Validates against the current automation list, persists, and re-syncs the
-// launchd job so the OS schedule always matches what was just saved -
-// editing the time/days/enabled state takes effect immediately, not just
-// after the app restarts.
+// OS schedule so it always matches what was just saved - editing the
+// trigger/time/days/enabled state takes effect immediately, not just after
+// the app restarts. Clock-time entries each get their own exact-fire
+// launchd job; sunrise/sunset entries instead ride the shared checker job,
+// (re)synced against the full list since it serves every such entry at once.
 #[tauri::command]
 fn save_timed_automation(entry: TimedAutomation) -> Result<Vec<TimedAutomation>, String> {
     let automations = load_automation_entries()?;
@@ -2058,7 +2180,15 @@ fn save_timed_automation(entry: TimedAutomation) -> Result<Vec<TimedAutomation>,
         None => entries.push(entry.clone()),
     }
     write_timed_automation_entries(&entries)?;
-    schedule_timed_automation_macos(&entry)?;
+
+    if entry.trigger_kind == "clock" {
+        schedule_timed_automation_macos(&entry)?;
+    } else {
+        // Not a clock entry (any more) - remove a stale individual job left
+        // over from switching this entry away from a clock trigger.
+        unschedule_timed_automation_macos(&entry.id)?;
+    }
+    sync_sun_timed_automations_checker_macos(&entries)?;
 
     Ok(entries)
 }
@@ -2073,38 +2203,33 @@ fn delete_timed_automation(id: String) -> Result<Vec<TimedAutomation>, String> {
     }
     write_timed_automation_entries(&entries)?;
     unschedule_timed_automation_macos(&id)?;
+    sync_sun_timed_automations_checker_macos(&entries)?;
     Ok(entries)
 }
 
 #[tauri::command]
-fn load_vscode_theme_schedule_state() -> Result<VscodeThemeSchedule, String> {
-    load_vscode_theme_schedule()
+fn list_sun_regions() -> Vec<SunRegionOption> {
+    SUN_REGIONS
+        .iter()
+        .map(|(key, label, _, _)| SunRegionOption {
+            value: key.to_string(),
+            label: label.to_string(),
+        })
+        .collect()
 }
 
-// Validates, persists, applies immediately (so enabling/editing takes
-// effect right away instead of waiting for the next periodic check), and
-// re-syncs the launchd job - enabling schedules it, disabling removes it.
 #[tauri::command]
-fn save_vscode_theme_schedule(schedule: VscodeThemeSchedule) -> Result<VscodeThemeSchedule, String> {
-    validate_vscode_theme_schedule(&schedule)?;
-    write_vscode_theme_schedule(&schedule)?;
+fn load_sun_location_state() -> Result<SunLocationSetting, String> {
+    load_sun_location()
+}
 
-    if schedule.enabled {
-        schedule_vscode_theme_schedule_macos()?;
-        apply_vscode_theme_schedule()?;
-    } else {
-        unschedule_vscode_theme_schedule_macos()?;
+#[tauri::command]
+fn save_sun_location(setting: SunLocationSetting) -> Result<SunLocationSetting, String> {
+    if sun_region_coordinates(&setting.region).is_none() {
+        return Err(format!("\"{}\" is not a known region.", setting.region));
     }
-
-    Ok(schedule)
-}
-
-// Backs the "Apply now" button: re-runs the same check the OS scheduler
-// runs periodically, immediately, regardless of the check interval.
-#[tauri::command]
-fn check_vscode_theme_now() -> Result<VscodeThemeSchedule, String> {
-    apply_vscode_theme_schedule()?;
-    load_vscode_theme_schedule()
+    write_sun_location(&setting)?;
+    Ok(setting)
 }
 
 #[tauri::command]
@@ -2443,17 +2568,16 @@ fn main() {
         };
         std::process::exit(exit_code);
     }
-    if args.len() >= 2 && args[1] == "--apply-vscode-theme" {
-        let exit_code = match apply_vscode_theme_schedule() {
+    if args.len() >= 2 && args[1] == "--check-sun-timed-automations" {
+        let exit_code = match check_sun_timed_automations() {
             Ok(()) => 0,
             Err(error) => {
-                eprintln!("VS Code theme schedule check failed: {}", error);
+                eprintln!("Sunrise/sunset timed automations check failed: {}", error);
                 1
             }
         };
         std::process::exit(exit_code);
     }
-
     // Register native plugins before exposing commands to the frontend.
     // dialog = file/folder picker, opener = open GitHub in the system browser.
     tauri::Builder::default()
@@ -2479,9 +2603,9 @@ fn main() {
             list_timed_automations,
             save_timed_automation,
             delete_timed_automation,
-            load_vscode_theme_schedule_state,
-            save_vscode_theme_schedule,
-            check_vscode_theme_now,
+            list_sun_regions,
+            load_sun_location_state,
+            save_sun_location,
             list_trash,
             move_alias_to_trash,
             restore_trash_alias,
@@ -3097,21 +3221,28 @@ mod tests {
         assert!(parse_time_of_day("not-a-time").is_err());
     }
 
-    #[test]
-    fn validates_timed_automation_against_its_target() {
-        let automation = test_automation("devstart", "DevStart", "echo hi");
-        let mut entry = TimedAutomation {
-            id: "timed-1".to_string(),
-            automation_id: "devstart".to_string(),
-            time: "09:00".to_string(),
-            days: vec!["mon".to_string(), "wed".to_string()],
+    fn test_timed_automation(id: &str, automation_id: &str, time: &str) -> TimedAutomation {
+        TimedAutomation {
+            id: id.to_string(),
+            automation_id: automation_id.to_string(),
+            trigger_kind: "clock".to_string(),
+            time: time.to_string(),
+            days: Vec::new(),
             enabled: true,
             created_at: "2026-08-24T18:00:00.000Z".to_string(),
             updated_at: "2026-08-24T18:00:00.000Z".to_string(),
             last_run_at: None,
             last_run_status: None,
             last_run_output: None,
-        };
+            last_triggered_date: None,
+        }
+    }
+
+    #[test]
+    fn validates_timed_automation_against_its_target() {
+        let automation = test_automation("devstart", "DevStart", "echo hi");
+        let mut entry = test_timed_automation("timed-1", "devstart", "09:00");
+        entry.days = vec!["mon".to_string(), "wed".to_string()];
         assert!(validate_timed_automation(&entry, &[automation.clone()]).is_ok());
 
         entry.automation_id = "missing".to_string();
@@ -3136,18 +3267,12 @@ mod tests {
         let _home_lock = HOME_LOCK.lock().unwrap();
         let home = TemporaryHome::create();
 
-        let entry = TimedAutomation {
-            id: format!("test-schedule-{}", unix_timestamp().unwrap()),
-            automation_id: "devstart".to_string(),
-            time: "03:17".to_string(),
-            days: vec!["mon".to_string()],
-            enabled: true,
-            created_at: "2026-08-24T18:00:00.000Z".to_string(),
-            updated_at: "2026-08-24T18:00:00.000Z".to_string(),
-            last_run_at: None,
-            last_run_status: None,
-            last_run_output: None,
-        };
+        let mut entry = test_timed_automation(
+            &format!("test-schedule-{}", unix_timestamp().unwrap()),
+            "devstart",
+            "03:17",
+        );
+        entry.days = vec!["mon".to_string()];
 
         schedule_timed_automation_macos(&entry).unwrap();
 
@@ -3179,120 +3304,161 @@ mod tests {
         drop(home);
     }
 
-    fn test_vscode_theme_schedule(light_start: &str, dark_start: &str) -> VscodeThemeSchedule {
-        VscodeThemeSchedule {
-            enabled: true,
-            light_theme: "Default Light+".to_string(),
-            dark_theme: "Default Dark+".to_string(),
-            light_start: light_start.to_string(),
-            dark_start: dark_start.to_string(),
-            updated_at: "2026-08-31T18:00:00.000Z".to_string(),
+    #[test]
+    fn rejects_an_unknown_trigger_kind() {
+        let automation = test_automation("devstart", "DevStart", "echo hi");
+        let mut entry = test_timed_automation("timed-1", "devstart", "09:00");
+        entry.trigger_kind = "moonrise".to_string();
+        assert!(validate_timed_automation(&entry, &[automation])
+            .unwrap_err()
+            .contains("not a valid trigger"));
+    }
+
+    // At the equator, day length stays close to 12 hours year-round
+    // regardless of season - a solid sanity check for the algorithm that
+    // does not depend on an external reference table.
+    #[test]
+    fn sunrise_and_sunset_are_roughly_12_hours_apart_at_the_equator() {
+        for day in [1, 80, 172, 264, 355] {
+            let sunrise = sun_event_utc_minutes(day, 0.0, 0.0, true).unwrap();
+            let sunset = sun_event_utc_minutes(day, 0.0, 0.0, false).unwrap();
+            let day_length = sunset - sunrise;
+            assert!(
+                (day_length - 720.0).abs() < 20.0,
+                "day {} expected ~720 min of daylight at the equator, got {}",
+                day,
+                day_length
+            );
         }
     }
 
     #[test]
-    fn resolves_the_scheduled_theme_including_overnight_wraparound() {
-        let daytime = test_vscode_theme_schedule("06:00", "17:00");
-        assert_eq!(
-            resolve_scheduled_theme(&daytime, (5, 59)).unwrap(),
-            "Default Dark+"
-        );
-        assert_eq!(
-            resolve_scheduled_theme(&daytime, (6, 0)).unwrap(),
-            "Default Light+"
-        );
-        assert_eq!(
-            resolve_scheduled_theme(&daytime, (14, 0)).unwrap(),
-            "Default Light+"
-        );
-        assert_eq!(
-            resolve_scheduled_theme(&daytime, (16, 59)).unwrap(),
-            "Default Light+"
-        );
-        assert_eq!(
-            resolve_scheduled_theme(&daytime, (17, 0)).unwrap(),
-            "Default Dark+"
-        );
-        assert_eq!(
-            resolve_scheduled_theme(&daytime, (23, 30)).unwrap(),
-            "Default Dark+"
-        );
-
-        // Light window wraps past midnight.
-        let overnight = test_vscode_theme_schedule("22:00", "06:00");
-        assert_eq!(
-            resolve_scheduled_theme(&overnight, (23, 0)).unwrap(),
-            "Default Light+"
-        );
-        assert_eq!(
-            resolve_scheduled_theme(&overnight, (2, 0)).unwrap(),
-            "Default Light+"
-        );
-        assert_eq!(
-            resolve_scheduled_theme(&overnight, (12, 0)).unwrap(),
-            "Default Dark+"
-        );
+    fn sun_never_sets_near_the_pole_in_local_summer() {
+        // Just inside the Arctic Circle around the summer solstice: the sun
+        // should not set at all (midnight sun), so cos(hour angle) falls
+        // outside [-1, 1] and the function returns None.
+        assert!(sun_event_utc_minutes(172, 78.0, 0.0, false).is_none());
     }
 
     #[test]
-    fn rejects_identical_light_and_dark_start_times() {
-        let schedule = test_vscode_theme_schedule("09:00", "09:00");
-        assert!(validate_vscode_theme_schedule(&schedule)
-            .unwrap_err()
-            .contains("must be different"));
+    fn sun_never_rises_near_the_pole_in_local_winter() {
+        // Same location, opposite solstice - polar night.
+        assert!(sun_event_utc_minutes(355, 78.0, 0.0, true).is_none());
     }
 
     #[test]
-    fn sets_the_color_theme_key_in_place_and_skips_a_no_op_write() {
-        let content = "{\n  \"editor.fontSize\": 14,\n  \"workbench.colorTheme\": \"Default Dark+\",\n  \"files.autoSave\": \"off\"\n}\n";
-        let updated = set_vscode_color_theme(content, "Default Light+").unwrap();
-        assert!(updated.contains("\"workbench.colorTheme\": \"Default Light+\""));
-        assert!(updated.contains("\"editor.fontSize\": 14"));
-        assert!(updated.contains("\"files.autoSave\": \"off\""));
-
-        // Re-applying the same theme is a no-op - no write should happen.
-        assert!(set_vscode_color_theme(&updated, "Default Light+").is_none());
+    fn converts_utc_sun_event_to_local_time_with_wraparound() {
+        assert_eq!(sun_event_local_time(360.0, 120), (8, 0)); // 06:00 UTC + 2h = 08:00
+        assert_eq!(sun_event_local_time(30.0, -120), (22, 30)); // 00:30 UTC - 2h wraps to the previous day, 22:30
+        assert_eq!(sun_event_local_time(1430.0, 60), (0, 50)); // 23:50 UTC + 1h wraps past midnight to 00:50
     }
 
     #[test]
-    fn inserts_the_color_theme_key_when_missing() {
-        let with_other_keys = "{\n  \"editor.fontSize\": 14\n}\n";
-        let updated = set_vscode_color_theme(with_other_keys, "One Dark Pro").unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&updated).unwrap();
-        assert_eq!(parsed["workbench.colorTheme"], "One Dark Pro");
-        assert_eq!(parsed["editor.fontSize"], 14);
-
-        let empty_object = "{}";
-        let updated_empty = set_vscode_color_theme(empty_object, "One Dark Pro").unwrap();
-        let parsed_empty: serde_json::Value = serde_json::from_str(&updated_empty).unwrap();
-        assert_eq!(parsed_empty["workbench.colorTheme"], "One Dark Pro");
+    fn parses_valid_and_rejects_invalid_utc_offsets() {
+        assert_eq!(parse_utc_offset("+0200").unwrap(), 120);
+        assert_eq!(parse_utc_offset("-0530").unwrap(), -330);
+        assert_eq!(parse_utc_offset("+0000").unwrap(), 0);
+        assert!(parse_utc_offset("0200").is_err());
+        assert!(parse_utc_offset("+02:00").is_err());
+        assert!(parse_utc_offset("garbage").is_err());
     }
 
-    // Exercises the real macOS scheduler end to end for the VS Code theme
-    // check, the same way schedules_and_unschedules_a_real_launchd_job does
-    // for timed automations: writes a LaunchAgent plist, loads it with the
-    // actual `launchctl`, confirms launchd reports it as registered, then
-    // removes it. Uses a temporary HOME so nothing touches the developer's
-    // real ~/Library/LaunchAgents.
     #[test]
-    fn schedules_and_unschedules_the_real_vscode_theme_launchd_job() {
+    fn resolves_clock_trigger_time_directly() {
+        let entry = test_timed_automation("timed-1", "devstart", "14:30");
+        assert_eq!(resolve_trigger_time_today(&entry, 80, 0).unwrap(), Some((14, 30)));
+    }
+
+    #[test]
+    fn resolves_sunrise_trigger_using_the_configured_region() {
         let _home_lock = HOME_LOCK.lock().unwrap();
         let home = TemporaryHome::create();
 
-        schedule_vscode_theme_schedule_macos().unwrap();
+        write_sun_location(&SunLocationSetting {
+            region: "eu-central".to_string(),
+        })
+        .unwrap();
+        let mut entry = test_timed_automation("timed-1", "devstart", "");
+        entry.trigger_kind = "sunrise".to_string();
+        let resolved = resolve_trigger_time_today(&entry, 172, 120).unwrap();
+        assert!(resolved.is_some());
 
-        let plist_path = vscode_theme_schedule_plist_path().unwrap();
+        drop(home);
+    }
+
+    #[test]
+    fn check_sun_timed_automations_skips_an_entry_already_triggered_today() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let home = TemporaryHome::create();
+
+        write_sun_location(&SunLocationSetting {
+            region: "eu-central".to_string(),
+        })
+        .unwrap();
+        let automation = test_automation("devstart", "DevStart", "echo hi");
+        write_automation_entries(&[automation]).unwrap();
+
+        let mut entry = test_timed_automation("timed-1", "devstart", "");
+        entry.trigger_kind = "sunrise".to_string();
+        entry.last_triggered_date = Some(today_date_string().unwrap());
+        write_timed_automation_entries(&[entry]).unwrap();
+
+        check_sun_timed_automations().unwrap();
+
+        let entries = load_timed_automation_entries().unwrap();
+        assert_eq!(
+            entries[0].last_run_at, None,
+            "an entry already triggered today should not run again"
+        );
+
+        drop(home);
+    }
+
+    #[test]
+    fn check_sun_timed_automations_skips_a_disabled_entry() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let home = TemporaryHome::create();
+
+        write_sun_location(&SunLocationSetting {
+            region: "eu-central".to_string(),
+        })
+        .unwrap();
+        let automation = test_automation("devstart", "DevStart", "echo hi");
+        write_automation_entries(&[automation]).unwrap();
+
+        let mut entry = test_timed_automation("timed-1", "devstart", "");
+        entry.trigger_kind = "sunrise".to_string();
+        entry.enabled = false;
+        write_timed_automation_entries(&[entry]).unwrap();
+
+        check_sun_timed_automations().unwrap();
+
+        let entries = load_timed_automation_entries().unwrap();
+        assert_eq!(entries[0].last_run_at, None, "a disabled entry should never run");
+        assert_eq!(entries[0].last_triggered_date, None);
+
+        drop(home);
+    }
+
+    // Exercises the real macOS scheduler end to end for the shared sunrise/
+    // sunset checker job, the same way schedules_and_unschedules_a_real_
+    // launchd_job does for a single clock-time timed automation.
+    #[test]
+    fn schedules_and_unschedules_the_real_sun_checker_launchd_job() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let home = TemporaryHome::create();
+
+        schedule_sun_timed_automations_checker_macos().unwrap();
+
+        let plist_path = sun_timed_automations_checker_plist_path().unwrap();
         assert!(plist_path.exists(), "plist was not written");
         let plist_content = fs::read_to_string(&plist_path).unwrap();
-        assert!(plist_content.contains(&vscode_theme_schedule_launchd_label()));
-        assert!(plist_content.contains("--apply-vscode-theme"));
-        assert!(plist_content.contains(&format!(
-            "<integer>{}</integer>",
-            VSCODE_THEME_CHECK_INTERVAL_SECONDS
-        )));
+        assert!(plist_content.contains(&sun_timed_automations_checker_launchd_label()));
+        assert!(plist_content.contains("--check-sun-timed-automations"));
+        assert!(plist_content.contains(&format!("<integer>{}</integer>", SUN_CHECK_INTERVAL_SECONDS)));
         assert!(plist_content.contains("<key>RunAtLoad</key>"));
 
-        let label = vscode_theme_schedule_launchd_label();
+        let label = sun_timed_automations_checker_launchd_label();
         let list_output = Command::new("launchctl").arg("list").arg(&label).output().unwrap();
         assert!(
             list_output.status.success(),
@@ -3300,7 +3466,7 @@ mod tests {
             String::from_utf8_lossy(&list_output.stderr)
         );
 
-        unschedule_vscode_theme_schedule_macos().unwrap();
+        unschedule_sun_timed_automations_checker_macos().unwrap();
         assert!(!plist_path.exists(), "plist was not removed");
 
         let list_after = Command::new("launchctl").arg("list").arg(&label).output().unwrap();
@@ -3308,46 +3474,6 @@ mod tests {
             !list_after.status.success(),
             "launchctl still reports the job as loaded after unscheduling"
         );
-
-        drop(home);
-    }
-
-    // End-to-end (minus the OS scheduler itself): a disabled schedule is
-    // written but never touches settings.json; enabling it and applying
-    // writes the theme for the current time into a fake settings.json
-    // living under the temporary HOME.
-    #[test]
-    fn apply_writes_the_resolved_theme_into_settings_json() {
-        let _home_lock = HOME_LOCK.lock().unwrap();
-        let home = TemporaryHome::create();
-
-        let now = current_local_time().unwrap();
-        let (light_start, dark_start, expected_theme) = if now.0 * 60 + now.1 < 12 * 60 {
-            // Before noon: make "now" the light window so the test is
-            // deterministic regardless of the wall-clock time it runs at.
-            ("00:00".to_string(), "12:00".to_string(), "Default Light+")
-        } else {
-            ("00:00".to_string(), "12:00".to_string(), "Default Dark+")
-        };
-
-        let mut schedule = test_vscode_theme_schedule(&light_start, &dark_start);
-        schedule.enabled = false;
-        write_vscode_theme_schedule(&schedule).unwrap();
-        apply_vscode_theme_schedule().unwrap();
-        assert!(
-            !vscode_settings_file().unwrap().exists(),
-            "a disabled schedule must not touch settings.json"
-        );
-
-        schedule.enabled = true;
-        write_vscode_theme_schedule(&schedule).unwrap();
-        apply_vscode_theme_schedule().unwrap();
-
-        let settings_path = vscode_settings_file().unwrap();
-        assert!(settings_path.exists(), "settings.json was not created");
-        let content = fs::read_to_string(&settings_path).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(parsed["workbench.colorTheme"], expected_theme);
 
         drop(home);
     }

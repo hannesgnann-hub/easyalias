@@ -1701,6 +1701,9 @@ textarea:focus {
 }
 
 .timed-automation-day-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 12px;
   border: 1px solid #d7e1dd;
   border-radius: 999px;
@@ -1709,6 +1712,12 @@ textarea:focus {
   font-size: 0.78rem;
   font-weight: 700;
   cursor: pointer;
+}
+
+.timed-automation-day-chip svg {
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
 }
 
 .timed-automation-day-chip:hover {
@@ -1722,22 +1731,9 @@ textarea:focus {
   background: #0f766e;
 }
 
-.vscode-theme-schedule-form {
-  width: min(640px, 100%);
-}
-
-.vscode-theme-schedule-toggle {
-  justify-self: start;
-}
-
-.vscode-theme-schedule-preview {
-  margin: 0;
-  padding: 11px 12px;
-  border-left: 3px solid #8dc7b7;
-  border-radius: 6px;
-  color: #17423d;
-  background: #eef8f5;
-  font-size: 0.86rem;
+.timed-automation-trigger-kind {
+  display: grid;
+  gap: 8px;
 }
 
 .automation-editor,

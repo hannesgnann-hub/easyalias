@@ -21,7 +21,8 @@ import {
   Search,
   SquareTerminal,
   Star,
-  SunMoon,
+  Sunrise,
+  Sunset,
   Tag,
   Tags,
   Terminal,
@@ -121,7 +122,7 @@ type AliasSuggestion = AliasForm & {
 type PickerTarget = "create" | "edit" | "automation";
 type PickerKind = "file" | "folder";
 type BackupDialogMode = "export" | "import";
-type AppView = "aliases" | "automations" | "vscode-theme-schedule";
+type AppView = "aliases" | "automations";
 type AutomationStepKind = "command" | "wait";
 type AutomationCommandBehavior = "wait" | "background";
 type AutomationRunStepStatus = "pending" | "running" | "success" | "error" | "skipped";
@@ -184,13 +185,18 @@ type AutomationRunState = {
   steps: AutomationRunStep[];
 };
 
-// Schedules an existing Automation to run at a wall-clock time through the
-// OS's own scheduler (a systemd --user timer on Linux), so it fires even
-// while EasyAlias itself is not running. `days` uses lowercase three-letter
-// abbreviations; an empty array means every day.
+// Schedules an existing Automation to run through the OS's own scheduler
+// (a systemd --user timer on Linux), so it fires even while EasyAlias
+// itself is not running. `triggerKind` is "clock" (a fixed "HH:MM" in
+// `time`), or "sunrise"/"sunset" (that day's actual event for the
+// configured region, recomputed daily - `time` is unused then). `days`
+// uses lowercase three-letter abbreviations; an empty array means every day.
+type TimedAutomationTriggerKind = "clock" | "sunrise" | "sunset";
+
 type TimedAutomation = {
   id: string;
   automationId: string;
+  triggerKind: TimedAutomationTriggerKind;
   time: string;
   days: string[];
   enabled: boolean;
@@ -212,21 +218,36 @@ const weekdayLabels: Record<(typeof weekdayOrder)[number], string> = {
   sun: "Sun"
 };
 
-// A single global schedule that switches VS Code's color theme by time of
-// day, running through the OS's own scheduler (a systemd --user timer on
-// Linux) so it self-corrects even while VS Code is already open.
-// `lightStart`/`darkStart` are "HH:MM"; the window between them may wrap
-// past midnight.
-type VscodeThemeSchedule = {
-  enabled: boolean;
-  lightTheme: string;
-  darkTheme: string;
-  lightStart: string;
-  darkStart: string;
-  updatedAt: string;
+// A small fixed list of region keys (each mapped server-side to a
+// representative city's coordinates) used to approximate sunrise/sunset -
+// not exact per-address location, just close enough that "sunrise" fires
+// within a few minutes of the real one.
+type SunRegionOption = {
+  value: string;
+  label: string;
 };
 
-const VSCODE_THEME_CHECK_INTERVAL_MINUTES = 10;
+// A single global setting (not per-automation - the user has one physical
+// location) that every sunrise/sunset timed automation shares.
+type SunLocationSetting = {
+  region: string;
+};
+
+// Browser-preview fallback for list_sun_regions - mirrors the backend's
+// SUN_REGIONS table (Rust is still the source of truth in the desktop app).
+const SUN_REGION_OPTIONS: SunRegionOption[] = [
+  { value: "us-pacific", label: "US Pacific (Los Angeles)" },
+  { value: "us-mountain", label: "US Mountain (Denver)" },
+  { value: "us-central", label: "US Central (Chicago)" },
+  { value: "us-eastern", label: "US Eastern (New York)" },
+  { value: "uk-ireland", label: "UK & Ireland (London)" },
+  { value: "eu-west", label: "EU West (Paris)" },
+  { value: "eu-central", label: "EU Central (Berlin)" },
+  { value: "eu-east", label: "EU East (Kyiv)" },
+  { value: "asia-east", label: "East Asia (Tokyo)" },
+  { value: "asia-south", label: "South Asia (Delhi)" },
+  { value: "australia", label: "Australia (Sydney)" }
+];
 
 // Filters are inferred from step commands (same patterns as the alias
 // filter) plus favorites, background steps, and groups. "groups" switches
@@ -658,18 +679,11 @@ let timedAutomations: TimedAutomation[] = [];
 let timedAutomationEditor: TimedAutomation | null = null;
 let timedAutomationBusy = false;
 let timedAutomationError = "";
-// A single settings-panel-style form; there is nothing to select or list,
-// so unlike timedAutomationEditor this is edited in place, not as a draft.
-let vscodeThemeSchedule: VscodeThemeSchedule = {
-  enabled: false,
-  lightTheme: "Default Light+",
-  darkTheme: "Default Dark+",
-  lightStart: "06:00",
-  darkStart: "17:00",
-  updatedAt: ""
-};
-let vscodeThemeScheduleBusy = false;
-let vscodeThemeScheduleError = "";
+// Sunrise/sunset region list and the currently configured region are both
+// global (shared by every sunrise/sunset timed automation), loaded once at
+// startup and editable from inside the schedule modal.
+let sunRegionOptions: SunRegionOption[] = [];
+let sunLocation: SunLocationSetting = { region: "" };
 
 const trashRetentionSeconds = 30 * 24 * 60 * 60;
 
@@ -871,9 +885,10 @@ async function loadState() {
         error = `Timed automations could not be loaded: ${String(timedAutomationLoadError)}`;
       }
       try {
-        vscodeThemeSchedule = await invokeCommand<VscodeThemeSchedule>("load_vscode_theme_schedule_state");
-      } catch (vscodeThemeScheduleLoadError) {
-        error = `VS Code theme schedule could not be loaded: ${String(vscodeThemeScheduleLoadError)}`;
+        sunRegionOptions = await invokeCommand<SunRegionOption[]>("list_sun_regions");
+        sunLocation = await invokeCommand<SunLocationSetting>("load_sun_location_state");
+      } catch (sunLocationLoadError) {
+        error = `Sunrise/sunset region could not be loaded: ${String(sunLocationLoadError)}`;
       }
       selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
       render();
@@ -929,16 +944,15 @@ async function loadState() {
   if (savedTimedAutomations) {
     timedAutomations = JSON.parse(savedTimedAutomations) as TimedAutomation[];
   }
-  const savedVscodeThemeSchedule = localStorage.getItem("easyalias-vscode-theme-schedule");
-  if (savedVscodeThemeSchedule) {
-    vscodeThemeSchedule = JSON.parse(savedVscodeThemeSchedule) as VscodeThemeSchedule;
-  }
+  sunRegionOptions = SUN_REGION_OPTIONS;
+  const savedSunLocation = localStorage.getItem("easyalias-sun-location");
+  sunLocation = savedSunLocation ? (JSON.parse(savedSunLocation) as SunLocationSetting) : { region: "eu-central" };
 
   render();
 }
 
-function saveBrowserVscodeThemeSchedule() {
-  localStorage.setItem("easyalias-vscode-theme-schedule", JSON.stringify(vscodeThemeSchedule));
+function saveBrowserSunLocation() {
+  localStorage.setItem("easyalias-sun-location", JSON.stringify(sunLocation));
 }
 
 function saveBrowserTimedAutomations() {
@@ -1733,6 +1747,7 @@ function openAutomationSchedulePicker(automationId: string) {
     : {
         id: createId(),
         automationId,
+        triggerKind: "clock",
         time: "09:00",
         days: [],
         enabled: true,
@@ -1761,6 +1776,31 @@ function updateTimedAutomationEditorTime(time: string) {
   timedAutomationError = "";
 }
 
+function setTimedAutomationEditorTriggerKind(triggerKind: TimedAutomationTriggerKind) {
+  if (!timedAutomationEditor) return;
+  timedAutomationEditor = { ...timedAutomationEditor, triggerKind };
+  timedAutomationError = "";
+  render();
+}
+
+// The sunrise/sunset region is a single global setting (every automation
+// scheduled by the sun shares one physical location), so changing it saves
+// right away instead of waiting for this automation's own Save button.
+async function updateSunRegion(region: string) {
+  const nextLocation: SunLocationSetting = { region };
+  try {
+    if (isTauriRuntime()) {
+      sunLocation = await invokeCommand<SunLocationSetting>("save_sun_location", { setting: nextLocation });
+    } else {
+      sunLocation = nextLocation;
+      saveBrowserSunLocation();
+    }
+  } catch (saveError) {
+    timedAutomationError = String(saveError);
+  }
+  render();
+}
+
 function setTimedAutomationEditorEnabled(enabled: boolean) {
   if (!timedAutomationEditor) return;
   timedAutomationEditor = { ...timedAutomationEditor, enabled };
@@ -1784,7 +1824,11 @@ function setTimedAutomationEveryDay() {
 
 function validateTimedAutomation(entry: TimedAutomation) {
   if (!entry.automationId) return "Choose an automation to schedule.";
-  if (!entry.time) return "Choose a time.";
+  if (entry.triggerKind === "clock") {
+    if (!entry.time) return "Choose a time.";
+  } else if (!sunLocation.region) {
+    return "Choose a region for sunrise/sunset scheduling.";
+  }
   return "";
 }
 
@@ -1856,6 +1900,12 @@ function formatTimedAutomationDays(days: string[]) {
     .join(", ");
 }
 
+function formatTimedAutomationTrigger(entry: TimedAutomation) {
+  if (entry.triggerKind === "sunrise") return "Sunrise";
+  if (entry.triggerKind === "sunset") return "Sunset";
+  return entry.time;
+}
+
 // Modal for scheduling one automation to run at a wall-clock time
 // (optionally on specific weekdays). Rendered once at the view level (like
 // the main automation editor modal), not inside a card, so its content
@@ -1878,19 +1928,41 @@ function renderAutomationScheduleModal() {
           <button class="ghost-button modal-close" type="button" data-timed-action="close" ${timedAutomationBusy ? "disabled" : ""}>Close</button>
         </div>
 
-        <p class="automation-intro">Runs through the operating system's own scheduler, so it fires at the chosen time even while EasyAlias is closed.</p>
+        <p class="automation-intro">Runs through the operating system's own scheduler, so it fires even while EasyAlias is closed.</p>
         ${timedAutomationError ? `<p class="modal-error">${escapeHtml(timedAutomationError)}</p>` : ""}
 
-        <div class="automation-form-grid">
-          <label class="timed-automation-toggle">
-            <input type="checkbox" ${entry.enabled ? "checked" : ""} data-timed-action="toggle-enabled" ${timedAutomationBusy ? "disabled" : ""} />
-            <span>${entry.enabled ? "Enabled" : "Disabled"}</span>
-          </label>
-          <label>
-            Time
-            <input type="time" name="timed-automation-time" value="${escapeHtml(entry.time)}" ${timedAutomationBusy ? "disabled" : ""} />
-          </label>
+        <label class="timed-automation-toggle">
+          <input type="checkbox" ${entry.enabled ? "checked" : ""} data-timed-action="toggle-enabled" ${timedAutomationBusy ? "disabled" : ""} />
+          <span>${entry.enabled ? "Enabled" : "Disabled"}</span>
+        </label>
+
+        <div class="timed-automation-trigger-kind">
+          <span class="automation-optional">When</span>
+          <div class="timed-automation-day-chips">
+            <button type="button" class="timed-automation-day-chip ${entry.triggerKind === "clock" ? "is-selected" : ""}" data-timed-action="trigger-kind" data-trigger-kind="clock" ${timedAutomationBusy ? "disabled" : ""}><i data-lucide="clock"></i><span>Time</span></button>
+            <button type="button" class="timed-automation-day-chip ${entry.triggerKind === "sunrise" ? "is-selected" : ""}" data-timed-action="trigger-kind" data-trigger-kind="sunrise" ${timedAutomationBusy ? "disabled" : ""}><i data-lucide="sunrise"></i><span>Sunrise</span></button>
+            <button type="button" class="timed-automation-day-chip ${entry.triggerKind === "sunset" ? "is-selected" : ""}" data-timed-action="trigger-kind" data-trigger-kind="sunset" ${timedAutomationBusy ? "disabled" : ""}><i data-lucide="sunset"></i><span>Sunset</span></button>
+          </div>
         </div>
+
+        ${
+          entry.triggerKind === "clock"
+            ? `<label>
+                Time
+                <input type="time" name="timed-automation-time" value="${escapeHtml(entry.time)}" ${timedAutomationBusy ? "disabled" : ""} />
+              </label>`
+            : `<label>
+                Region (for computing today's ${entry.triggerKind})
+                <select name="timed-automation-region" ${timedAutomationBusy ? "disabled" : ""}>
+                  ${sunRegionOptions
+                    .map(
+                      (option) =>
+                        `<option value="${escapeHtml(option.value)}" ${sunLocation.region === option.value ? "selected" : ""}>${escapeHtml(option.label)}</option>`
+                    )
+                    .join("")}
+                </select>
+              </label>`
+        }
 
         <div class="timed-automation-days">
           <span class="automation-optional">Repeat</span>
@@ -1926,220 +1998,6 @@ function renderAutomationScheduleModal() {
         </div>
       </form>
     </section>`;
-}
-
-// Whether `now` falls in the light window `[lightStart, darkStart)`. Mirrors
-// the Rust `is_light_window` the backend actually schedules against, so the
-// UI's live preview always agrees with what the OS scheduler will apply.
-function isLightWindow(lightStart: string, darkStart: string, now: Date): boolean {
-  const toMinutes = (value: string) => {
-    const [hours, minutes] = value.split(":").map(Number);
-    return hours * 60 + minutes;
-  };
-  const light = toMinutes(lightStart);
-  const dark = toMinutes(darkStart);
-  const current = now.getHours() * 60 + now.getMinutes();
-  return light < dark ? current >= light && current < dark : current >= light || current < dark;
-}
-
-function resolveVscodeThemePreview(schedule: VscodeThemeSchedule): string {
-  return isLightWindow(schedule.lightStart, schedule.darkStart, new Date()) ? schedule.lightTheme : schedule.darkTheme;
-}
-
-// Updates just the live preview text in place instead of a full render(),
-// so typing a start time or theme name does not steal focus from the field
-// mid-edit - same pattern as updateEditPreview() for the alias command preview.
-function updateVscodeThemeSchedulePreview() {
-  const preview = document.querySelector<HTMLElement>(".vscode-theme-schedule-preview strong");
-  if (preview) {
-    preview.textContent = resolveVscodeThemePreview(vscodeThemeSchedule);
-  }
-}
-
-function openVscodeThemeScheduleView() {
-  clearMessages();
-  vscodeThemeScheduleError = "";
-  currentView = "vscode-theme-schedule";
-  render();
-}
-
-function closeVscodeThemeScheduleView() {
-  if (vscodeThemeScheduleBusy) return;
-  vscodeThemeScheduleError = "";
-  currentView = "aliases";
-  render();
-}
-
-function updateVscodeThemeScheduleField<K extends keyof VscodeThemeSchedule>(key: K, value: VscodeThemeSchedule[K]) {
-  vscodeThemeSchedule = { ...vscodeThemeSchedule, [key]: value };
-  vscodeThemeScheduleError = "";
-}
-
-function validateVscodeThemeScheduleForm(schedule: VscodeThemeSchedule) {
-  if (!schedule.lightTheme.trim()) return "Enter the light theme's exact VS Code name.";
-  if (!schedule.darkTheme.trim()) return "Enter the dark theme's exact VS Code name.";
-  if (!schedule.lightStart || !schedule.darkStart) return "Choose both start times.";
-  if (schedule.lightStart === schedule.darkStart) return "Light and dark start times must be different.";
-  return "";
-}
-
-async function saveVscodeThemeSchedule(event: SubmitEvent) {
-  event.preventDefault();
-  if (vscodeThemeScheduleBusy) return;
-
-  vscodeThemeScheduleError = validateVscodeThemeScheduleForm(vscodeThemeSchedule);
-  if (vscodeThemeScheduleError) {
-    render();
-    return;
-  }
-
-  vscodeThemeScheduleBusy = true;
-  render();
-  const nextSchedule: VscodeThemeSchedule = { ...vscodeThemeSchedule, updatedAt: nowIso() };
-  try {
-    if (isTauriRuntime()) {
-      vscodeThemeSchedule = await invokeCommand<VscodeThemeSchedule>("save_vscode_theme_schedule", { schedule: nextSchedule });
-    } else {
-      vscodeThemeSchedule = nextSchedule;
-      saveBrowserVscodeThemeSchedule();
-    }
-    notice = vscodeThemeSchedule.enabled
-      ? "VS Code theme schedule saved and running."
-      : "VS Code theme schedule saved (disabled).";
-  } catch (saveError) {
-    vscodeThemeScheduleError = String(saveError);
-  } finally {
-    vscodeThemeScheduleBusy = false;
-    render();
-  }
-}
-
-async function checkVscodeThemeNow() {
-  if (vscodeThemeScheduleBusy || !vscodeThemeSchedule.enabled) return;
-
-  vscodeThemeScheduleBusy = true;
-  render();
-  try {
-    if (isTauriRuntime()) {
-      vscodeThemeSchedule = await invokeCommand<VscodeThemeSchedule>("check_vscode_theme_now");
-      notice = "Checked now - VS Code's theme is up to date.";
-    } else {
-      notice = "Apply now only runs in the desktop app.";
-    }
-  } catch (checkError) {
-    error = String(checkError);
-  } finally {
-    vscodeThemeScheduleBusy = false;
-    render();
-  }
-}
-
-function renderVscodeThemeScheduleView() {
-  const schedule = vscodeThemeSchedule;
-  const previewTheme = resolveVscodeThemePreview(schedule);
-
-  appElement.innerHTML = `
-    <section class="shell automation-shell">
-      <header class="topbar automation-topbar">
-        <div>
-          <p class="eyebrow">Switches VS Code's Theme By Time Of Day</p>
-          <h1>VS Code Theme Schedule</h1>
-        </div>
-        <div class="topbar-actions">
-          <button class="header-icon-button" type="button" title="Back to aliases" aria-label="Back to aliases" data-action="close-vscode-theme-schedule"><i data-lucide="arrow-left"></i></button>
-        </div>
-      </header>
-
-      ${
-        notice
-          ? `<div class="message-banner notice" role="status"><span>${escapeHtml(notice)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-action="dismiss-message"><i data-lucide="x"></i></button></div>`
-          : ""
-      }
-      ${
-        error
-          ? `<div class="message-banner error" role="alert"><span>${escapeHtml(error)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-action="dismiss-message"><i data-lucide="x"></i></button></div>`
-          : ""
-      }
-
-      <form class="modal-card vscode-theme-schedule-form" id="vscode-theme-schedule-form">
-        <p class="automation-intro">Runs through the operating system's own scheduler - checks every ${VSCODE_THEME_CHECK_INTERVAL_MINUTES} minutes and once at boot, so VS Code corrects itself even if it was already open when the window changed.</p>
-        ${vscodeThemeScheduleError ? `<p class="modal-error">${escapeHtml(vscodeThemeScheduleError)}</p>` : ""}
-
-        <label class="timed-automation-toggle vscode-theme-schedule-toggle">
-          <input type="checkbox" ${schedule.enabled ? "checked" : ""} data-vscode-theme-action="toggle-enabled" />
-          <span>${schedule.enabled ? "Enabled" : "Disabled"}</span>
-        </label>
-
-        <div class="automation-form-grid">
-          <label>
-            Light theme
-            <input type="text" name="vscode-light-theme" value="${escapeHtml(schedule.lightTheme)}" placeholder="Default Light+" />
-          </label>
-          <label>
-            Dark theme
-            <input type="text" name="vscode-dark-theme" value="${escapeHtml(schedule.darkTheme)}" placeholder="Default Dark+" />
-          </label>
-          <label>
-            Light starts at
-            <input type="time" name="vscode-light-start" value="${escapeHtml(schedule.lightStart)}" />
-          </label>
-          <label>
-            Dark starts at
-            <input type="time" name="vscode-dark-start" value="${escapeHtml(schedule.darkStart)}" />
-          </label>
-        </div>
-
-        <p class="vscode-theme-schedule-preview">Right now this schedule would set: <strong>${escapeHtml(previewTheme)}</strong></p>
-
-        <div class="modal-actions">
-          <button class="ghost-button" type="button" data-vscode-theme-action="check-now" ${!schedule.enabled || vscodeThemeScheduleBusy ? "disabled" : ""}>Apply now</button>
-          <button class="primary-button" type="submit" ${vscodeThemeScheduleBusy ? "disabled" : ""}><i data-lucide="save"></i><span>${vscodeThemeScheduleBusy ? "Saving..." : "Save"}</span></button>
-        </div>
-      </form>
-
-      <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>Become a sponsor</a></aside>
-      <footer class="app-footer"><a href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>© Hannes Gnann</a><span aria-hidden="true">-</span><a href="${redditUrl}" target="_blank" rel="noreferrer" data-external-link>Reddit</a><span aria-hidden="true">-</span><a href="${websiteUrl}" target="_blank" rel="noreferrer" data-external-link>Website</a></footer>
-    </section>`;
-
-  createIcons({
-    icons: { ArrowLeft, Save, X },
-    attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
-  });
-
-  scheduleMessageDismissal();
-  bindVscodeThemeScheduleEvents();
-}
-
-function bindVscodeThemeScheduleEvents() {
-  document.querySelector<HTMLFormElement>("#vscode-theme-schedule-form")?.addEventListener("submit", saveVscodeThemeSchedule);
-  document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => link.addEventListener("click", openExternalLink));
-
-  document.querySelector<HTMLInputElement>('[data-vscode-theme-action="toggle-enabled"]')?.addEventListener("change", (event) => {
-    updateVscodeThemeScheduleField("enabled", (event.target as HTMLInputElement).checked);
-    render();
-  });
-  document.querySelector<HTMLInputElement>('input[name="vscode-light-theme"]')?.addEventListener("input", (event) => {
-    updateVscodeThemeScheduleField("lightTheme", (event.target as HTMLInputElement).value);
-    updateVscodeThemeSchedulePreview();
-  });
-  document.querySelector<HTMLInputElement>('input[name="vscode-dark-theme"]')?.addEventListener("input", (event) => {
-    updateVscodeThemeScheduleField("darkTheme", (event.target as HTMLInputElement).value);
-    updateVscodeThemeSchedulePreview();
-  });
-  document.querySelector<HTMLInputElement>('input[name="vscode-light-start"]')?.addEventListener("input", (event) => {
-    updateVscodeThemeScheduleField("lightStart", (event.target as HTMLInputElement).value);
-    updateVscodeThemeSchedulePreview();
-  });
-  document.querySelector<HTMLInputElement>('input[name="vscode-dark-start"]')?.addEventListener("input", (event) => {
-    updateVscodeThemeScheduleField("darkStart", (event.target as HTMLInputElement).value);
-    updateVscodeThemeSchedulePreview();
-  });
-
-  document.querySelector<HTMLButtonElement>('[data-vscode-theme-action="check-now"]')?.addEventListener("click", () => void checkVscodeThemeNow());
-  document.querySelector<HTMLButtonElement>('[data-action="close-vscode-theme-schedule"]')?.addEventListener("click", closeVscodeThemeScheduleView);
-  document.querySelectorAll<HTMLButtonElement>('[data-action="dismiss-message"]').forEach((button) => {
-    button.addEventListener("click", dismissMessage);
-  });
 }
 
 function openAutomationEditor(id?: string) {
@@ -3277,7 +3135,9 @@ function renderAutomationResults(sortedAutomations: Automation[]) {
       ${filteredAutomations
         .map((automation) => {
           const scheduleEntry = timedAutomations.find((entry) => entry.automationId === automation.id);
-          const scheduleSummary = scheduleEntry ? `${scheduleEntry.time} · ${formatTimedAutomationDays(scheduleEntry.days)}` : "";
+          const scheduleSummary = scheduleEntry
+            ? `${formatTimedAutomationTrigger(scheduleEntry)} · ${formatTimedAutomationDays(scheduleEntry.days)}`
+            : "";
           const scheduleTitle = scheduleEntry
             ? `Change schedule (currently ${scheduleSummary}${scheduleEntry.enabled ? "" : ", disabled"})`
             : "Schedule this automation";
@@ -3478,7 +3338,7 @@ function renderAutomationsView() {
     </section>`;
 
   createIcons({
-    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock, Clock3, FileDown, FileUp, Filter, FolderOpen, Pencil, Play, Plus, RotateCcw, Save, Search, Star, Tag, Tags, Terminal, Trash2, X },
+    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock, Clock3, FileDown, FileUp, Filter, FolderOpen, Pencil, Play, Plus, RotateCcw, Save, Search, Star, Sunrise, Sunset, Tag, Tags, Terminal, Trash2, X },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
   scheduleMessageDismissal();
@@ -3576,12 +3436,18 @@ function bindAutomationEvents() {
   document.querySelector<HTMLInputElement>('[data-timed-action="toggle-enabled"]')?.addEventListener("change", (event) => {
     setTimedAutomationEditorEnabled((event.target as HTMLInputElement).checked);
   });
+  document.querySelector<HTMLSelectElement>('select[name="timed-automation-region"]')?.addEventListener("change", (event) => {
+    void updateSunRegion((event.target as HTMLSelectElement).value);
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-timed-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const action = button.dataset.timedAction;
       if (action === "close") closeAutomationSchedulePicker();
       if (action === "every-day") setTimedAutomationEveryDay();
       if (action === "toggle-day" && button.dataset.day) toggleTimedAutomationDay(button.dataset.day);
+      if (action === "trigger-kind" && button.dataset.triggerKind) {
+        setTimedAutomationEditorTriggerKind(button.dataset.triggerKind as TimedAutomationTriggerKind);
+      }
       if (action === "delete" && scheduleEditorAutomationId) void deleteAutomationSchedule(scheduleEditorAutomationId);
     });
   });
@@ -3636,10 +3502,6 @@ function render() {
     renderAutomationsView();
     return;
   }
-  if (currentView === "vscode-theme-schedule") {
-    renderVscodeThemeScheduleView();
-    return;
-  }
   const aliases = [...appState.aliases].sort(compareAliases);
   const existingNames = new Set(aliases.map((alias) => alias.name));
   const availableSuggestions = aliasSuggestions.filter(
@@ -3664,13 +3526,6 @@ function render() {
           <h1>EasyAlias</h1>
         </div>
         <div class="topbar-actions">
-          <button
-            class="header-icon-button"
-            type="button"
-            title="VS Code theme schedule"
-            aria-label="Open VS Code theme schedule"
-            data-action="open-vscode-theme-schedule"
-          ><i data-lucide="sun-moon"></i></button>
           <button
             class="header-icon-button"
             type="button"
@@ -3955,7 +3810,6 @@ function render() {
       Play,
       RotateCcw,
       Star,
-      SunMoon,
       Trash2,
       X
     },
@@ -4372,7 +4226,6 @@ function bindEvents() {
       const action = button.dataset.action;
       const id = button.dataset.id;
 
-      if (action === "open-vscode-theme-schedule") openVscodeThemeScheduleView();
       if (action === "open-automations") openAutomationsView();
       if (action === "open-import") void openShellImport();
       if (action === "open-backup-export") openBackupExport();
