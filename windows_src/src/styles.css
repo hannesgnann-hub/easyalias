@@ -1588,6 +1588,11 @@ textarea:focus {
 }
 
 .timed-automation-toggle input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  flex: none;
   accent-color: #0f766e;
 }
 
