@@ -16,7 +16,7 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 
 [Become a GitHub Sponsor](https://github.com/sponsors/hannesgnann-hub)
 
-![EasyAlias alias manager with favorites and backup controls](docs/assets/v2/start.png)
+![Current EasyAlias dashboard with alias search, filters, favorites, and workflow controls](docs/assets/current/screenshot.png)
 
 ## Install on macOS
 
@@ -66,12 +66,13 @@ flowchart LR
 
 ## Current Status
 
-EasyAlias has separate Tauri source projects for direct macOS distribution, the Mac App Store, direct Windows distribution, the Microsoft Store, and Linux. They share the same product direction while using the native terminal integration and security model for each platform; release variants can temporarily differ while features are being ported.
+EasyAlias has separate Tauri source projects for direct macOS distribution, the sandboxed Mac App Store edition, Windows, and Linux. They share the same product direction while using the native terminal integration and security model for each platform.
 
 The direct macOS, direct Windows, Linux, and Mac App Store source trees share the current day-to-day management tools:
 
 - pin favorites above the regular alias list
-- browse 31 suggestions across paginated views and add one with a single click
+- search and filter aliases by name, command, favorites, and categories such as Git, Docker, Navigation, and Build
+- browse 36 suggestions across paginated views and add one with a single click
 - export all or selected aliases to a portable, versioned JSON backup
 - validate and review all or selected entries before importing a backup
 - restore deleted aliases from Trash for 30 days, or remove them permanently
@@ -92,10 +93,10 @@ The macOS version can:
 - move aliases to the 30-day Trash, then restore or permanently remove them
 - choose files and folders through the native macOS picker
 - show a preview of the generated command
-- detect and safely import selected existing `.zshrc` aliases on first start or from the header import button
+- detect and safely import selected existing aliases from `.zshrc`, `.bash_profile`, and `.bashrc` on first start or from the header import button
 - add useful suggested macOS aliases with one click
 - store `createdAt` and `updatedAt`
-- automatically connect `~/.easyalias/aliases.zsh` to `~/.zshrc`
+- automatically connect `~/.easyalias/aliases.zsh` to `.zshrc`, `.bash_profile`, and `.bashrc`
 - start from the terminal through `easya` if the app is installed at `/Applications/EasyAlias.app`
 - search and filter the alias list by name, command, or category (Favorites, Git, Docker, Navigation, Build)
 - build and run multi-step Automations (shell commands and timed waits) in a chosen working directory
@@ -106,10 +107,10 @@ The Mac App Store version can:
 
 - run inside Apple's App Sandbox
 - store structured data and backups in its app container
-- connect only to a `.zshrc` explicitly selected through the native file picker
+- connect only to a Home folder explicitly selected through the native file picker
 - persist that permission with a security-scoped bookmark
-- manage one clearly marked alias block directly in the selected `.zshrc`
-- import existing aliases only after the file has been connected
+- manage clearly marked alias blocks in `.zshrc`, `.bash_profile`, and `.bashrc`
+- import existing aliases only after the Home folder has been connected
 - build a universal signed `.app` and installer-signed `.pkg` for App Store Connect
 
 The Windows version can:
@@ -123,15 +124,7 @@ The Windows version can:
 - build and run multi-step Automations (cmd.exe commands and timed waits) in a chosen working directory
 - schedule automations by clock time or local sunrise/sunset through Task Scheduler, and trigger them with a global keyboard shortcut
 - keep running in the Windows system tray after the window is closed, and optionally start hidden at login
-- build as a Windows installer target through Tauri/NSIS
-
-The Microsoft Store version keeps the same unrestricted Win32 behavior and:
-
-- builds a separate offline NSIS installer for the Store's EXE/MSI workflow
-- embeds the WebView2 offline installer required for Store certification
-- supports unattended installation through the `/S` argument
-- keeps Store signing and release instructions separate from direct Windows builds
-- currently remains on the earlier Windows feature set while the newer favorites, portable backups, Trash, and expanded suggestions are prepared for its next Store build
+- build as a Windows installer target through Tauri/NSIS; the same installer can be hosted for the Microsoft Store EXE/MSI workflow
 
 The Linux version can:
 
@@ -149,37 +142,43 @@ The Linux version can:
 
 ## Feature Tour
 
-The screenshots show the macOS edition. Direct Windows, Linux, and the Mac App Store edition use the same management workflow with platform-specific terminal commands and storage locations. The Microsoft Store source still uses the earlier Windows workflow.
+The screenshots show the current direct macOS edition. Windows and Linux share these workflows with platform-specific commands and storage locations. The sandboxed Mac App Store edition shares the alias-management screens but intentionally omits automations, schedules, global shortcuts, menu-bar controls, and start-at-login.
 
 ### Favorites and Daily Management
 
 Click the star beside an alias to pin it above regular entries. Favorites and non-favorites are each sorted alphabetically.
 
-![Favorite aliases pinned at the top of the EasyAlias list](docs/assets/v2/start.png)
+The alias list is paginated so large collections stay compact. Search matches both alias names and command contents; the filter menu narrows the list by category.
+
+![Favorite aliases pinned at the top of the current EasyAlias list](docs/assets/current/screenshot.png)
 
 ### Paged Suggestions
 
 Suggestions start collapsed. Open the section to browse Git, Docker, build-tool, networking, and filesystem shortcuts. Nine suggestions are shown per page; **Use** saves one immediately.
 
-![Expanded EasyAlias suggestions with page navigation](docs/assets/v2/suggestions.png)
+![Expanded EasyAlias suggestions with page navigation](docs/assets/current/screenshot_suggestions.png)
 
 ### Selective Backup and Restore
 
 The export dialog writes only the selected aliases to a portable `.json` file. The import dialog accepts that file through the picker or drag and drop, validates it before showing its contents, and lets you choose exactly what to restore.
 
-![Selecting aliases for an EasyAlias JSON export](docs/assets/v2/export.png)
+![Selecting aliases for an EasyAlias JSON export](docs/assets/current/screenshot_export.png)
 
-![Dropping an EasyAlias JSON backup into the import dialog](docs/assets/v2/import.png)
+![Dropping an EasyAlias JSON backup into the import dialog](docs/assets/current/screenshot_backup_import.png)
 
 ### Recoverable Deletion
 
 Deleting an alias moves it to Trash instead of removing it immediately. Deleted aliases remain recoverable for 30 days and can be restored, permanently deleted, or cleared together.
 
-![EasyAlias Trash with restore and permanent delete controls](docs/assets/v2/trash.png)
+![EasyAlias Trash with restore and permanent delete controls](docs/assets/current/screenshot_trash.png)
 
 ### Automations
 
 The automations view (top-right play icon) is a separate workspace for repeatable, multi-step workflows. An automation has a name, a working directory, and an ordered list of **Command** and **Wait** steps that all share one shell session, so a `cd` or exported variable carries across steps. Automations have their own favorites, free-text **group** labels, search/filter, a 30-day Trash, and portable JSON backup. If the working directory field points at a file, the run uses the folder that contains it.
+
+![Automation cards organized into groups](docs/assets/current/screenshot_automation_card.png)
+
+![Automation editor with ordered command and wait steps](docs/assets/current/screenshot_automation_editor.png)
 
 ### Timed Automations
 
@@ -189,6 +188,8 @@ The clock icon on an automation card opens its schedule. Pick a trigger:
 - **Sunrise** / **Sunset** — that day's real event, recomputed daily, for an approximate region chosen from a dropdown (e.g. "EU Central (Berlin)").
 
 Optionally restrict it to specific weekdays. EasyAlias registers the schedule with the operating system's own scheduler (`launchd` on macOS, systemd `--user` timers on Linux, Task Scheduler on Windows), so a timed automation still fires when EasyAlias itself is not running. Clock-time entries get an exact-fire job each; sunrise/sunset entries ride a shared periodic checker. The card and modal show the outcome of the most recent run.
+
+![Timed automation schedule editor](docs/assets/current/screenshot_schedule.png)
 
 ```mermaid
 flowchart LR
@@ -204,6 +205,8 @@ flowchart LR
 
 The keyboard icon on an automation card records a global shortcut (for example `Cmd+Shift+L`). While EasyAlias is running it fires that automation from anywhere. The **Settings** view chooses what a press does: bring the run window forward with live output, or run it silently in the background. A shortcut already claimed by the system or another app is rejected without being saved. Global shortcuts need a running process — see Menu Bar & Startup below.
 
+![Global keyboard shortcut editor](docs/assets/current/screenshot_shortcut.png)
+
 ### Settings
 
 The gear icon (far right of the header) opens Settings:
@@ -217,6 +220,8 @@ The gear icon (far right of the header) opens Settings:
 
 Preferences are stored in `~/.easyalias/settings.json`.
 
+![EasyAlias settings for appearance, behavior, and startup](docs/assets/current/screenshot_settings.png)
+
 ### Menu Bar & Startup
 
 Closing the window no longer quits EasyAlias — it hides the window and the app keeps running in the menu bar (macOS) or system tray (Windows/Linux), so scheduled and shortcut triggers stay available. The tray menu has **Show EasyAlias** and **Quit EasyAlias**; a left click also reveals the window. Turning on **Start at login** launches EasyAlias hidden in the tray when you sign in.
@@ -224,6 +229,8 @@ Closing the window no longer quits EasyAlias — it hides the window and the app
 ### Tutorial
 
 The graduation-cap button at the far right of the header opens a built-in tutorial: pick **the alias area**, **the automations area**, or **how to support me**, then step through an illustrated walkthrough.
+
+![Built-in EasyAlias tutorial](docs/assets/current/screenshot_tutorial.png)
 
 ## Folder Structure
 
@@ -234,7 +241,6 @@ easyalias/
   mac_src_app_store/ sandboxed macOS source for Mac App Store distribution
 
   windows_src/      Windows source code for the Tauri app
-  windows_src_store/ Microsoft Store Win32 source and release configuration
   windows_export/   built Windows installer exports
 
   linux_src/        Linux source code for the Tauri app
@@ -254,8 +260,6 @@ Documentation is split by scope:
 | `mac_src_app_store/docs/ARCHITECTURE.md` | App Sandbox and bookmark architecture |
 | `windows_src/README.md` | Windows app usage |
 | `windows_src/docs/ARCHITECTURE.md` | Windows technical architecture |
-| `windows_src_store/README.md` | Microsoft Store Windows variant |
-| `windows_src_store/docs/MICROSOFT_STORE.md` | Store build, signing, and submission guide |
 | `linux_src/README.md` | Linux app usage and build guide |
 | `linux_src/docs/ARCHITECTURE.md` | Linux technical architecture |
 
@@ -266,7 +270,6 @@ flowchart TD
   Root --> MacExport["mac_export/ macOS export"]
   Root --> MacStore["mac_src_app_store/ sandboxed macOS source"]
   Root --> WinSrc["windows_src/ Windows source"]
-  Root --> WinStore["windows_src_store/ Microsoft Store source"]
   Root --> WinExport["windows_export/ Windows exports"]
   Root --> LinuxSrc["linux_src/ Linux source"]
   Root --> LinuxExport["linux_export/ Linux exports"]
@@ -281,9 +284,6 @@ flowchart TD
   WinSrc --> WinFrontend["src/ Windows UI"]
   WinSrc --> WinBackend["src-tauri/ Windows backend"]
   WinSrc --> WinDocs["docs/ Windows architecture"]
-  WinStore --> WinStoreFrontend["src/ Store Windows UI"]
-  WinStore --> WinStoreBackend["src-tauri/ Win32 backend"]
-  WinStore --> WinStoreDocs["docs/ Store release guide"]
   LinuxSrc --> LinuxFrontend["src/ Linux UI"]
   LinuxSrc --> LinuxBackend["src-tauri/ Linux backend"]
   LinuxSrc --> LinuxDocs["docs/ Linux architecture"]
@@ -336,7 +336,7 @@ The sandboxed Store source lives in:
 mac_src_app_store/
 ```
 
-It is intentionally separate from `mac_src/`. Before it can manage aliases, the user selects `.zshrc` once and macOS grants persistent access through a security-scoped bookmark.
+It is intentionally separate from `mac_src/`. Before it can manage aliases, the user selects the Home folder once and macOS grants persistent access through a security-scoped bookmark. EasyAlias then works only with `.zshrc`, `.bash_profile`, and `.bashrc` inside that selected folder.
 
 Run the source checks:
 
@@ -373,24 +373,7 @@ npm run tauri build
 
 The Windows version uses the same UI and product idea, but integrates with `cmd.exe` instead of zsh.
 
-The Microsoft Store source lives in:
-
-```text
-windows_src_store/
-```
-
-Build its offline NSIS installer on Windows:
-
-```powershell
-cd windows_src_store
-npm ci
-npm run store:build
-```
-
-The installer is submitted through the Partner Center **EXE or MSI app**
-workflow. See
-[`windows_src_store/docs/MICROSOFT_STORE.md`](windows_src_store/docs/MICROSOFT_STORE.md)
-for signing, silent installation, hosting, and submission details.
+The generated NSIS installer can also be hosted and submitted through the Microsoft Partner Center **EXE or MSI app** workflow. Use `/S` for unattended NSIS installation when the Store submission asks for a silent-install parameter.
 
 ## Linux
 
@@ -425,7 +408,6 @@ Development can be coordinated from a Mac, but release packages should be produc
 | `mac_src` | macOS | `.app` bundle |
 | `mac_src_app_store` | macOS with Apple signing assets | universal sandboxed `.app` and signed `.pkg` |
 | `windows_src` | Windows | NSIS `.exe` installer |
-| `windows_src_store` | Windows with signing assets | offline Microsoft Store NSIS `.exe` |
 | `linux_src` | Linux | `.deb`, `.rpm`, and `.AppImage` packages |
 
 A Windows or Linux VM works for occasional builds. For repeatable releases, use separate macOS, Windows, and Linux jobs in a CI matrix and upload their artifacts to one release. Tauri documents this pattern in its [GitHub Actions guide](https://v2.tauri.app/distribute/pipelines/github/). Windows MSI output requires Windows, while the configured NSIS target can also be cross-compiled with additional tooling; see the [Windows installer guide](https://v2.tauri.app/distribute/windows-installer/). Linux packages should be built on Linux because their native libraries and compatibility baseline matter.
@@ -438,12 +420,12 @@ flowchart LR
   Shared --> Win["Windows"]
   Shared --> Linux["Linux"]
 
-  Mac --> Zsh["zsh"]
-  Zsh --> ZshFile["~/.easyalias/aliases.zsh"]
-  ZshFile --> Zshrc["source in ~/.zshrc"]
+  Mac --> MacShell["zsh and Bash startup files"]
+  MacShell --> ZshFile["~/.easyalias/aliases.zsh"]
+  ZshFile --> MacStartup["source in .zshrc, .bash_profile, and .bashrc"]
 
-  MacStore --> Bookmark["User-selected .zshrc bookmark"]
-  Bookmark --> ManagedBlock["Managed alias block in .zshrc"]
+  MacStore --> Bookmark["User-selected Home-folder bookmark"]
+  Bookmark --> ManagedBlock["Managed blocks in three startup files"]
 
   Win --> Cmd["cmd.exe"]
   Cmd --> Bin["$HOME/.easyalias/bin/*.cmd"]
@@ -492,12 +474,12 @@ After the first Linux app start, open a new terminal or reload the detected shel
 
 ## Import Existing Aliases
 
-Fresh direct-install editions automatically detect existing aliases and offer a one-time selection dialog. The Mac App Store edition performs that scan only after the user explicitly connects a `.zshrc`. After the prompt has been handled, the import icon in the top-right corner can rescan the same platform-specific source at any time. EasyAlias never imports silently and creates a backup before confirmed source data is changed.
+Fresh direct-install editions automatically detect existing aliases and offer a one-time selection dialog. The Mac App Store edition performs that scan only after the user explicitly connects the Home folder. After the prompt has been handled, the import icon in the top-right corner can rescan the same platform-specific source at any time. EasyAlias never imports silently and creates a backup before confirmed source data is changed.
 
 | Platform | Detection source | Backup |
 | --- | --- | --- |
-| macOS | safe, single-line aliases in `~/.zshrc` | `~/.zshrc.easyalias-backup-*` |
-| Mac App Store | safe, single-line aliases in the user-selected `.zshrc` | App Sandbox container `backups/` |
+| macOS | safe, single-line aliases in `~/.zshrc`, `~/.bash_profile`, and `~/.bashrc` | matching `*.easyalias-backup-*` files |
+| Mac App Store | safe, single-line aliases in the three supported files of the selected Home folder | App Sandbox container `backups/` |
 | Linux | safe, single-line aliases in the detected `~/.bashrc` or `~/.zshrc` | matching `.bashrc.easyalias-backup-*` or `.zshrc.easyalias-backup-*` |
 | Windows | simple `.cmd`/`.bat` alias files in user-owned `PATH` folders | `~/.easyalias/import-backup-*` |
 
@@ -521,7 +503,7 @@ This legacy-import flow is separate from portable backup import. The legacy scan
 
 ## Portable Backups
 
-Portable backups use the same versioned JSON envelope in the direct macOS, direct Windows, Linux, and Mac App Store editions. This makes it possible to move selected aliases between those EasyAlias installations while reviewing every entry before it changes the destination configuration. The Microsoft Store source does not support this format yet.
+Portable backups use the same versioned JSON envelope in the direct macOS, Windows, Linux, and Mac App Store editions. This makes it possible to move selected aliases between those EasyAlias installations while reviewing every entry before it changes the destination configuration.
 
 ```mermaid
 flowchart LR
@@ -536,7 +518,7 @@ The importer rejects unsupported formats, malformed entries, duplicate ids or na
 
 ## Alias Actions
 
-| Action | macOS/zsh | Windows/cmd | Linux/bash or zsh |
+| Action | macOS/zsh or Bash | Windows/cmd | Linux/bash or zsh |
 | --- | --- | --- | --- |
 | Navigate to folder | `cd "<path>"` | `cd /d "<path>"` | `cd "<path>"` |
 | Open | `open "<path>"` | `start "" "<path>"` | `xdg-open "<path>"` |
