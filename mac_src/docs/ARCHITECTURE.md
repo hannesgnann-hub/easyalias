@@ -8,12 +8,16 @@ EasyAlias consists of a small frontend and a Tauri/Rust backend:
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | UI, form state, favorites, paged suggestions, imports, portable backups, Trash, command preview |
-| Styling | `src/styles.css` | layout and visual design |
-| Backend | `src-tauri/src/main.rs` | `.zshrc` detection, backup, migration, and local file writes |
+| Frontend | `src/main.ts` | UI, form state, favorites, paged suggestions, imports, portable backups, Trash, automations, schedule modal, shortcut capture, Settings, command preview |
+| Styling | `src/styles.css` | layout and visual design; CSS design tokens with light/dark values |
+| Backend | `src-tauri/src/main.rs` | `.zshrc` detection, backup, migration, local file writes, `launchd` scheduling, global-shortcut registration, tray, autostart |
 | Tauri Config | `src-tauri/tauri.conf.json` | app window, build, bundle |
 | Tauri Dialog Plugin | `@tauri-apps/plugin-dialog` | native file/folder picker |
 | Tauri Opener Plugin | `@tauri-apps/plugin-opener` | open GitHub and Reddit in the system browser |
+| Tauri Global Shortcut Plugin | `tauri-plugin-global-shortcut` | register per-automation system-wide accelerators |
+| Tauri Autostart Plugin | `tauri-plugin-autostart` | launch-at-login registration (`MacosLauncher::LaunchAgent`) |
+| Tauri `tray-icon` feature | built into `tauri` | menu-bar item with Show / Quit menu |
+| `launchd` | `~/Library/LaunchAgents/dev.hannesgnann.easyalias.*` | fires timed automations when the app is closed |
 
 The core idea: EasyAlias does not manage the entire `~/.zshrc`. It creates a dedicated alias file and connects it to zsh once.
 
@@ -92,9 +96,17 @@ flowchart TD
 | --- | --- | --- |
 | `~/.easyalias/config.json` | structured alias data for the UI | EasyAlias |
 | `~/.easyalias/trash.json` | deleted aliases retained for up to 30 days | EasyAlias |
-| `~/.easyalias/automations.json` | saved multi-step automations | EasyAlias |
+| `~/.easyalias/automations.json` | saved multi-step automations (incl. `hotkey`) | EasyAlias |
+| `~/.easyalias/automations-trash.json` | deleted automations retained for up to 30 days | EasyAlias |
+| `~/.easyalias/timed-automations.json` | schedules linking an automation id to a trigger | EasyAlias |
+| `~/.easyalias/timed-automation-logs/` | per-run stdout/stderr for scheduled runs | EasyAlias |
+| `~/.easyalias/sun-location.json` | shared region for sunrise/sunset calculation | EasyAlias |
+| `~/.easyalias/settings.json` | theme, shortcut behavior, suggestions toggle, autostart | EasyAlias |
 | `~/.easyalias/aliases.zsh` | generated zsh aliases | EasyAlias |
 | `~/.easyalias/.zshrc-import-v1` | records that the automatic first-start import prompt was handled | EasyAlias |
+| `~/Library/LaunchAgents/dev.hannesgnann.easyalias.timed.*` | one exact-fire agent per clock-time schedule | EasyAlias |
+| `~/Library/LaunchAgents/dev.hannesgnann.easyalias.sun-timed-automations.plist` | shared 5-minute checker for sunrise/sunset schedules | EasyAlias |
+| `~/Library/LaunchAgents/<autostart agent>` | present only while "Start at login" is on | EasyAlias / autostart plugin |
 | `~/.zshrc.easyalias-backup-*` | timestamped copy created before an import | user backup |
 | `~/.zshrc` | user configuration plus EasyAlias source/shortcut lines and confirmed import markers | user + EasyAlias setup |
 
@@ -147,6 +159,9 @@ Main responsibilities:
 - restore or permanently remove aliases from the 30-day Trash
 - display, edit, and move aliases to Trash
 - build, save, and run multi-step Automations in a separate view
+- open a schedule modal per automation, capture a global shortcut, and show last-run status
+- apply theme, shortcut behavior, suggestions, and autostart from the Settings view; stamp `data-theme` on `<html>`
+- listen for `automation-hotkey-fired` / `automation-hotkey-result` events from the backend
 - call Tauri commands when the app runs natively
 
 The most important types:
@@ -188,8 +203,32 @@ type Automation = {
   favorite: boolean;
   // Free-text label used to organize automations; empty means ungrouped.
   group: string;
+  // Optional global keyboard shortcut (Tauri accelerator); null when unset.
+  hotkey?: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+type TimedAutomation = {
+  id: string;
+  automationId: string;
+  triggerKind: "clock" | "sunrise" | "sunset";
+  time: string;          // "HH:MM", used for triggerKind "clock"
+  days: string[];        // lowercase "mon".."sun"; empty = every day
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt: number | null;
+  lastRunStatus: "success" | "error" | null;
+  lastRunOutput: string | null;
+  lastTriggeredDate: string | null;  // guards the shared sun checker
+};
+
+type AppSettings = {
+  theme: "system" | "light" | "dark";
+  hotkeyBehavior: "window" | "background";
+  showSuggestions: boolean;
+  autostart: boolean;
 };
 ```
 
@@ -241,11 +280,32 @@ import_zshrc_aliases(selected_ids, timestamp)
 
 // Automations
 load_automations()
-save_automations(automations)
+save_automations(automations)                 // also re-syncs global hotkeys
+set_automation_hotkey(id, accelerator)        // validate + OS-register, then persist
 start_automation_session(session_id, path)
 run_session_command(session_id, command, background)
 stop_automation_session(session_id)
+list_automation_trash() / move_automation_to_trash(id) / restore_trash_automation(id)
+permanently_delete_trash_automation(id) / empty_automation_trash()
+export_automation_backup(...) / inspect_automation_backup(path) / import_automation_backup(...)
+
+// Timed automations (launchd)
+list_timed_automations()
+save_timed_automation(entry)                   // writes JSON + registers/updates the agent
+delete_timed_automation(id)                    // unregisters the agent
+list_sun_regions()
+load_sun_location_state() / save_sun_location(setting)
+
+// Settings
+load_settings()                               // reads settings.json, overrides autostart from the plugin
+save_settings(settings)                        // validate + write + apply autostart
+
+// CLI entry points (no window, invoked by launchd)
+--run-timed-automation <id>
+--check-sun-timed-automations
 ```
+
+Commands that mutate automations take `app: tauri::AppHandle` and call `register_all_automation_hotkeys` after writing, so OS shortcut registration always matches `automations.json`. The pure logic lives in `*_inner` helpers so unit tests can call it without an `AppHandle`.
 
 `load_aliases` handles startup setup:
 
@@ -339,6 +399,54 @@ flowchart LR
   Restore --> Config["config.json + aliases.zsh"]
 ```
 
+## Timed Automations and launchd
+
+A `TimedAutomation` record in `timed-automations.json` links an automation id to a trigger. `save_timed_automation` writes the JSON and reconciles the OS scheduler; `delete_timed_automation` removes both.
+
+- **Clock** entries each get a `~/Library/LaunchAgents/dev.hannesgnann.easyalias.timed.<id>.plist` with a `StartCalendarInterval` for the `HH:MM` (and weekday filter), running `easyalias --run-timed-automation <id>`.
+- **Sunrise/sunset** entries cannot use a fixed calendar trigger because the time drifts by roughly a minute a day. They instead share one `dev.hannesgnann.easyalias.sun-timed-automations.plist` agent with `StartInterval 300` running `easyalias --check-sun-timed-automations`. The checker computes today's event time for the configured region (a NOAA-style solar position calc; polar day/night yields "no event"), and for each enabled entry whose time has passed and whose `lastTriggeredDate` is not today, runs the automation and stamps the date. The shared agent is created only while at least one enabled sun entry exists.
+
+`--run-timed-automation` and `--check-sun-timed-automations` are handled at the very top of `main()` before any Tauri/GUI setup, so `launchd` runs them as short headless processes. Each records `lastRunAt` / `lastRunStatus` / `lastRunOutput`; the checker also uses `lastTriggeredDate` so a sun entry fires at most once per calendar day even though the agent polls every 5 minutes.
+
+`launchd` user agents only run while the user is logged in and the Mac is awake. A `StartInterval` occurrence missed while asleep runs soon after wake; there is no "catch-up storm".
+
+```mermaid
+flowchart TD
+  Save["save_timed_automation(entry)"] --> Write["write timed-automations.json"]
+  Write --> Kind{"triggerKind"}
+  Kind -- "clock" --> Plist["per-entry launchd agent (StartCalendarInterval)"]
+  Kind -- "sunrise/sunset" --> Shared["ensure shared checker agent (StartInterval 300)"]
+  Plist --> Fire["easyalias --run-timed-automation id"]
+  Shared --> Check["easyalias --check-sun-timed-automations"]
+  Check --> Due{"time passed and not fired today?"}
+  Due -- "yes" --> Fire2["run automation, stamp lastTriggeredDate"]
+```
+
+## Global Keyboard Shortcuts
+
+`tauri-plugin-global-shortcut` is registered with a single `with_handler` callback. `register_all_automation_hotkeys(app)` runs in `.setup()` and after every command that can add, remove, or free a binding (`save_automations`, `set_automation_hotkey`, trash move/restore, backup import). It unregisters everything, then registers each automation's `hotkey`; a bad or already-taken combo is logged and skipped so one entry never blocks the rest.
+
+`set_automation_hotkey(id, accelerator)`:
+
+1. rejects an unparseable accelerator;
+2. rejects a combo already assigned to another automation;
+3. releases this automation's previous binding, then tries to `register` the new one — on failure it re-registers the old binding and returns an error **without writing** `automations.json`;
+4. otherwise persists the change.
+
+On a press, `handle_global_shortcut` matches the `Shortcut` back to an automation, reads `hotkey_behavior` from settings, and spawns a worker thread: `"background"` runs `run_automation_steps_headless` and emits `automation-hotkey-result` (surfacing the window only on failure); `"window"` reveals the window and emits `automation-hotkey-fired` for the frontend to run through the normal session flow. All window calls go through `show_main_window`, which marshals onto the main thread with `run_on_main_thread`.
+
+## Menu Bar, Tray, and Autostart
+
+`.setup()` builds a `TrayIconBuilder` with a "Show EasyAlias" / "Quit EasyAlias" menu; left click reveals the window, right click opens the menu. On macOS the icon is `icons/tray-icon.png` set `icon_as_template(true)` so the system tints it to the menu bar.
+
+`.on_window_event` intercepts `CloseRequested`, calls `api.prevent_close()`, and hides the window — the process (and its shortcuts) keep running until "Quit" / `Cmd+Q`.
+
+`tauri-plugin-autostart` (`MacosLauncher::LaunchAgent`) is initialised with the extra argument `--autostarted`. `save_settings` calls `apply_autostart` to enable/disable the login item; `load_settings` overrides the stored `autostart` value with the plugin's real `is_enabled()`. When `main()` sees `--autostarted`, `.setup()` keeps the window hidden so a login launch stays in the tray.
+
+## Settings
+
+`AppSettings` persists in `settings.json` with `#[serde(default)]` on every field, so an older or partial file still loads. `save_settings` validates `theme` and `hotkey_behavior` against fixed value lists (`validate_app_settings`), writes the file, and applies autostart. The frontend also mirrors settings to `localStorage["easyalias-settings"]` and calls `applyTheme` before the backend responds, so there is no light flash on start. `styles.css` defines every colour as a `var(--token)` with light values on `:root`, a `:root[data-theme="dark"]` block, and a `prefers-color-scheme` fallback; the frontend stamps `data-theme` on `<html>`.
+
 ## Shell Generation
 
 An alias entry becomes a zsh line:
@@ -398,7 +506,10 @@ Important boundaries:
 - A backup is written before any selected source line is changed.
 - Portable backup files are parsed as data and never executed.
 - Trash provides a 30-day recovery window unless the user explicitly deletes an entry permanently or empties it.
-- Automation commands run only when the user explicitly clicks Run, execute in the automation's own shell session, and are rejected outright in browser preview mode (no `start_automation_session`/`run_session_command` backend to call).
+- Automation commands run only when the user explicitly clicks Run or a schedule/shortcut fires, execute in the automation's own shell session, and are rejected outright in browser preview mode (no `start_automation_session`/`run_session_command` backend to call).
+- Timed automations run the app binary headlessly through `launchd`; the CLI entry points touch no GUI and exit immediately.
+- Global shortcuts only work while the app process is alive; closing the window keeps it in the tray but `Quit` fully unregisters them.
+- A global shortcut is registered with the OS before it is written to `automations.json`, so a rejected combo never leaves a stored-but-inactive binding.
 
 ## Roadmap
 
@@ -408,6 +519,6 @@ Short term:
 
 Later:
 
-- settings window
 - signed and notarized release automation
-- Automations now ship on macOS, Windows, and Linux; the sandboxed Mac App Store edition remains intentionally excluded (see its architecture doc)
+- a monochrome/branded tray icon set per platform
+- Automations, timed schedules, global shortcuts, and the tray now ship on macOS, Windows, and Linux; the sandboxed Mac App Store edition remains intentionally excluded (see its architecture doc)

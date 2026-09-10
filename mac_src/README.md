@@ -32,7 +32,11 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 - automatically generate an `aliases.zsh` file for your terminal
 - connect itself to `~/.zshrc` on first Tauri startup
 - dismiss status messages manually or let them close automatically after three seconds
-- build and run multi-step Automations (shell commands and timed waits) in a chosen working directory
+- build and run multi-step Automations (shell commands and timed waits) in a chosen working directory, with favorites, groups, a 30-day Trash, and portable JSON backup
+- schedule an automation at a fixed time or that day's local sunrise/sunset via `launchd`, so it runs even when EasyAlias is closed
+- assign a global keyboard shortcut to an automation and trigger it from anywhere while EasyAlias runs
+- switch appearance between Light, Dark, and System, toggle alias suggestions, and start hidden at login from the Settings view
+- keep running in the macOS menu bar after the window is closed, reachable from a tray menu
 - link to the website, GitHub repository, EasyAlias subreddit, and sponsor page from the footer
 
 ![EasyAlias macOS alias manager](../docs/assets/v2/start.png)
@@ -102,7 +106,14 @@ EasyAlias intentionally manages its own files and does not directly rewrite your
 ~/.easyalias/.zshrc-import-v1
 ~/.easyalias/trash.json
 ~/.easyalias/automations.json
+~/.easyalias/automations-trash.json
+~/.easyalias/timed-automations.json
+~/.easyalias/timed-automation-logs/
+~/.easyalias/sun-location.json
+~/.easyalias/settings.json
 ```
+
+Timed automations additionally register `launchd` jobs under `~/Library/LaunchAgents/dev.hannesgnann.easyalias.*`, and "Start at login" registers a launch agent for the app itself.
 
 On first Tauri startup, EasyAlias appends this line to `~/.zshrc` if it is missing:
 
@@ -197,7 +208,56 @@ Steps run top to bottom. Running an automation opens a progress dialog showing e
 
 Each automation can optionally carry a **group** label — a free-text tag entered in the editor (with autocomplete suggesting existing group names). The automations list has its own search and filter, matching aliases: search by name, working directory, command text, or group label, and filter to Favorites, Background (any step that starts a process without waiting), Git, Docker, Build, or any specific group. Choosing **Group view** in the filter dropdown replaces the list with one card per group (plus an "Ungrouped" card when applicable); clicking a card, or clicking the group chip on an automation card, filters straight to that group.
 
-Automations are stored separately from aliases in `~/.easyalias/automations.json` and are only available in the real desktop app; the browser preview keeps its automations in `localStorage` and cannot execute commands.
+The working-directory field also accepts a **file** path — for an automation that only edits one file, the run uses the folder that contains it.
+
+Automations are stored separately from aliases in `~/.easyalias/automations.json`, keep their own 30-day Trash in `~/.easyalias/automations-trash.json`, and support the same selective JSON backup export/import as aliases. Automations are only available in the real desktop app; the browser preview keeps its automations in `localStorage` and cannot execute commands.
+
+## Timed Automations
+
+The clock icon on an automation card opens a schedule modal. Pick a trigger kind:
+
+- **Time** — a fixed `HH:MM`.
+- **Sunrise** or **Sunset** — that day's real event, recomputed daily from a NOAA-style calculation for an approximate **region** chosen from a dropdown (US, EU, UK, Asia, Australia buckets). A single shared region is stored in `~/.easyalias/sun-location.json`.
+
+Optionally restrict a schedule to specific weekdays; an empty selection means every day. Toggling the schedule off keeps the entry but unregisters it.
+
+EasyAlias registers each schedule with `launchd`, so it fires even while the app is closed:
+
+- clock-time entries each get their own exact-fire `StartCalendarInterval` agent
+- sunrise/sunset entries share one periodic checker agent (`--check-sun-timed-automations`, every 5 minutes) that runs any entry whose computed time for today has passed and that has not already fired today
+
+`launchd` runs a hidden copy of the app binary with `--run-timed-automation <id>` (or `--check-sun-timed-automations`); each run records its outcome so the card and modal can show "Last run … succeeded/failed". Per-run stdout/stderr goes to `~/.easyalias/timed-automation-logs/`.
+
+`launchd` only runs agents while you are logged in and the Mac is awake; a job missed while the Mac was asleep runs shortly after it wakes.
+
+## Keyboard Shortcuts
+
+The keyboard icon on an automation card records a global accelerator (for example `Cmd+Shift+L`). While EasyAlias is running, pressing it anywhere fires that automation.
+
+- The OS registration is attempted before the shortcut is saved; a combo already claimed by the system or another app is rejected and nothing is stored.
+- Two automations cannot share a combo.
+- **Settings → Automation shortcuts** chooses the behavior: **Show run window** (brings EasyAlias forward and shows live output) or **Run in background** (runs headlessly; a failure still surfaces the window).
+
+Shortcuts are stored on the automation itself (`hotkey` field) and travel with backups. They are registered at startup and re-synced after any change.
+
+## Settings
+
+The gear icon at the right of the header opens the Settings view:
+
+| Section | Options | Default |
+| --- | --- | --- |
+| Appearance | Light / Dark / System | System |
+| Automation shortcuts | Show run window / Run in background | Show run window |
+| Start at login | On / Off | Off |
+| Alias suggestions | On / Off | On |
+
+Values persist in `~/.easyalias/settings.json` and are mirrored to `localStorage` so the theme applies before the backend responds. "System" follows the macOS light/dark setting live.
+
+## Menu Bar & Startup
+
+EasyAlias installs a menu-bar item (a monochrome template icon that follows the menu-bar color). Closing the window hides it instead of quitting, so scheduled and shortcut triggers keep working. Reopen the window with a left click on the icon or **Show EasyAlias** from the right-click menu; **Quit EasyAlias** (or `Cmd+Q`) is the real exit.
+
+**Start at login** (Settings) registers a launch agent that starts EasyAlias hidden in the menu bar when you sign in, using the `--autostarted` flag.
 
 ## Development
 
@@ -230,9 +290,9 @@ mac_src/
     styles.css         styling
 
   src-tauri/
-    src/main.rs        Tauri commands for loading, rescanning, importing, and saving
+    src/main.rs        Tauri commands, launchd scheduling, global shortcuts, tray, autostart
     tauri.conf.json    Tauri app configuration
-    icons/              PNG and macOS ICNS application icons
+    icons/              app icons plus tray-icon.png (menu-bar template)
 
   docs/
     ARCHITECTURE.md    technical architecture
@@ -281,17 +341,51 @@ An automation is stored like this:
   ],
   "favorite": false,
   "group": "Backend",
+  "hotkey": "CmdOrCtrl+Shift+D",
   "createdAt": "2026-08-24T18:00:00.000Z",
   "updatedAt": "2026-08-24T18:00:00.000Z"
 }
 ```
 
-Up to 200 automations with up to 100 steps each are supported; commands are limited to 16 KB and captured output is truncated at 20,000 characters.
+`hotkey` is an optional Tauri accelerator string (`null` when no shortcut is assigned). Up to 200 automations with up to 100 steps each are supported; commands are limited to 16 KB and captured output is truncated at 20,000 characters.
+
+A timed automation is a separate record in `~/.easyalias/timed-automations.json` that points at an automation by id:
+
+```json
+{
+  "id": "uuid",
+  "automationId": "uuid",
+  "triggerKind": "clock",
+  "time": "09:00",
+  "days": ["mon", "tue", "wed", "thu", "fri"],
+  "enabled": true,
+  "createdAt": "2026-09-09T22:53:38.237Z",
+  "updatedAt": "2026-09-09T22:53:51.643Z",
+  "lastRunAt": null,
+  "lastRunStatus": null,
+  "lastRunOutput": null,
+  "lastTriggeredDate": null
+}
+```
+
+`triggerKind` is `clock`, `sunrise`, or `sunset`; `days` uses lowercase three-letter abbreviations and an empty array means every day.
+
+The Settings record in `~/.easyalias/settings.json`:
+
+```json
+{
+  "theme": "system",
+  "hotkeyBehavior": "window",
+  "showSuggestions": true,
+  "autostart": false
+}
+```
 
 ## Roadmap
 
 - signed and notarized release automation
-- Automations now ship on macOS, Windows, and Linux; the sandboxed Mac App Store edition remains intentionally excluded (see its architecture doc)
+- a monochrome/branded tray icon set per platform
+- Automations, schedules, shortcuts, and the tray now ship on macOS, Windows, and Linux; the sandboxed Mac App Store edition remains intentionally excluded (see its architecture doc)
 
 ## Documentation Layout
 

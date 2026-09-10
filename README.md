@@ -77,6 +77,14 @@ The direct macOS, direct Windows, Linux, and Mac App Store source trees share th
 - restore deleted aliases from Trash for 30 days, or remove them permanently
 - dismiss status messages manually or let them disappear after three seconds
 
+The direct macOS, direct Windows, and Linux editions also share the automation and app-shell tools (the sandboxed Mac App Store edition intentionally omits these):
+
+- build and run multi-step Automations (shell commands and timed waits) with favorites, groups, a 30-day Trash, and portable JSON backup
+- schedule an automation as a **Timed Automation**: a fixed clock time, or that day's real **sunrise/sunset** for a chosen region, optionally on specific weekdays — it fires through the operating system's own scheduler, so it runs even while EasyAlias is closed
+- assign a **global keyboard shortcut** to any automation and trigger it from anywhere while EasyAlias is running, either surfacing the run window or running it silently in the background
+- a **Settings** view for appearance (Light / Dark / System), shortcut behavior, the alias-suggestions toggle, and start-at-login
+- closing the window keeps EasyAlias running in the **menu bar / system tray** so shortcuts stay active; the tray menu shows the window again or quits
+
 The macOS version can:
 
 - create aliases
@@ -91,6 +99,8 @@ The macOS version can:
 - start from the terminal through `easya` if the app is installed at `/Applications/EasyAlias.app`
 - search and filter the alias list by name, command, or category (Favorites, Git, Docker, Navigation, Build)
 - build and run multi-step Automations (shell commands and timed waits) in a chosen working directory
+- schedule automations by clock time or local sunrise/sunset through `launchd`, and trigger them with a global keyboard shortcut
+- keep running in the macOS menu bar after the window is closed, and optionally start hidden at login
 
 The Mac App Store version can:
 
@@ -111,6 +121,8 @@ The Windows version can:
 - generate `.cmd` files under `~/.easyalias/bin`
 - connect the command folder to the user `PATH`, so aliases work in `cmd.exe`
 - build and run multi-step Automations (cmd.exe commands and timed waits) in a chosen working directory
+- schedule automations by clock time or local sunrise/sunset through Task Scheduler, and trigger them with a global keyboard shortcut
+- keep running in the Windows system tray after the window is closed, and optionally start hidden at login
 - build as a Windows installer target through Tauri/NSIS
 
 The Microsoft Store version keeps the same unrestricted Win32 behavior and:
@@ -131,6 +143,8 @@ The Linux version can:
 - generate `~/.easyalias/aliases.sh`
 - connect the generated file to `~/.bashrc` or `~/.zshrc`
 - build and run multi-step Automations (bash/zsh commands and timed waits) in a chosen working directory
+- schedule automations by clock time or local sunrise/sunset through systemd user timers, and trigger them with a global keyboard shortcut
+- keep running in the system tray after the window is closed, and optionally start hidden at login
 - build `.deb`, `.rpm`, and `.AppImage` packages
 
 ## Feature Tour
@@ -162,6 +176,50 @@ The export dialog writes only the selected aliases to a portable `.json` file. T
 Deleting an alias moves it to Trash instead of removing it immediately. Deleted aliases remain recoverable for 30 days and can be restored, permanently deleted, or cleared together.
 
 ![EasyAlias Trash with restore and permanent delete controls](docs/assets/v2/trash.png)
+
+### Automations
+
+The automations view (top-right play icon) is a separate workspace for repeatable, multi-step workflows. An automation has a name, a working directory, and an ordered list of **Command** and **Wait** steps that all share one shell session, so a `cd` or exported variable carries across steps. Automations have their own favorites, free-text **group** labels, search/filter, a 30-day Trash, and portable JSON backup. If the working directory field points at a file, the run uses the folder that contains it.
+
+### Timed Automations
+
+The clock icon on an automation card opens its schedule. Pick a trigger:
+
+- **Time** — a fixed `HH:MM`.
+- **Sunrise** / **Sunset** — that day's real event, recomputed daily, for an approximate region chosen from a dropdown (e.g. "EU Central (Berlin)").
+
+Optionally restrict it to specific weekdays. EasyAlias registers the schedule with the operating system's own scheduler (`launchd` on macOS, systemd `--user` timers on Linux, Task Scheduler on Windows), so a timed automation still fires when EasyAlias itself is not running. Clock-time entries get an exact-fire job each; sunrise/sunset entries ride a shared periodic checker. The card and modal show the outcome of the most recent run.
+
+```mermaid
+flowchart LR
+  Card["Automation card"] --> Schedule["Schedule modal"]
+  Schedule --> Kind{"Trigger"}
+  Kind -- "Time HH:MM" --> ClockJob["Exact-fire OS job"]
+  Kind -- "Sunrise / Sunset" --> SunCheck["Shared periodic checker + region"]
+  ClockJob --> Runs["Automation runs (app open or closed)"]
+  SunCheck --> Runs
+```
+
+### Keyboard Shortcuts
+
+The keyboard icon on an automation card records a global shortcut (for example `Cmd+Shift+L`). While EasyAlias is running it fires that automation from anywhere. The **Settings** view chooses what a press does: bring the run window forward with live output, or run it silently in the background. A shortcut already claimed by the system or another app is rejected without being saved. Global shortcuts need a running process — see Menu Bar & Startup below.
+
+### Settings
+
+The gear icon (far right of the header) opens Settings:
+
+| Setting | Options | Default |
+| --- | --- | --- |
+| Appearance | Light / Dark / System | System |
+| Automation shortcut behavior | Show run window / Run in background | Show run window |
+| Alias suggestions | On / Off | On |
+| Start at login | On / Off | Off |
+
+Preferences are stored in `~/.easyalias/settings.json`.
+
+### Menu Bar & Startup
+
+Closing the window no longer quits EasyAlias — it hides the window and the app keeps running in the menu bar (macOS) or system tray (Windows/Linux), so scheduled and shortcut triggers stay available. The tray menu has **Show EasyAlias** and **Quit EasyAlias**; a left click also reveals the window. Turning on **Start at login** launches EasyAlias hidden in the tray when you sign in.
 
 ## Folder Structure
 
@@ -508,11 +566,18 @@ mindmap
       Recover deleted aliases
       File picker
       Paged suggestions
+      Settings and themes
     Shell
       zsh on macOS
       cmd on Windows
       bash or zsh on Linux
       Generated files
+    Automations
+      Multi-step workflows
+      Timed by clock or sunrise/sunset
+      OS scheduler runs them when closed
+      Global keyboard shortcuts
+      Menu bar / system tray
     Export
       Portable JSON backup
       macOS app

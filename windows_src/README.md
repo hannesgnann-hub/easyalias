@@ -31,7 +31,11 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 - automatically generate `.cmd` files for `cmd.exe`
 - connect `~\.easyalias\bin` to the user's `PATH` on first Tauri startup
 - dismiss status messages manually or let them disappear after three seconds
-- build and run multi-step Automations (cmd.exe commands and timed waits) in a chosen working directory
+- build and run multi-step Automations (cmd.exe commands and timed waits) in a chosen working directory, with favorites, groups, a 30-day Trash, and portable JSON backup
+- schedule an automation at a fixed time or that day's local sunrise/sunset via Task Scheduler, so it runs even when EasyAlias is closed
+- assign a global keyboard shortcut to an automation and trigger it from anywhere while EasyAlias runs
+- switch appearance between Light, Dark, and System, toggle suggestions, and start hidden at login from the Settings view
+- keep running in the Windows system tray after the window is closed, reachable from a tray menu
 - link to the website, GitHub repository, EasyAlias subreddit, and sponsor page from the footer
 
 The [shared feature tour](../README.md#feature-tour) illustrates favorites, paged suggestions, portable backups, and Trash. Its screenshots use macOS window chrome, but the workflow is the same on Windows.
@@ -88,7 +92,14 @@ EasyAlias intentionally manages its own files and does not directly rewrite shel
 ~\.easyalias\import-backup-*\
 ~\.easyalias\trash.json
 ~\.easyalias\automations.json
+~\.easyalias\automations-trash.json
+~\.easyalias\timed-automations.json
+~\.easyalias\timed-automation-logs\
+~\.easyalias\sun-location.json
+~\.easyalias\settings.json
 ```
+
+Timed automations also create Windows Task Scheduler tasks (`EasyAliasTimedAutomation_<id>` and a shared `EasyAliasSunTimedAutomations`), and "Start at login" registers a run entry for the app itself.
 
 Each alias becomes one command file:
 
@@ -315,7 +326,54 @@ Steps run top to bottom. Running an automation opens a progress dialog showing e
 
 Each automation can optionally carry a **group** label — a free-text tag entered in the editor (with autocomplete suggesting existing group names). The automations list has its own search and filter: search by name, working directory, command text, or group label, and filter to Background (any step that starts a process without waiting), Git, Docker, Build, or any specific group. Choosing **Group view** in the filter dropdown replaces the list with one card per group (plus an "Ungrouped" card when applicable); clicking a card, or clicking the group chip on an automation card, filters straight to that group.
 
-Automations are stored separately from shortcuts in `~\.easyalias\automations.json` and are only available in the real desktop app; the browser preview keeps its automations in `localStorage` and cannot execute commands.
+If the working-directory field points at a **file**, the run uses the folder that contains it.
+
+Automations are stored separately from shortcuts in `~\.easyalias\automations.json`, keep their own 30-day Trash in `~\.easyalias\automations-trash.json`, and support the same selective JSON backup export/import as shortcuts. Automations are only available in the real desktop app; the browser preview keeps its automations in `localStorage` and cannot execute commands.
+
+## Timed Automations
+
+The clock icon on an automation card opens a schedule. Pick a trigger kind:
+
+- **Time** — a fixed `HH:MM`.
+- **Sunrise** or **Sunset** — that day's real event, recomputed daily for an approximate **region** chosen from a dropdown (stored once in `~\.easyalias\sun-location.json`).
+
+Optionally restrict a schedule to specific weekdays; empty means every day.
+
+EasyAlias registers each schedule with Windows **Task Scheduler** (`schtasks`), so it fires even while the app is closed:
+
+- clock-time entries each get an `EasyAliasTimedAutomation_<id>` task with a daily or weekly (`/SC DAILY` / `/SC WEEKLY /D ...`) trigger at the chosen time, running `EasyAlias.exe --run-timed-automation <id>`
+- sunrise/sunset entries share one `EasyAliasSunTimedAutomations` task that runs `EasyAlias.exe --check-sun-timed-automations` every 5 minutes (plus an `EasyAliasSunTimedAutomations_Startup` companion); the checker runs any entry whose computed time for today has passed and that has not already fired today
+
+Each run stamps `lastRunAt` / `lastRunStatus` on its entry so the card can show the last result; per-run output goes to `~\.easyalias\timed-automation-logs\`.
+
+## Keyboard Shortcuts
+
+The keyboard icon on an automation card records a global accelerator (for example `Ctrl+Shift+L`). While EasyAlias runs, pressing it anywhere fires that automation.
+
+- The OS registration is attempted before the shortcut is saved; a combo already claimed by Windows or another app is rejected and nothing is stored.
+- Two automations cannot share a combo.
+- **Settings → Automation shortcuts** chooses the behavior: **Show run window** or **Run in background** (a failure still surfaces the window).
+
+Shortcuts are stored on the automation (`hotkey` field), travel with backups, and are (re)registered at startup and after any change.
+
+## Settings
+
+The gear icon at the right of the header opens Settings:
+
+| Section | Options | Default |
+| --- | --- | --- |
+| Appearance | Light / Dark / System | System |
+| Automation shortcuts | Show run window / Run in background | Show run window |
+| Start at login | On / Off | Off |
+| Alias suggestions | On / Off | On |
+
+Values persist in `~\.easyalias\settings.json` and are mirrored to `localStorage` so the theme applies before the backend responds.
+
+## System Tray & Startup
+
+EasyAlias adds a Windows system-tray (notification-area) item. Closing the window hides it instead of quitting, so scheduled and shortcut triggers stay available. Reopen from a left click or **Show EasyAlias** in the menu; **Quit EasyAlias** is the real exit.
+
+**Start at login** (Settings) registers a run entry that launches EasyAlias hidden in the tray, using the `--autostarted` flag.
 
 ## Documentation Layout
 

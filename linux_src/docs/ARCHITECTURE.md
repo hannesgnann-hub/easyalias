@@ -6,12 +6,16 @@ EasyAlias Linux combines a TypeScript/Vite interface with a Tauri 2 Rust backend
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | forms, favorites, paged suggestions, imports, portable backups, Trash, validation, previews, Tauri calls |
-| Styling | `src/styles.css` | responsive desktop interface |
-| Backend | `src-tauri/src/main.rs` | shell detection, startup-file import, backup, and persistence |
+| Frontend | `src/main.ts` | forms, favorites, paged suggestions, imports, portable backups, Trash, automations, schedule modal, shortcut capture, Settings, previews, Tauri calls |
+| Styling | `src/styles.css` | responsive desktop interface; CSS design tokens with light/dark values |
+| Backend | `src-tauri/src/main.rs` | shell detection, startup-file import, backup, persistence, systemd `--user` scheduling, global shortcuts, tray, autostart |
 | Bundle config | `src-tauri/tauri.conf.json` | Linux window, permissions, package targets |
 | Dialog plugin | `@tauri-apps/plugin-dialog` | native file/folder picker |
 | Opener plugin | `@tauri-apps/plugin-opener` | GitHub and Reddit links in the system browser |
+| Global shortcut plugin | `tauri-plugin-global-shortcut` | per-automation system-wide accelerators |
+| Autostart plugin | `tauri-plugin-autostart` | launch-at-login registration |
+| `tray-icon` feature | built into `tauri` | system-tray item with Show / Quit |
+| `systemctl --user` | `~/.config/systemd/user/easyalias-*` | fires timed automations when the app is closed |
 
 ```mermaid
 flowchart LR
@@ -123,7 +127,8 @@ import_shell_aliases(selected_ids, timestamp)
 
 // Automations
 load_automations()
-save_automations(automations)
+save_automations(automations)                  // also re-syncs global hotkeys
+set_automation_hotkey(id, accelerator)         // validate + OS-register, then persist
 list_automation_trash()
 move_automation_to_trash(id)
 restore_trash_automation(id)
@@ -135,7 +140,38 @@ import_automation_backup(path, selected_ids)
 start_automation_session(session_id, path)
 run_session_command(session_id, command, background)
 stop_automation_session(session_id)
+
+// Timed automations (systemd --user)
+list_timed_automations()
+save_timed_automation(entry)
+delete_timed_automation(id)
+list_sun_regions()
+load_sun_location_state() / save_sun_location(setting)
+
+// Settings
+load_settings() / save_settings(settings)
+
+// CLI entry points (no window, invoked by systemd)
+--run-timed-automation <id>
+--check-sun-timed-automations
 ```
+
+## Timed Automations and systemd
+
+A `TimedAutomation` record in `timed-automations.json` links an automation id to a trigger (`clock`, `sunrise`, or `sunset`). `save_timed_automation` writes the JSON and reconciles the OS scheduler through `systemctl --user`; `delete_timed_automation` removes both.
+
+- **Clock** entries get an `easyalias-timed-<id>.timer` + `.service` pair under `~/.config/systemd/user/`, with `OnCalendar` for the `HH:MM` and weekday list, running `easyalias --run-timed-automation <id>`.
+- **Sunrise/sunset** entries share one `easyalias-sun-timed-automations.timer` (`OnUnitActiveSec` = 300 s, `OnBootSec` = 60 s, `Persistent=true`) running `easyalias --check-sun-timed-automations`. The checker computes today's event for the configured region and runs any enabled entry whose time has passed and whose `lastTriggeredDate` is not today. The shared timer exists only while at least one enabled sun entry does.
+
+`--run-timed-automation` / `--check-sun-timed-automations` are handled at the top of `main()` before any GUI setup. Each run stamps `lastRunAt` / `lastRunStatus` / `lastRunOutput`; the checker's `lastTriggeredDate` keeps a sun entry to once per calendar day despite the 5-minute poll. Editing a unit file triggers `systemctl --user daemon-reload`.
+
+## Global Shortcuts, Tray, and Autostart
+
+`tauri-plugin-global-shortcut` registers one `with_handler` callback; `register_all_automation_hotkeys` runs in `.setup()` and after every command that can add/remove/free a binding, skipping bad or taken combos. `set_automation_hotkey` validates the accelerator, rejects an in-app duplicate, tries the OS registration **before** writing `automations.json`, and rolls back on failure. On a press the handler reads `hotkey_behavior` and either reveals the window + emits `automation-hotkey-fired`, or runs headless + emits `automation-hotkey-result`; `show_main_window` marshals window calls onto the main thread.
+
+`.on_window_event` intercepts `CloseRequested` → `prevent_close()` + `hide()`, so the process and its shortcuts survive a window close. A `TrayIconBuilder` provides "Show EasyAlias" / "Quit EasyAlias"; on non-macOS platforms it uses the app icon. `tauri-plugin-autostart` registers a login entry with the `--autostarted` argument; `save_settings` applies it, `load_settings` reads the plugin's real state back into the `autostart` field, and `.setup()` keeps the window hidden when launched with the flag.
+
+Commands that mutate automations take `app: tauri::AppHandle`; the pure logic lives in `*_inner` helpers so unit tests need no `AppHandle`. `AppSettings` (`theme`, `hotkeyBehavior`, `showSuggestions`, `autostart`) is stored in `settings.json` with `#[serde(default)]` on every field, validated by `validate_app_settings`, and mirrored to `localStorage` for a flash-free theme on start.
 
 ## Import Flow
 
@@ -197,17 +233,41 @@ type AutomationStep = {
 type Automation = {
   id: string;
   name: string;
-  path: string;
+  path: string;             // a file path resolves to its parent folder
   steps: AutomationStep[];
   favorite: boolean;
   // Free-text label used to organize automations; empty means ungrouped.
   group: string;
+  // Optional global keyboard shortcut (Tauri accelerator); null when unset.
+  hotkey?: string | null;
   createdAt: string;
   updatedAt: string;
 };
+
+type TimedAutomation = {
+  id: string;
+  automationId: string;
+  triggerKind: "clock" | "sunrise" | "sunset";
+  time: string;             // "HH:MM" for "clock"
+  days: string[];           // lowercase "mon".."sun"; empty = every day
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt: number | null;
+  lastRunStatus: "success" | "error" | null;
+  lastRunOutput: string | null;
+  lastTriggeredDate: string | null;
+};
+
+type AppSettings = {
+  theme: "system" | "light" | "dark";
+  hotkeyBehavior: "window" | "background";
+  showSuggestions: boolean;
+  autostart: boolean;
+};
 ```
 
-Automations are stored independently of aliases in `~/.easyalias/automations.json` and validated on every load and save: up to 200 automations, each with 1-100 steps, unique automation and step ids, command steps under 16 KB, and wait steps between 1 second and 24 hours.
+Automations are stored independently of aliases in `~/.easyalias/automations.json` and validated on every load and save: up to 200 automations, each with 1-100 steps, unique automation and step ids, command steps under 16 KB, and wait steps between 1 second and 24 hours. Timed automations live in `timed-automations.json`, the shared sun region in `sun-location.json`, and preferences in `settings.json`.
 
 Each run gets one persistent shell process (`AutomationSessionHandle`, keyed by a frontend-generated `session_id` in the `AutomationSessions` Tauri-managed state) instead of a fresh process per step. This is what lets `cd` and exported environment variables from one step carry over to the next, the same way they would in a real terminal. The shell binary is resolved by `automation_shell_binary()`, which reuses the same `$SHELL` detection as aliases (`/bin/zsh` when `shell_setup()` detects zsh, `/bin/bash` otherwise) — an automation runs in the user's own detected shell, not a hardcoded one.
 
@@ -219,9 +279,12 @@ Automations additionally get their own favorites, groups, 30-day Trash (`~/.easy
 
 Safety boundaries specific to automations:
 
-- Automation commands run only when the user explicitly clicks Run, execute in the automation's own shell session, and are rejected outright in browser preview mode (no `start_automation_session`/`run_session_command` backend to call).
+- Automation commands run only when the user explicitly clicks Run or a schedule/shortcut fires, execute in the automation's own shell session, and are rejected outright in browser preview mode (no `start_automation_session`/`run_session_command` backend to call).
 - Portable automation backup files are parsed as data and never executed.
 - Automation Trash provides the same 30-day recovery window as alias Trash.
+- Timed automations run the app binary headlessly through systemd; the CLI entry points touch no GUI.
+- A global shortcut is registered with the OS before it is written to `automations.json`, so a rejected combo never leaves a stored-but-inactive binding.
+- Global shortcuts only work while the app process is alive; closing the window keeps it in the tray, `Quit` fully unregisters them.
 
 ## Browser Preview
 

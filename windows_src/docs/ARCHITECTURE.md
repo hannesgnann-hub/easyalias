@@ -8,12 +8,16 @@ EasyAlias consists of a small frontend and a Tauri/Rust backend:
 
 | Layer | File | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/main.ts` | UI, favorites, paged suggestions, legacy import, portable backups, Trash, command preview |
-| Styling | `src/styles.css` | layout and visual design |
-| Backend | `src-tauri/src/main.rs` | PATH setup, legacy command discovery, backup, and persistence |
+| Frontend | `src/main.ts` | UI, favorites, paged suggestions, legacy import, portable backups, Trash, automations, schedule modal, shortcut capture, Settings, command preview |
+| Styling | `src/styles.css` | layout and visual design; CSS design tokens with light/dark values |
+| Backend | `src-tauri/src/main.rs` | PATH setup, legacy command discovery, backup, persistence, Task Scheduler jobs, global shortcuts, tray, autostart |
 | Tauri Config | `src-tauri/tauri.conf.json` | app window, build, Windows installer |
 | Tauri Dialog Plugin | `@tauri-apps/plugin-dialog` | native file/folder picker |
 | Tauri Opener Plugin | `@tauri-apps/plugin-opener` | open GitHub and Reddit in the system browser |
+| Tauri Global Shortcut Plugin | `tauri-plugin-global-shortcut` | per-automation system-wide accelerators |
+| Tauri Autostart Plugin | `tauri-plugin-autostart` | launch-at-login registration |
+| `tray-icon` feature | built into `tauri` | notification-area item with Show / Quit |
+| `schtasks.exe` | Windows Task Scheduler | fires timed automations when the app is closed |
 
 The core idea: EasyAlias creates one `.cmd` file per alias and places those command files in a dedicated folder that is added to the user's `PATH`.
 
@@ -99,7 +103,14 @@ flowchart TD
 | `~/.easyalias/bin/*.cmd` | generated command files | EasyAlias |
 | `~/.easyalias/.cmd-import-v1` | records that the automatic first-start import prompt was handled | EasyAlias |
 | `~/.easyalias/import-backup-*` | copies of imported legacy command files | user backup |
-| `~/.easyalias/automations.json` | saved multi-step automations | EasyAlias |
+| `~/.easyalias/automations.json` | saved multi-step automations (incl. `hotkey`) | EasyAlias |
+| `~/.easyalias/automations-trash.json` | deleted automations retained for up to 30 days | EasyAlias |
+| `~/.easyalias/timed-automations.json` | schedules linking an automation id to a trigger | EasyAlias |
+| `~/.easyalias/timed-automation-logs/` | per-run output for scheduled runs | EasyAlias |
+| `~/.easyalias/sun-location.json` | shared region for sunrise/sunset calculation | EasyAlias |
+| `~/.easyalias/settings.json` | theme, shortcut behavior, suggestions toggle, autostart | EasyAlias |
+| Task Scheduler `EasyAliasTimedAutomation_*` | one task per clock-time schedule | EasyAlias |
+| Task Scheduler `EasyAliasSunTimedAutomations` (+ `_Startup`) | shared 5-minute checker for sunrise/sunset schedules | EasyAlias |
 | User `PATH` | contains `~/.easyalias/bin` | user + EasyAlias setup |
 
 On first Tauri startup, the backend ensures:
@@ -185,12 +196,36 @@ type AutomationStep = {
 type Automation = {
   id: string;
   name: string;
-  path: string;
+  path: string;             // a file path resolves to its parent folder
   steps: AutomationStep[];
   // Free-text label used to organize automations; empty means ungrouped.
   group: string;
+  // Optional global keyboard shortcut (Tauri accelerator); null when unset.
+  hotkey?: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+type TimedAutomation = {
+  id: string;
+  automationId: string;
+  triggerKind: "clock" | "sunrise" | "sunset";
+  time: string;             // "HH:MM" for "clock"
+  days: string[];           // lowercase "mon".."sun"; empty = every day
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt: number | null;
+  lastRunStatus: "success" | "error" | null;
+  lastRunOutput: string | null;
+  lastTriggeredDate: string | null;
+};
+
+type AppSettings = {
+  theme: "system" | "light" | "dark";
+  hotkeyBehavior: "window" | "background";
+  showSuggestions: boolean;
+  autostart: boolean;
 };
 ```
 
@@ -242,11 +277,44 @@ import_command_files(selected_ids, timestamp)
 
 // Automations
 load_automations()
-save_automations(automations)
+save_automations(automations)                  // also re-syncs global hotkeys
+set_automation_hotkey(id, accelerator)         // validate + OS-register, then persist
+list_automation_trash() / move_automation_to_trash(id) / restore_trash_automation(id)
+permanently_delete_trash_automation(id) / empty_automation_trash()
+export_automation_backup(...) / inspect_automation_backup(path) / import_automation_backup(...)
 start_automation_session(session_id, path)
 run_session_command(session_id, command, background)
 stop_automation_session(session_id)
+
+// Timed automations (Task Scheduler)
+list_timed_automations()
+save_timed_automation(entry)
+delete_timed_automation(id)
+list_sun_regions()
+load_sun_location_state() / save_sun_location(setting)
+
+// Settings
+load_settings() / save_settings(settings)
+
+// CLI entry points (no window, invoked by schtasks)
+--run-timed-automation <id>
+--check-sun-timed-automations
 ```
+
+## Timed Automations, Global Shortcuts, Tray, and Autostart
+
+A `TimedAutomation` in `timed-automations.json` links an automation id to a trigger. `save_timed_automation` writes the JSON and calls `schtasks`; `delete_timed_automation` removes both.
+
+- **Clock** entries get an `EasyAliasTimedAutomation_<id>` task (`/SC DAILY` or `/SC WEEKLY /D ...` at `/ST HH:MM`) running `EasyAlias.exe --run-timed-automation <id>`.
+- **Sunrise/sunset** entries share `EasyAliasSunTimedAutomations` (a 5-minute `/SC MINUTE /MO 5` task) plus an `_Startup` companion, running `EasyAlias.exe --check-sun-timed-automations`. The checker computes today's event for the configured region and runs any enabled entry whose time has passed and whose `lastTriggeredDate` is not today.
+
+`--run-timed-automation` / `--check-sun-timed-automations` are handled at the top of `main()` before any GUI setup, so `schtasks` runs them as short headless processes. Each stamps `lastRunAt` / `lastRunStatus`; the checker's `lastTriggeredDate` keeps a sun entry to once per calendar day.
+
+`tauri-plugin-global-shortcut` registers one `with_handler` callback. `register_all_automation_hotkeys` runs in `.setup()` and after every command that can add/remove/free a binding, skipping bad or taken combos. `set_automation_hotkey` validates the accelerator, rejects an in-app duplicate, and tries the OS registration **before** writing `automations.json`, rolling back on failure. On a press the handler reads `hotkey_behavior` and either reveals the window + emits `automation-hotkey-fired`, or runs headless + emits `automation-hotkey-result`; `show_main_window` marshals window calls onto the main thread.
+
+`.on_window_event` intercepts `CloseRequested` → `prevent_close()` + `hide()`, so the process and its shortcuts survive a window close. A `TrayIconBuilder` provides "Show EasyAlias" / "Quit EasyAlias" using the app icon. `tauri-plugin-autostart` registers a login entry with the `--autostarted` argument; `save_settings` applies it, `load_settings` reads the plugin's real state back into `autostart`, and `.setup()` keeps the window hidden when launched with the flag.
+
+Commands that mutate automations take `app: tauri::AppHandle`; the pure logic lives in `*_inner` helpers so unit tests need no `AppHandle`. `AppSettings` is stored in `settings.json` with `#[serde(default)]` on every field, validated by `validate_app_settings`, and mirrored to `localStorage` for a flash-free theme on start.
 
 `load_aliases` handles startup setup:
 
@@ -431,5 +499,6 @@ Short term:
 
 Later:
 
-- settings window
+- a monochrome/branded tray icon set per platform
 - signed Windows release automation
+- verify the Task Scheduler jobs, global shortcuts, and tray on an actual Windows machine (built and code-reviewed on macOS)

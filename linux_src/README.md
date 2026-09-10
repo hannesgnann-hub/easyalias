@@ -32,7 +32,11 @@ Your sponsorship helps me fix bugs, develop new features, and keep EasyAlias fre
 - add the `easya` shortcut for opening the installed application
 - build `.deb`, `.rpm`, and `.AppImage` packages
 - dismiss status messages manually or let them disappear after three seconds
-- build and run multi-step Automations (bash/zsh commands and timed waits) in a chosen working directory
+- build and run multi-step Automations (bash/zsh commands and timed waits) in a chosen working directory, with favorites, groups, a 30-day Trash, and portable JSON backup
+- schedule an automation at a fixed time or that day's local sunrise/sunset via systemd `--user` timers, so it runs even when EasyAlias is closed
+- assign a global keyboard shortcut to an automation and trigger it from anywhere while EasyAlias runs
+- switch appearance between Light, Dark, and System, toggle alias suggestions, and start hidden at login from the Settings view
+- keep running in the system tray after the window is closed, reachable from a tray menu
 - link to the website, GitHub repository, EasyAlias subreddit, and sponsor page from the footer
 
 The [shared feature tour](../README.md#feature-tour) illustrates favorites, paged suggestions, portable backups, and Trash. Its screenshots use macOS window chrome, but the workflow is the same on Linux.
@@ -144,7 +148,13 @@ The app manages these files:
 ~/.easyalias/trash.json
 ~/.easyalias/automations.json
 ~/.easyalias/automations-trash.json
+~/.easyalias/timed-automations.json
+~/.easyalias/timed-automation-logs/
+~/.easyalias/sun-location.json
+~/.easyalias/settings.json
 ```
+
+Timed automations also write systemd user units under `~/.config/systemd/user/easyalias-*`, and "Start at login" writes an autostart entry for the app itself.
 
 On first native startup it appends the missing lines to the detected startup file:
 
@@ -229,7 +239,54 @@ Steps run top to bottom. Running an automation opens a progress dialog showing e
 
 Each automation can optionally carry a **group** label — a free-text tag entered in the editor (with a picker suggesting existing group names). The automations list has its own search and filter, matching aliases: search by name, working directory, command text, or group label, and filter to Favorites, Background (any step that starts a process without waiting), Git, Docker, Build, or any specific group. Choosing **Group view** in the filter dropdown replaces the list with one card per group (plus an "Ungrouped" card when applicable); clicking a card, or clicking the group chip on an automation card, filters straight to that group.
 
+If the working-directory field points at a **file**, the run uses the folder that contains it.
+
 Automations are stored separately from aliases in `~/.easyalias/automations.json`, keep their own 30-day Trash in `~/.easyalias/automations-trash.json`, and support the same selective JSON backup export/import as aliases. Automations are only available in the real desktop app; the browser preview keeps its automations in `localStorage` and cannot execute commands.
+
+## Timed Automations
+
+The clock icon on an automation card opens a schedule. Pick a trigger kind:
+
+- **Time** — a fixed `HH:MM`.
+- **Sunrise** or **Sunset** — that day's real event, recomputed daily for an approximate **region** chosen from a dropdown (stored once in `~/.easyalias/sun-location.json`).
+
+Optionally restrict a schedule to specific weekdays; empty means every day.
+
+EasyAlias registers each schedule as a systemd **user** unit under `~/.config/systemd/user/` (via `systemctl --user`), so it fires even while the app is closed:
+
+- clock-time entries each get an `easyalias-timed-<id>.timer` + `.service` pair with `OnCalendar` for the time and weekdays, running `easyalias --run-timed-automation <id>`
+- sunrise/sunset entries share one `easyalias-sun-timed-automations.timer` that runs `easyalias --check-sun-timed-automations` every 5 minutes (`OnUnitActiveSec`, plus `OnBootSec` and `Persistent=true` so a check missed while suspended runs on resume); the checker runs any entry whose computed time for today has passed and that has not already fired today
+
+Per-run status is stamped on the entry (`lastRunAt` / `lastRunStatus`) so the card can show the last result. systemd user units run while you are logged in; enable lingering with `loginctl enable-linger $USER` if you want them to run without an active session.
+
+## Keyboard Shortcuts
+
+The keyboard icon on an automation card records a global accelerator (for example `Ctrl+Shift+L`). While EasyAlias runs, pressing it anywhere fires that automation.
+
+- The OS registration is attempted before the shortcut is saved; a combo already claimed by the desktop environment or another app is rejected and nothing is stored.
+- Two automations cannot share a combo.
+- **Settings → Automation shortcuts** chooses the behavior: **Show run window** or **Run in background** (a failure still surfaces the window).
+
+Shortcuts are stored on the automation (`hotkey` field), travel with backups, and are (re)registered at startup and after any change.
+
+## Settings
+
+The gear icon at the right of the header opens Settings:
+
+| Section | Options | Default |
+| --- | --- | --- |
+| Appearance | Light / Dark / System | System |
+| Automation shortcuts | Show run window / Run in background | Show run window |
+| Start at login | On / Off | Off |
+| Alias suggestions | On / Off | On |
+
+Values persist in `~/.easyalias/settings.json` and are mirrored to `localStorage` so the theme applies before the backend responds.
+
+## System Tray & Startup
+
+EasyAlias adds a system-tray item (needs a tray/AppIndicator implementation in your desktop environment — most provide one or a well-known extension). Closing the window hides it instead of quitting, so scheduled and shortcut triggers stay available. Reopen from a left click or **Show EasyAlias** in the menu; **Quit EasyAlias** is the real exit.
+
+**Start at login** (Settings) registers an autostart entry that launches EasyAlias hidden in the tray, using the `--autostarted` flag.
 
 ## Build And Export
 
