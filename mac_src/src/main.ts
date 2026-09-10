@@ -9,19 +9,25 @@ import {
   Clock,
   Clock3,
   createIcons,
+  Check,
   FileDown,
   FileUp,
   Filter,
   FolderOpen,
+  Keyboard,
   LoaderCircle,
+  Monitor,
+  Moon,
   Pencil,
   Play,
   Plus,
   RotateCcw,
   Search,
   Save,
+  Settings,
   SquareTerminal,
   Star,
+  Sun,
   Sunrise,
   Sunset,
   Tag,
@@ -127,7 +133,15 @@ type PickerTarget = "create" | "edit" | "automation";
 type PickerKind = "file" | "folder";
 type BackupDialogMode = "export" | "import";
 type AliasFilter = "all" | "favorites" | "git" | "docker" | "navigation" | "build";
-type AppView = "aliases" | "automations";
+type AppView = "aliases" | "automations" | "settings";
+
+type ThemePreference = "system" | "light" | "dark";
+type HotkeyBehavior = "window" | "background";
+
+type AppSettings = {
+  theme: ThemePreference;
+  hotkeyBehavior: HotkeyBehavior;
+};
 type AutomationStepKind = "command" | "wait";
 type AutomationCommandBehavior = "wait" | "background";
 type AutomationRunStepStatus = "pending" | "running" | "success" | "error" | "skipped";
@@ -148,6 +162,9 @@ type Automation = {
   favorite: boolean;
   // Free-text label used to organize automations. Empty means ungrouped.
   group: string;
+  // Optional global keyboard shortcut (Tauri accelerator string, e.g.
+  // "CmdOrCtrl+Shift+L"). null/undefined means no shortcut is assigned.
+  hotkey?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -712,8 +729,104 @@ let timedAutomationError = "";
 // startup and editable from inside the schedule modal.
 let sunRegionOptions: SunRegionOption[] = [];
 let sunLocation: SunLocationSetting = { region: "" };
+// App-wide preferences (theme, hotkey behavior). Loaded from the backend at
+// startup; browser preview mirrors them in localStorage.
+let appSettings: AppSettings = { theme: "system", hotkeyBehavior: "window" };
+let settingsBusy = false;
+let settingsError = "";
+// Where the "back" button in Settings returns to (whichever view opened it).
+let settingsReturnView: Exclude<AppView, "settings"> = "aliases";
+// Only one automation card's hotkey-capture popover is open at a time, same
+// pattern as the group and schedule pickers above.
+let hotkeyEditorAutomationId: string | null = null;
+// The accelerator captured in the open popover but not yet saved.
+let hotkeyDraft: string | null = null;
+let hotkeyCaptureError = "";
 
 const trashRetentionSeconds = 30 * 24 * 60 * 60;
+const settingsStorageKey = "easyalias-settings";
+
+// macOS-style glyphs for a Tauri accelerator string, e.g.
+// "CmdOrCtrl+Shift+L" -> "⌘⇧L". Other platforms spell the modifiers out.
+function formatAccelerator(accelerator: string): string {
+  const isMac = navigator.platform.toUpperCase().includes("MAC");
+  return accelerator
+    .split("+")
+    .map((token) => {
+      const key = token.trim();
+      const lower = key.toLowerCase();
+      if (lower === "cmdorctrl" || lower === "commandorcontrol") return isMac ? "⌘" : "Ctrl+";
+      if (lower === "cmd" || lower === "command" || lower === "super" || lower === "meta")
+        return isMac ? "⌘" : "Super+";
+      if (lower === "ctrl" || lower === "control") return isMac ? "⌃" : "Ctrl+";
+      if (lower === "alt" || lower === "option") return isMac ? "⌥" : "Alt+";
+      if (lower === "shift") return isMac ? "⇧" : "Shift+";
+      if (key.length === 1) return key.toUpperCase();
+      return key;
+    })
+    .join("")
+    .replace(/\+$/, "");
+}
+
+// Builds a Tauri accelerator string from a keydown event, or null if the
+// press is not a usable shortcut (no modifier, or a lone modifier key).
+function acceleratorFromEvent(event: KeyboardEvent): string | null {
+  const parts: string[] = [];
+  if (event.metaKey) parts.push("CmdOrCtrl");
+  if (event.ctrlKey && !event.metaKey) parts.push("CmdOrCtrl");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+
+  const key = event.key;
+  if (["Meta", "Control", "Alt", "Shift", "OS", "Dead"].includes(key)) return null;
+  if (parts.length === 0) return null;
+
+  let token: string;
+  if (key === " " || key === "Spacebar") token = "Space";
+  else if (key.length === 1) token = key.toUpperCase();
+  else token = key;
+
+  // De-duplicate (Ctrl on mac maps to the same slot as Cmd).
+  const modifiers = Array.from(new Set(parts));
+  return [...modifiers, token].join("+");
+}
+
+// Resolves a theme preference to the concrete light/dark the page should show
+// and stamps it on <html> so styles.css can switch tokens.
+function applyTheme(theme: ThemePreference) {
+  const prefersDark =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const dark = theme === "dark" || (theme === "system" && prefersDark);
+  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+}
+
+function readStoredSettings(): AppSettings {
+  try {
+    const raw = localStorage.getItem(settingsStorageKey);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<AppSettings>;
+      return {
+        theme:
+          parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system"
+            ? parsed.theme
+            : "system",
+        hotkeyBehavior: parsed.hotkeyBehavior === "background" ? "background" : "window"
+      };
+    }
+  } catch {
+    // Ignore unreadable storage - fall back to defaults.
+  }
+  return { theme: "system", hotkeyBehavior: "window" };
+}
+
+function persistStoredSettings(settings: AppSettings) {
+  try {
+    localStorage.setItem(settingsStorageKey, JSON.stringify(settings));
+  } catch {
+    // Non-fatal - the backend copy is the source of truth in the native app.
+  }
+}
 
 // Vite mounts the app into <main id="app"> from index.html.
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -924,6 +1037,13 @@ async function loadState() {
       } catch (sunLocationLoadError) {
         error = `Sunrise/sunset region could not be loaded: ${String(sunLocationLoadError)}`;
       }
+      try {
+        appSettings = await invokeCommand<AppSettings>("load_settings");
+        persistStoredSettings(appSettings);
+        applyTheme(appSettings.theme);
+      } catch (settingsLoadError) {
+        error = `Settings could not be loaded: ${String(settingsLoadError)}`;
+      }
       selectedImportIds = new Set(appState.importCandidates.map((candidate) => candidate.id));
       render();
       return;
@@ -979,6 +1099,9 @@ async function loadState() {
   sunRegionOptions = SUN_REGION_OPTIONS;
   const savedSunLocation = localStorage.getItem("easyalias-sun-location");
   sunLocation = savedSunLocation ? (JSON.parse(savedSunLocation) as SunLocationSetting) : { region: "eu-central" };
+
+  appSettings = readStoredSettings();
+  applyTheme(appSettings.theme);
 
   render();
 }
@@ -2133,14 +2256,178 @@ function createAutomationStep(kind: AutomationStepKind): AutomationStep {
   };
 }
 
+// Collapses every automation card's inline popover (group / schedule /
+// hotkey) so only one interaction surface is ever open at a time.
+function closeAllAutomationCardPopovers() {
+  automationGroupPickerId = null;
+  scheduleEditorAutomationId = null;
+  hotkeyEditorAutomationId = null;
+  hotkeyDraft = null;
+  hotkeyCaptureError = "";
+}
+
 function openAutomationsView() {
   clearMessages();
   automationError = "";
-  automationGroupPickerId = null;
-  scheduleEditorAutomationId = null;
+  closeAllAutomationCardPopovers();
   timedAutomationEditor = null;
   currentView = "automations";
   render();
+}
+
+function openSettingsView() {
+  clearMessages();
+  settingsError = "";
+  settingsReturnView = currentView === "automations" ? "automations" : "aliases";
+  currentView = "settings";
+  render();
+}
+
+function closeSettingsView() {
+  settingsError = "";
+  currentView = settingsReturnView;
+  render();
+}
+
+// Applies a theme choice: immediate visual switch, optimistic local persistence,
+// then the backend write (which is the source of truth in the native app).
+async function updateThemePreference(theme: ThemePreference) {
+  if (appSettings.theme === theme) return;
+  appSettings = { ...appSettings, theme };
+  applyTheme(theme);
+  persistStoredSettings(appSettings);
+  render();
+  await saveSettingsToBackend();
+}
+
+async function updateHotkeyBehavior(behavior: HotkeyBehavior) {
+  if (appSettings.hotkeyBehavior === behavior) return;
+  appSettings = { ...appSettings, hotkeyBehavior: behavior };
+  persistStoredSettings(appSettings);
+  render();
+  await saveSettingsToBackend();
+}
+
+async function saveSettingsToBackend() {
+  if (!isTauriRuntime()) return;
+  settingsBusy = true;
+  try {
+    appSettings = await invokeCommand<AppSettings>("save_settings", { settings: appSettings });
+    persistStoredSettings(appSettings);
+    settingsError = "";
+  } catch (saveError) {
+    settingsError = `Settings could not be saved: ${String(saveError)}`;
+  } finally {
+    settingsBusy = false;
+    render();
+  }
+}
+
+function renderSettingsView() {
+  const themeOptions: { value: ThemePreference; label: string; icon: string }[] = [
+    { value: "light", label: "Light", icon: "sun" },
+    { value: "dark", label: "Dark", icon: "moon" },
+    { value: "system", label: "System", icon: "monitor" }
+  ];
+  const behaviorOptions: { value: HotkeyBehavior; label: string; hint: string }[] = [
+    { value: "window", label: "Show run window", hint: "Brings EasyAlias forward and shows live output." },
+    { value: "background", label: "Run in background", hint: "Runs silently with only a short status message." }
+  ];
+
+  appElement.innerHTML = `
+    <section class="shell settings-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">EasyAlias</p>
+          <h1>Settings</h1>
+        </div>
+        <div class="topbar-actions">
+          <button class="header-icon-button" type="button" title="Back" aria-label="Back" data-settings-action="back"><i data-lucide="arrow-left"></i></button>
+        </div>
+      </header>
+
+      ${
+        settingsError
+          ? `<div class="message-banner error" role="alert"><span>${escapeHtml(settingsError)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-settings-action="dismiss-message"><i data-lucide="x"></i></button></div>`
+          : ""
+      }
+
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <h2>Appearance</h2>
+          <p>Choose how EasyAlias looks. "System" follows your macOS light/dark setting.</p>
+        </div>
+        <div class="settings-segment" role="group" aria-label="Theme">
+          ${themeOptions
+            .map(
+              (option) => `
+                <button
+                  type="button"
+                  class="settings-segment-option ${appSettings.theme === option.value ? "is-selected" : ""}"
+                  aria-pressed="${appSettings.theme === option.value}"
+                  data-settings-action="set-theme"
+                  data-value="${option.value}"
+                  ${settingsBusy ? "disabled" : ""}
+                ><i data-lucide="${option.icon}"></i><span>${option.label}</span></button>`
+            )
+            .join("")}
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <h2>Automation shortcuts</h2>
+          <p>What happens when you press an automation's global keyboard shortcut. Shortcuts only work while EasyAlias is running.</p>
+        </div>
+        <div class="settings-segment settings-segment-stacked" role="group" aria-label="Shortcut behavior">
+          ${behaviorOptions
+            .map(
+              (option) => `
+                <button
+                  type="button"
+                  class="settings-segment-option settings-segment-option-wide ${appSettings.hotkeyBehavior === option.value ? "is-selected" : ""}"
+                  aria-pressed="${appSettings.hotkeyBehavior === option.value}"
+                  data-settings-action="set-hotkey-behavior"
+                  data-value="${option.value}"
+                  ${settingsBusy ? "disabled" : ""}
+                >
+                  <span class="settings-segment-option-label">${option.label}</span>
+                  <span class="settings-segment-option-hint">${option.hint}</span>
+                </button>`
+            )
+            .join("")}
+        </div>
+        <p class="settings-hint">Assign a shortcut to an automation from the keyboard button on its card.</p>
+      </div>
+
+      <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>Become a sponsor</a></aside>
+    </section>
+  `;
+
+  createIcons({
+    icons: { ArrowLeft, Monitor, Moon, Sun, X },
+    attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
+  });
+
+  document.querySelectorAll<HTMLAnchorElement>("[data-external-link]").forEach((link) => {
+    link.addEventListener("click", openExternalLink);
+  });
+
+  appElement.querySelector<HTMLElement>(".settings-shell")?.addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-settings-action]");
+    if (!button) return;
+    const action = button.dataset.settingsAction;
+    const value = button.dataset.value;
+    if (action === "back") closeSettingsView();
+    else if (action === "dismiss-message") {
+      settingsError = "";
+      render();
+    } else if (action === "set-theme" && value) {
+      void updateThemePreference(value as ThemePreference);
+    } else if (action === "set-hotkey-behavior" && value) {
+      void updateHotkeyBehavior(value as HotkeyBehavior);
+    }
+  });
 }
 
 function closeAutomationsView() {
@@ -2150,8 +2437,7 @@ function closeAutomationsView() {
   automationTrashError = "";
   automationError = "";
   automationRun = null;
-  automationGroupPickerId = null;
-  scheduleEditorAutomationId = null;
+  closeAllAutomationCardPopovers();
   timedAutomationEditor = null;
   currentView = "aliases";
   render();
@@ -3125,6 +3411,102 @@ function renderAutomationGroupPicker(automation: Automation, allAutomations: Aut
     </div>`;
 }
 
+// Inline popover on an automation card for capturing / clearing its global
+// keyboard shortcut. Mirrors the group picker: only one is open at a time and
+// it collapses back into the card flow.
+function renderAutomationHotkeyPopover(automation: Automation) {
+  const saved = automation.hotkey ?? "";
+  const shown = hotkeyDraft ?? saved;
+  const isDirty = hotkeyDraft !== null && hotkeyDraft !== saved;
+
+  return `<div class="automation-hotkey-picker" role="group" aria-label="Keyboard shortcut for ${escapeHtml(automation.name)}">
+      <button
+        type="button"
+        class="hotkey-capture ${shown ? "has-value" : ""}"
+        data-automation-action="hotkey-capture"
+        data-id="${escapeHtml(automation.id)}"
+        aria-label="Press the keyboard shortcut for ${escapeHtml(automation.name)}"
+      >${
+        shown
+          ? `<span class="hotkey-capture-combo">${escapeHtml(formatAccelerator(shown))}</span>`
+          : `<span class="hotkey-capture-hint">Press a shortcut…</span>`
+      }</button>
+      ${
+        hotkeyCaptureError
+          ? `<p class="hotkey-capture-error">${escapeHtml(hotkeyCaptureError)}</p>`
+          : `<p class="hotkey-capture-help">Use at least one modifier, e.g. ⌘⇧L.</p>`
+      }
+      <div class="automation-hotkey-actions">
+        ${
+          saved
+            ? `<button type="button" class="ghost-button" data-automation-action="hotkey-clear" data-id="${escapeHtml(automation.id)}" ${settingsBusy ? "disabled" : ""}>Remove</button>`
+            : ""
+        }
+        <button type="button" class="ghost-button" data-automation-action="hotkey-cancel">Cancel</button>
+        <button
+          type="button"
+          class="primary-button"
+          data-automation-action="hotkey-save"
+          data-id="${escapeHtml(automation.id)}"
+          ${!isDirty || !hotkeyDraft || settingsBusy ? "disabled" : ""}
+        ><i data-lucide="check"></i><span>Save</span></button>
+      </div>
+    </div>`;
+}
+
+function toggleAutomationHotkeyPicker(id: string) {
+  if (hotkeyEditorAutomationId === id) {
+    hotkeyEditorAutomationId = null;
+    hotkeyDraft = null;
+    hotkeyCaptureError = "";
+  } else {
+    closeAllAutomationCardPopovers();
+    hotkeyEditorAutomationId = id;
+    hotkeyDraft = null;
+    hotkeyCaptureError = "";
+  }
+  render();
+}
+
+async function saveAutomationHotkey(id: string, accelerator: string | null) {
+  const automation = automations.find((item) => item.id === id);
+  if (!automation) return;
+
+  if (!isTauriRuntime()) {
+    // Browser preview has no OS registration - just mirror the value locally.
+    const next = automations.map((item) =>
+      item.id === id ? { ...item, hotkey: accelerator } : item
+    );
+    await persistAutomations(next);
+    hotkeyEditorAutomationId = null;
+    hotkeyDraft = null;
+    hotkeyCaptureError = "";
+    notice = accelerator
+      ? `Shortcut ${formatAccelerator(accelerator)} assigned (preview only).`
+      : "Shortcut removed.";
+    render();
+    return;
+  }
+
+  settingsBusy = true;
+  hotkeyCaptureError = "";
+  render();
+  try {
+    automations = await invokeCommand<Automation[]>("set_automation_hotkey", { id, accelerator });
+    hotkeyEditorAutomationId = null;
+    hotkeyDraft = null;
+    notice = accelerator
+      ? `Shortcut ${formatAccelerator(accelerator)} assigned.`
+      : "Shortcut removed.";
+    error = "";
+  } catch (hotkeyError) {
+    hotkeyCaptureError = String(hotkeyError);
+  } finally {
+    settingsBusy = false;
+    render();
+  }
+}
+
 function renderAutomationGroupOverview(sortedAutomations: Automation[]) {
   const groupNames = automationGroups(sortedAutomations);
   const ungrouped = sortedAutomations.filter((automation) => !automation.group.trim());
@@ -3178,6 +3560,10 @@ function renderAutomationResults(sortedAutomations: Automation[]) {
           const scheduleTitle = scheduleEntry
             ? `Change schedule (currently ${scheduleSummary}${scheduleEntry.enabled ? "" : ", disabled"})`
             : "Schedule this automation";
+          const hotkey = automation.hotkey ?? "";
+          const hotkeyTitle = hotkey
+            ? `Change keyboard shortcut (currently ${formatAccelerator(hotkey)})`
+            : "Assign a keyboard shortcut";
 
           return `<article class="automation-card">
               <div class="automation-card-header">
@@ -3212,19 +3598,37 @@ function renderAutomationResults(sortedAutomations: Automation[]) {
                     data-id="${escapeHtml(automation.id)}"
                     ${automationRun?.running ? "disabled" : ""}
                   ><i data-lucide="clock"></i></button>
+                  <button
+                    class="automation-hotkey-button ${hotkey ? "has-hotkey" : ""}"
+                    type="button"
+                    title="${escapeHtml(hotkeyTitle)}"
+                    aria-label="${hotkey ? "Change keyboard shortcut for" : "Assign keyboard shortcut to"} ${escapeHtml(automation.name)}"
+                    aria-expanded="${hotkeyEditorAutomationId === automation.id}"
+                    data-automation-action="toggle-hotkey-picker"
+                    data-id="${escapeHtml(automation.id)}"
+                    ${automationRun?.running ? "disabled" : ""}
+                  ><i data-lucide="keyboard"></i></button>
                   <div>
                     <strong>${escapeHtml(automation.name)}</strong>
                     <code>${escapeHtml(automation.path)}</code>
-                    ${
-                      automation.group.trim()
-                        ? `<button class="automation-group-chip" type="button" title="Filter by group ${escapeHtml(automation.group.trim())}" data-automation-action="select-group" data-group="${escapeHtml(automation.group.trim())}"><i data-lucide="tag"></i><span>${escapeHtml(automation.group.trim())}</span></button>`
-                        : ""
-                    }
+                    <div class="automation-card-chips">
+                      ${
+                        automation.group.trim()
+                          ? `<button class="automation-group-chip" type="button" title="Filter by group ${escapeHtml(automation.group.trim())}" data-automation-action="select-group" data-group="${escapeHtml(automation.group.trim())}"><i data-lucide="tag"></i><span>${escapeHtml(automation.group.trim())}</span></button>`
+                          : ""
+                      }
+                      ${
+                        hotkey
+                          ? `<span class="automation-hotkey-chip" title="Keyboard shortcut ${escapeHtml(formatAccelerator(hotkey))}"><i data-lucide="keyboard"></i><span>${escapeHtml(formatAccelerator(hotkey))}</span></span>`
+                          : ""
+                      }
+                    </div>
                   </div>
                 </div>
                 <span>${automation.steps.length} ${automation.steps.length === 1 ? "step" : "steps"}</span>
               </div>
               ${automationGroupPickerId === automation.id ? renderAutomationGroupPicker(automation, sortedAutomations) : ""}
+              ${hotkeyEditorAutomationId === automation.id ? renderAutomationHotkeyPopover(automation) : ""}
               <ol class="automation-preview-list">
                 ${automation.steps
                   .slice(0, 4)
@@ -3259,7 +3663,7 @@ function refreshAutomationResults() {
 
   results.innerHTML = renderAutomationResults(sortedAutomations);
   createIcons({
-    icons: { Clock, Pencil, Play, Plus, Star, Tag, Tags, Trash2 },
+    icons: { Check, Clock, Keyboard, Pencil, Play, Plus, Star, Tag, Tags, Trash2 },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
 }
@@ -3291,6 +3695,7 @@ function renderAutomationsView() {
             ${automationTrashEntries.length ? `<span class="header-count" aria-hidden="true">${automationTrashEntries.length}</span>` : ""}
           </button>
           <button class="header-icon-button automation-create-button" type="button" title="Create automation" aria-label="Create automation" data-automation-action="new" ${automationRun?.running ? "disabled" : ""}><i data-lucide="plus"></i></button>
+          <button class="header-icon-button" type="button" title="Settings" aria-label="Open settings" data-automation-action="open-settings" ${automationRun?.running ? "disabled" : ""}><i data-lucide="settings"></i></button>
         </div>
       </header>
 
@@ -3375,7 +3780,7 @@ function renderAutomationsView() {
     </section>`;
 
   createIcons({
-    icons: { ArrowDown, ArrowLeft, ArrowUp, CircleStop, Clock, Clock3, FileDown, FileUp, Filter, FolderOpen, LoaderCircle, Pencil, Play, Plus, RotateCcw, Save, Search, Star, Sunrise, Sunset, Tag, Tags, Terminal, Trash2, X },
+    icons: { ArrowDown, ArrowLeft, ArrowUp, Check, CircleStop, Clock, Clock3, FileDown, FileUp, Filter, FolderOpen, Keyboard, LoaderCircle, Pencil, Play, Plus, RotateCcw, Save, Search, Settings, Star, Sunrise, Sunset, Tag, Tags, Terminal, Trash2, X },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
   scheduleMessageDismissal();
@@ -3450,7 +3855,37 @@ function bindAutomationEvents() {
     if (action === "toggle-group-picker" && id) toggleAutomationGroupPicker(id);
     if (action === "assign-group" && id) void assignAutomationGroup(id, button.dataset.group ?? "");
     if (action === "toggle-schedule-picker" && id) openAutomationSchedulePicker(id);
+    if (action === "toggle-hotkey-picker" && id) toggleAutomationHotkeyPicker(id);
+    if (action === "hotkey-cancel") toggleAutomationHotkeyPicker(hotkeyEditorAutomationId ?? "");
+    if (action === "hotkey-clear" && id) void saveAutomationHotkey(id, null);
+    if (action === "hotkey-save" && id && hotkeyDraft) void saveAutomationHotkey(id, hotkeyDraft);
   });
+
+  // The hotkey-capture button records the next key combo the user presses.
+  document
+    .querySelector<HTMLButtonElement>('.hotkey-capture[data-automation-action="hotkey-capture"]')
+    ?.addEventListener("keydown", (event) => {
+      event.preventDefault();
+      if (event.key === "Escape") {
+        toggleAutomationHotkeyPicker(hotkeyEditorAutomationId ?? "");
+        return;
+      }
+      if (event.key === "Backspace" || event.key === "Delete") {
+        hotkeyDraft = "";
+        hotkeyCaptureError = "";
+        render();
+        return;
+      }
+      const accelerator = acceleratorFromEvent(event);
+      if (!accelerator) {
+        hotkeyCaptureError = "Add at least one modifier (⌘, ⌃, ⌥ or ⇧) plus another key.";
+        render();
+        return;
+      }
+      hotkeyDraft = accelerator;
+      hotkeyCaptureError = "";
+      render();
+    });
 
   // The create-new-group mini form inside a card's group picker; submit
   // bubbles up to the same results container as the click delegation above.
@@ -3496,6 +3931,7 @@ function bindAutomationEvents() {
       const id = button.dataset.id;
       const index = Number(button.dataset.stepIndex);
       if (action === "back") closeAutomationsView();
+      if (action === "open-settings") openSettingsView();
       if (action === "open-backup-export") openAutomationBackupExport();
       if (action === "open-backup-import") openAutomationBackupImport();
       if (action === "close-backup") closeAutomationBackupDialog();
@@ -3530,11 +3966,24 @@ function bindAutomationEvents() {
       }
     });
   });
+
+  // Keep focus on the shortcut-capture button across the re-renders each
+  // keypress triggers, so the user can type the whole combo without re-clicking.
+  if (hotkeyEditorAutomationId) {
+    const capture = document.querySelector<HTMLButtonElement>(
+      '.hotkey-capture[data-automation-action="hotkey-capture"]'
+    );
+    if (capture && document.activeElement !== capture) capture.focus();
+  }
 }
 
 // Main render function. This replaces the app HTML from state and then calls bindEvents().
 // For a larger app, this would be a good candidate to split into smaller render helpers.
 function render() {
+  if (currentView === "settings") {
+    renderSettingsView();
+    return;
+  }
   if (currentView === "automations") {
     renderAutomationsView();
     return;
@@ -3606,6 +4055,13 @@ function render() {
             <i data-lucide="trash-2"></i>
             ${trashEntries.length ? `<span class="header-count" aria-hidden="true">${trashEntries.length}</span>` : ""}
           </button>
+          <button
+            class="header-icon-button"
+            type="button"
+            title="Settings"
+            aria-label="Open settings"
+            data-action="open-settings"
+          ><i data-lucide="settings"></i></button>
         </div>
       </header>
 
@@ -3870,6 +4326,7 @@ function render() {
       Play,
       RotateCcw,
       Search,
+      Settings,
       Star,
       Trash2,
       X
@@ -4542,6 +4999,7 @@ function bindEvents() {
       const id = button.dataset.id;
 
       if (action === "open-automations") openAutomationsView();
+      if (action === "open-settings") openSettingsView();
       if (action === "open-import") void openShellImport();
       if (action === "open-backup-export") openBackupExport();
       if (action === "open-backup-import") openBackupImport();
@@ -4631,6 +5089,47 @@ async function bindNativeBackupDrop() {
   }
 }
 
+// Follow the OS light/dark setting live while the theme preference is "system".
+if (typeof window.matchMedia === "function") {
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (appSettings.theme === "system") applyTheme("system");
+  });
+}
+
+// Global automation hotkeys are registered natively; the backend tells the
+// frontend when one fires so the run can surface here (or a toast can show a
+// background run's result).
+async function bindAutomationHotkeyEvents() {
+  if (!isTauriRuntime()) return;
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen<string>("automation-hotkey-fired", (event) => {
+      const automationId = event.payload;
+      if (!automations.some((automation) => automation.id === automationId)) return;
+      currentView = "automations";
+      closeAllAutomationCardPopovers();
+      render();
+      void runAutomation(automationId);
+    });
+    await listen<{ name: string; ok: boolean; message: string }>(
+      "automation-hotkey-result",
+      (event) => {
+        const { name, ok, message } = event.payload;
+        if (ok) {
+          notice = `"${name}" ran from its shortcut.`;
+          error = "";
+        } else {
+          error = `"${name}" failed: ${message}`;
+        }
+        render();
+      }
+    );
+  } catch (hotkeyEventError) {
+    console.warn("Automation hotkey events could not be initialized", hotkeyEventError);
+  }
+}
+
 // Initial app boot.
 void bindNativeBackupDrop();
+void bindAutomationHotkeyEvents();
 void loadState();

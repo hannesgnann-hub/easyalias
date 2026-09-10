@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Default permissions for EasyAlias",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:default", "opener:default"]
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "opener:default",
+    "global-shortcut:default"
+  ]
 }

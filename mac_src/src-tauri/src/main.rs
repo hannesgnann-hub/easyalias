@@ -5,11 +5,13 @@ use std::{
     io::{BufRead, BufReader, ErrorKind, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
+    str::FromStr,
     sync::{mpsc, Mutex},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 // Must match the frontend AliasEntry shape. serde's camelCase conversion keeps
 // Rust idiomatic while still producing JSON fields like customCommand/createdAt.
@@ -155,6 +157,12 @@ struct Automation {
     // default to that.
     #[serde(default)]
     group: String,
+    // An optional global keyboard shortcut that runs this automation from
+    // anywhere while EasyAlias is running, e.g. "CmdOrCtrl+Shift+L". Stored
+    // here so it travels with the automation through backups and exports.
+    // Older automations.json files without this field default to None.
+    #[serde(default)]
+    hotkey: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -295,6 +303,40 @@ struct SunRegionOption {
     label: String,
 }
 
+// App-wide preferences, stored in ~/.easyalias/settings.json. Every field has
+// a default so an older or partial file still loads, and new fields can be
+// added later without a migration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppSettings {
+    // "system" follows the OS light/dark setting; "light"/"dark" force one.
+    #[serde(default = "default_theme")]
+    theme: String,
+    // What happens when an automation's global hotkey is pressed:
+    // "window" brings EasyAlias forward and shows the run view with live
+    // output; "background" runs it headlessly with only a short toast.
+    #[serde(default = "default_hotkey_behavior")]
+    hotkey_behavior: String,
+}
+
+fn default_theme() -> String {
+    "system".to_string()
+}
+
+fn default_hotkey_behavior() -> String {
+    "window".to_string()
+}
+
+fn default_app_settings() -> AppSettings {
+    AppSettings {
+        theme: default_theme(),
+        hotkey_behavior: default_hotkey_behavior(),
+    }
+}
+
+const THEME_VALUES: [&str; 3] = ["system", "light", "dark"];
+const HOTKEY_BEHAVIOR_VALUES: [&str; 2] = ["window", "background"];
+
 // Keep the established aliases.zsh path for backwards compatibility. The file
 // contains syntax understood by both zsh and Bash, regardless of its extension.
 const SOURCE_LINE: &str = "source ~/.easyalias/aliases.zsh";
@@ -386,6 +428,10 @@ fn timed_automation_log_dir() -> Result<PathBuf, String> {
 
 fn sun_location_file() -> Result<PathBuf, String> {
     Ok(app_dir()?.join("sun-location.json"))
+}
+
+fn settings_file() -> Result<PathBuf, String> {
+    Ok(app_dir()?.join("settings.json"))
 }
 
 fn import_marker_file(_setup: &ShellSetup) -> Result<PathBuf, String> {
@@ -1052,6 +1098,29 @@ fn write_sun_location(setting: &SunLocationSetting) -> Result<(), String> {
     let json = serde_json::to_string_pretty(setting)
         .map_err(|error| format!("Location could not be serialized: {}", error))?;
     let path = sun_location_file()?;
+    fs::write(&path, format!("{}\n", json))
+        .map_err(|error| format!("{} could not be written: {}", path.display(), error))
+}
+
+fn load_app_settings() -> Result<AppSettings, String> {
+    ensure_app_files()?;
+    let path = settings_file()?;
+    if !path.exists() {
+        return Ok(default_app_settings());
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    let settings: AppSettings = serde_json::from_str(&content)
+        .map_err(|error| format!("settings.json is not valid EasyAlias JSON: {}", error))?;
+    Ok(settings)
+}
+
+fn write_app_settings(settings: &AppSettings) -> Result<(), String> {
+    ensure_app_files()?;
+    let json = serde_json::to_string_pretty(settings)
+        .map_err(|error| format!("Settings could not be serialized: {}", error))?;
+    let path = settings_file()?;
     fs::write(&path, format!("{}\n", json))
         .map_err(|error| format!("{} could not be written: {}", path.display(), error))
 }
@@ -1778,8 +1847,14 @@ fn load_automations() -> Result<Vec<Automation>, String> {
 }
 
 #[tauri::command]
-fn save_automations(automations: Vec<Automation>) -> Result<Vec<Automation>, String> {
+fn save_automations(
+    app: tauri::AppHandle,
+    automations: Vec<Automation>,
+) -> Result<Vec<Automation>, String> {
     write_automation_entries(&automations)?;
+    // Keep OS hotkey registrations in step with automations.json - this also
+    // frees the binding of an automation deleted from the editor list.
+    register_all_automation_hotkeys(&app);
     Ok(automations)
 }
 
@@ -1791,7 +1866,17 @@ fn list_automation_trash() -> Result<Vec<AutomationTrashEntry>, String> {
 // Keep the recoverable copy before updating active storage. This mirrors the
 // alias trash behavior and avoids losing a workflow if the second write fails.
 #[tauri::command]
-fn move_automation_to_trash(id: String) -> Result<AutomationTrashMutationResult, String> {
+fn move_automation_to_trash(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<AutomationTrashMutationResult, String> {
+    let result = move_automation_to_trash_inner(&id)?;
+    // Free the deleted automation's global hotkey (if any).
+    register_all_automation_hotkeys(&app);
+    Ok(result)
+}
+
+fn move_automation_to_trash_inner(id: &str) -> Result<AutomationTrashMutationResult, String> {
     let mut automations = load_automation_entries()?;
     let index = automations
         .iter()
@@ -1815,7 +1900,17 @@ fn move_automation_to_trash(id: String) -> Result<AutomationTrashMutationResult,
 // Restore into active storage first. Name and id conflicts are rejected so a
 // deleted workflow never silently replaces a newer active workflow.
 #[tauri::command]
-fn restore_trash_automation(id: String) -> Result<AutomationTrashMutationResult, String> {
+fn restore_trash_automation(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<AutomationTrashMutationResult, String> {
+    let result = restore_trash_automation_inner(&id)?;
+    // Re-arm the restored automation's global hotkey (if any).
+    register_all_automation_hotkeys(&app);
+    Ok(result)
+}
+
+fn restore_trash_automation_inner(id: &str) -> Result<AutomationTrashMutationResult, String> {
     let mut trash = load_automation_trash_entries()?;
     let index = trash
         .iter()
@@ -1931,6 +2026,18 @@ fn inspect_automation_backup(path: String) -> Result<Vec<Automation>, String> {
 // that was created after the backup.
 #[tauri::command]
 fn import_automation_backup(
+    app: tauri::AppHandle,
+    path: String,
+    selected_ids: Vec<String>,
+    imported_at: String,
+) -> Result<AutomationBackupImportResult, String> {
+    let result = import_automation_backup_inner(path, selected_ids, imported_at)?;
+    // Imported automations may carry their own hotkeys - register them now.
+    register_all_automation_hotkeys(&app);
+    Ok(result)
+}
+
+fn import_automation_backup_inner(
     path: String,
     selected_ids: Vec<String>,
     imported_at: String,
@@ -2230,6 +2337,95 @@ fn save_sun_location(setting: SunLocationSetting) -> Result<SunLocationSetting, 
     }
     write_sun_location(&setting)?;
     Ok(setting)
+}
+
+#[tauri::command]
+fn load_settings() -> Result<AppSettings, String> {
+    load_app_settings()
+}
+
+#[tauri::command]
+fn save_settings(settings: AppSettings) -> Result<AppSettings, String> {
+    if !THEME_VALUES.contains(&settings.theme.as_str()) {
+        return Err(format!("\"{}\" is not a valid theme.", settings.theme));
+    }
+    if !HOTKEY_BEHAVIOR_VALUES.contains(&settings.hotkey_behavior.as_str()) {
+        return Err(format!(
+            "\"{}\" is not a valid hotkey behavior.",
+            settings.hotkey_behavior
+        ));
+    }
+    write_app_settings(&settings)?;
+    Ok(settings)
+}
+
+// Assigns, replaces, or clears (accelerator = None) an automation's global
+// keyboard shortcut. The OS registration is attempted before anything is
+// persisted, so a clash with the system or another app leaves the stored
+// automation untouched and its previous shortcut still active.
+#[tauri::command]
+fn set_automation_hotkey(
+    app: tauri::AppHandle,
+    id: String,
+    accelerator: Option<String>,
+) -> Result<Vec<Automation>, String> {
+    let mut automations = load_automation_entries()?;
+    let index = automations
+        .iter()
+        .position(|automation| automation.id == id)
+        .ok_or_else(|| "Automation no longer exists.".to_string())?;
+
+    let previous = automations[index].hotkey.clone();
+    let previous_shortcut = previous.as_deref().and_then(parse_shortcut);
+    let global_shortcut = app.global_shortcut();
+
+    match accelerator {
+        Some(raw) => {
+            let acc = raw.trim().to_string();
+            let shortcut = parse_shortcut(&acc)
+                .ok_or_else(|| format!("\"{}\" is not a valid keyboard shortcut.", acc))?;
+
+            if let Some(other) = automations.iter().find(|automation| {
+                automation.id != id
+                    && automation
+                        .hotkey
+                        .as_deref()
+                        .and_then(parse_shortcut)
+                        .map(|existing| existing == shortcut)
+                        .unwrap_or(false)
+            }) {
+                return Err(format!(
+                    "That shortcut is already assigned to \"{}\".",
+                    other.name.trim()
+                ));
+            }
+
+            // Release this automation's own previous binding so re-registering
+            // the very same combo to itself doesn't read as a conflict.
+            if let Some(old) = previous_shortcut {
+                let _ = global_shortcut.unregister(old);
+            }
+            if let Err(error) = global_shortcut.register(shortcut) {
+                if let Some(old) = previous_shortcut {
+                    let _ = global_shortcut.register(old);
+                }
+                return Err(format!(
+                    "That shortcut is already in use by the system or another app ({}).",
+                    error
+                ));
+            }
+            automations[index].hotkey = Some(acc);
+        }
+        None => {
+            if let Some(old) = previous_shortcut {
+                let _ = global_shortcut.unregister(old);
+            }
+            automations[index].hotkey = None;
+        }
+    }
+
+    write_automation_entries(&automations)?;
+    Ok(automations)
 }
 
 #[tauri::command]
@@ -2553,6 +2749,112 @@ fn import_shell_aliases(
     })
 }
 
+// Parse an accelerator string ("CmdOrCtrl+Shift+L") into a Shortcut, returning
+// None for anything malformed so callers can skip a bad entry instead of
+// failing the whole batch.
+fn parse_shortcut(accelerator: &str) -> Option<Shortcut> {
+    let trimmed = accelerator.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Shortcut::from_str(trimmed).ok()
+}
+
+// (Re)registers every automation's global hotkey with the OS. Called once at
+// startup and again after any change that can add, remove, or free a binding
+// (assign/clear, delete, trash restore, backup import). Bad or already-taken
+// combos are logged and skipped - one must never block the rest.
+fn register_all_automation_hotkeys(app: &tauri::AppHandle) {
+    let global_shortcut = app.global_shortcut();
+    let _ = global_shortcut.unregister_all();
+
+    let automations = match load_automation_entries() {
+        Ok(automations) => automations,
+        Err(error) => {
+            eprintln!(
+                "Automations could not be loaded for hotkey registration: {}",
+                error
+            );
+            return;
+        }
+    };
+
+    for automation in &automations {
+        let Some(accelerator) = automation.hotkey.as_deref() else {
+            continue;
+        };
+        match parse_shortcut(accelerator) {
+            Some(shortcut) => {
+                if let Err(error) = global_shortcut.register(shortcut) {
+                    eprintln!(
+                        "Hotkey \"{}\" for automation \"{}\" could not be registered: {}",
+                        accelerator, automation.name, error
+                    );
+                }
+            }
+            None => eprintln!(
+                "Hotkey \"{}\" for automation \"{}\" is not a valid shortcut.",
+                accelerator, automation.name
+            ),
+        }
+    }
+}
+
+// Fires when any registered global hotkey is pressed. Matches it back to the
+// owning automation and either surfaces the run window or runs the automation
+// headlessly, per the user's settings. All real work happens on a spawned
+// thread so the shortcut callback returns immediately.
+fn handle_global_shortcut(app: &tauri::AppHandle, shortcut: &Shortcut, state: ShortcutState) {
+    if state != ShortcutState::Pressed {
+        return;
+    }
+
+    let automations = match load_automation_entries() {
+        Ok(automations) => automations,
+        Err(_) => return,
+    };
+    let Some(automation) = automations.into_iter().find(|automation| {
+        automation
+            .hotkey
+            .as_deref()
+            .and_then(parse_shortcut)
+            .map(|existing| &existing == shortcut)
+            .unwrap_or(false)
+    }) else {
+        return;
+    };
+
+    let behavior = load_app_settings()
+        .map(|settings| settings.hotkey_behavior)
+        .unwrap_or_else(|_| default_hotkey_behavior());
+    let app = app.clone();
+
+    thread::spawn(move || {
+        if behavior == "background" {
+            let result = run_automation_steps_headless(&automation);
+            let (ok, message) = match &result {
+                Ok(()) => (true, String::new()),
+                Err(error) => (false, error.clone()),
+            };
+            let _ = app.emit(
+                "automation-hotkey-result",
+                serde_json::json!({
+                    "name": automation.name,
+                    "ok": ok,
+                    "message": message,
+                }),
+            );
+        } else {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            let _ = app.emit("automation-hotkey-fired", automation.id.clone());
+        }
+    });
+}
+
 fn main() {
     // launchd invokes this same executable to fire a timed automation, with
     // no window and no Tauri runtime - handle that before anything else
@@ -2583,12 +2885,26 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    handle_global_shortcut(app, shortcut, event.state());
+                })
+                .build(),
+        )
         .manage(AutomationSessions::default())
+        .setup(|app| {
+            // Bring every saved automation hotkey live, even when the window
+            // starts hidden - the shortcuts must work without focusing the app.
+            register_all_automation_hotkeys(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             load_aliases,
             save_aliases,
             load_automations,
             save_automations,
+            set_automation_hotkey,
             list_automation_trash,
             move_automation_to_trash,
             restore_trash_automation,
@@ -2606,6 +2922,8 @@ fn main() {
             list_sun_regions,
             load_sun_location_state,
             save_sun_location,
+            load_settings,
+            save_settings,
             list_trash,
             move_alias_to_trash,
             restore_trash_alias,
@@ -2705,6 +3023,7 @@ mod tests {
             }],
             favorite: false,
             group: String::new(),
+            hotkey: None,
             created_at: "2026-08-25T12:00:00.000Z".to_string(),
             updated_at: "2026-08-25T12:00:00.000Z".to_string(),
         }
@@ -3028,7 +3347,7 @@ mod tests {
         };
         fs::write(&backup_path, serde_json::to_string(&backup).unwrap()).unwrap();
 
-        let result = import_automation_backup(
+        let result = import_automation_backup_inner(
             backup_path.display().to_string(),
             vec!["backup-build".to_string(), "backup-test".to_string()],
             "2026-08-25T13:00:00.000Z".to_string(),
@@ -3060,12 +3379,12 @@ mod tests {
         ensure_app_files().unwrap();
         write_automation_entries(&[test_automation("build", "Build", "npm run build")]).unwrap();
 
-        let deleted = move_automation_to_trash("build".to_string()).unwrap();
+        let deleted = move_automation_to_trash_inner("build").unwrap();
         assert!(deleted.automations.is_empty());
         assert_eq!(deleted.trash.len(), 1);
         assert_eq!(deleted.trash[0].automation.name, "Build");
 
-        let restored = restore_trash_automation("build".to_string()).unwrap();
+        let restored = restore_trash_automation_inner("build").unwrap();
         assert_eq!(restored.automations.len(), 1);
         assert_eq!(restored.automations[0].name, "Build");
         assert!(restored.trash.is_empty());
@@ -3121,6 +3440,7 @@ mod tests {
             ],
             favorite: false,
             group: "Backend".to_string(),
+            hotkey: None,
             created_at: "2026-08-24T18:00:00.000Z".to_string(),
             updated_at: "2026-08-24T18:00:00.000Z".to_string(),
         };
@@ -3143,6 +3463,7 @@ mod tests {
             }],
             favorite: false,
             group: String::new(),
+            hotkey: None,
             created_at: "2026-08-24T18:00:00.000Z".to_string(),
             updated_at: "2026-08-24T18:00:00.000Z".to_string(),
         };
@@ -3476,5 +3797,82 @@ mod tests {
         );
 
         drop(home);
+    }
+
+    #[test]
+    fn app_settings_round_trip_and_default_when_missing() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let _temporary_home = TemporaryHome::create();
+        ensure_app_files().unwrap();
+
+        let defaults = load_app_settings().unwrap();
+        assert_eq!(defaults.theme, "system");
+        assert_eq!(defaults.hotkey_behavior, "window");
+
+        write_app_settings(&AppSettings {
+            theme: "dark".to_string(),
+            hotkey_behavior: "background".to_string(),
+        })
+        .unwrap();
+
+        let reloaded = load_app_settings().unwrap();
+        assert_eq!(reloaded.theme, "dark");
+        assert_eq!(reloaded.hotkey_behavior, "background");
+    }
+
+    #[test]
+    fn save_settings_rejects_unknown_values() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let _temporary_home = TemporaryHome::create();
+        ensure_app_files().unwrap();
+
+        assert!(save_settings(AppSettings {
+            theme: "sepia".to_string(),
+            hotkey_behavior: "window".to_string(),
+        })
+        .unwrap_err()
+        .contains("not a valid theme"));
+
+        assert!(save_settings(AppSettings {
+            theme: "light".to_string(),
+            hotkey_behavior: "silent".to_string(),
+        })
+        .unwrap_err()
+        .contains("not a valid hotkey behavior"));
+    }
+
+    #[test]
+    fn partial_settings_file_fills_in_defaults() {
+        let _home_lock = HOME_LOCK.lock().unwrap();
+        let _temporary_home = TemporaryHome::create();
+        ensure_app_files().unwrap();
+        fs::write(settings_file().unwrap(), "{\"theme\":\"light\"}\n").unwrap();
+
+        let settings = load_app_settings().unwrap();
+        assert_eq!(settings.theme, "light");
+        assert_eq!(settings.hotkey_behavior, "window");
+    }
+
+    #[test]
+    fn automation_hotkey_survives_a_json_round_trip() {
+        let mut automation = test_automation("hk", "Hotkeyed", "echo hi");
+        automation.hotkey = Some("CmdOrCtrl+Shift+L".to_string());
+
+        let json = serde_json::to_string(&automation).unwrap();
+        let restored: Automation = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.hotkey.as_deref(), Some("CmdOrCtrl+Shift+L"));
+
+        // Older files without the field still load.
+        let legacy = json.replace(",\"hotkey\":\"CmdOrCtrl+Shift+L\"", "");
+        let restored_legacy: Automation = serde_json::from_str(&legacy).unwrap();
+        assert_eq!(restored_legacy.hotkey, None);
+    }
+
+    #[test]
+    fn parse_shortcut_accepts_accelerators_and_rejects_junk() {
+        assert!(parse_shortcut("CmdOrCtrl+Shift+L").is_some());
+        assert!(parse_shortcut("  Alt+F4  ").is_some());
+        assert!(parse_shortcut("").is_none());
+        assert!(parse_shortcut("not a shortcut").is_none());
     }
 }
