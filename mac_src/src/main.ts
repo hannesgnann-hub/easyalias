@@ -141,6 +141,7 @@ type HotkeyBehavior = "window" | "background";
 type AppSettings = {
   theme: ThemePreference;
   hotkeyBehavior: HotkeyBehavior;
+  showSuggestions: boolean;
 };
 type AutomationStepKind = "command" | "wait";
 type AutomationCommandBehavior = "wait" | "background";
@@ -731,7 +732,7 @@ let sunRegionOptions: SunRegionOption[] = [];
 let sunLocation: SunLocationSetting = { region: "" };
 // App-wide preferences (theme, hotkey behavior). Loaded from the backend at
 // startup; browser preview mirrors them in localStorage.
-let appSettings: AppSettings = { theme: "system", hotkeyBehavior: "window" };
+let appSettings: AppSettings = { theme: "system", hotkeyBehavior: "window", showSuggestions: true };
 let settingsBusy = false;
 let settingsError = "";
 // Where the "back" button in Settings returns to (whichever view opened it).
@@ -811,13 +812,14 @@ function readStoredSettings(): AppSettings {
           parsed.theme === "light" || parsed.theme === "dark" || parsed.theme === "system"
             ? parsed.theme
             : "system",
-        hotkeyBehavior: parsed.hotkeyBehavior === "background" ? "background" : "window"
+        hotkeyBehavior: parsed.hotkeyBehavior === "background" ? "background" : "window",
+        showSuggestions: parsed.showSuggestions !== false
       };
     }
   } catch {
     // Ignore unreadable storage - fall back to defaults.
   }
-  return { theme: "system", hotkeyBehavior: "window" };
+  return { theme: "system", hotkeyBehavior: "window", showSuggestions: true };
 }
 
 function persistStoredSettings(settings: AppSettings) {
@@ -2308,6 +2310,14 @@ async function updateHotkeyBehavior(behavior: HotkeyBehavior) {
   await saveSettingsToBackend();
 }
 
+async function updateShowSuggestions(show: boolean) {
+  if (appSettings.showSuggestions === show) return;
+  appSettings = { ...appSettings, showSuggestions: show };
+  persistStoredSettings(appSettings);
+  render();
+  await saveSettingsToBackend();
+}
+
 async function saveSettingsToBackend() {
   if (!isTauriRuntime()) return;
   settingsBusy = true;
@@ -2400,6 +2410,17 @@ function renderSettingsView() {
         <p class="settings-hint">Assign a shortcut to an automation from the keyboard button on its card.</p>
       </div>
 
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <h2>Alias suggestions</h2>
+          <p>Show the built-in list of suggested aliases above your own aliases in the alias view.</p>
+        </div>
+        <div class="settings-segment" role="group" aria-label="Alias suggestions">
+          <button type="button" class="settings-segment-option ${appSettings.showSuggestions ? "is-selected" : ""}" aria-pressed="${appSettings.showSuggestions}" data-settings-action="set-suggestions" data-value="on" ${settingsBusy ? "disabled" : ""}><span>On</span></button>
+          <button type="button" class="settings-segment-option ${!appSettings.showSuggestions ? "is-selected" : ""}" aria-pressed="${!appSettings.showSuggestions}" data-settings-action="set-suggestions" data-value="off" ${settingsBusy ? "disabled" : ""}><span>Off</span></button>
+        </div>
+      </div>
+
       <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>Become a sponsor</a></aside>
     </section>
   `;
@@ -2426,6 +2447,8 @@ function renderSettingsView() {
       void updateThemePreference(value as ThemePreference);
     } else if (action === "set-hotkey-behavior" && value) {
       void updateHotkeyBehavior(value as HotkeyBehavior);
+    } else if (action === "set-suggestions" && value) {
+      void updateShowSuggestions(value === "on");
     }
   });
 }
@@ -4111,7 +4134,7 @@ function render() {
       }
 
       ${
-        availableSuggestions.length
+        appSettings.showSuggestions && availableSuggestions.length
           ? `<section class="suggestions" data-expanded="${suggestionsExpanded}" aria-labelledby="suggestions-title">
               <div class="suggestions-header">
                 <div class="suggestions-heading">
@@ -5120,6 +5143,7 @@ async function bindAutomationHotkeyEvents() {
           error = "";
         } else {
           error = `"${name}" failed: ${message}`;
+          currentView = "automations";
         }
         render();
       }

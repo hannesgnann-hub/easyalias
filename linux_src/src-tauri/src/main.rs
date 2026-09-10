@@ -308,6 +308,9 @@ struct AppSettings {
     // output; "background" runs it headlessly with only a short toast.
     #[serde(default = "default_hotkey_behavior")]
     hotkey_behavior: String,
+    // Whether the alias view offers its built-in alias suggestions.
+    #[serde(default = "default_true")]
+    show_suggestions: bool,
 }
 
 fn default_theme() -> String {
@@ -322,6 +325,7 @@ fn default_app_settings() -> AppSettings {
     AppSettings {
         theme: default_theme(),
         hotkey_behavior: default_hotkey_behavior(),
+        show_suggestions: true,
     }
 }
 
@@ -1749,7 +1753,7 @@ fn load_automation_trash_entries() -> Result<Vec<AutomationTrashEntry>, String> 
 // in this app.
 fn automation_working_directory(value: &str) -> Result<PathBuf, String> {
     let trimmed = value.trim();
-    let path = if trimmed == "~" {
+    let mut path = if trimmed == "~" {
         home_dir()?
     } else if let Some(relative) = trimmed.strip_prefix("~/") {
         home_dir()?.join(relative)
@@ -1757,6 +1761,14 @@ fn automation_working_directory(value: &str) -> Result<PathBuf, String> {
         PathBuf::from(trimmed)
     };
 
+
+    // A file path (e.g. a config file the automation only edits) is taken
+    // to mean "run from the folder that contains it".
+    if path.is_file() {
+        if let Some(parent) = path.parent() {
+            path = parent.to_path_buf();
+        }
+    }
     if !path.is_dir() {
         return Err(format!(
             "Working directory does not exist: {}",
@@ -2792,12 +2804,25 @@ fn handle_global_shortcut(app: &tauri::AppHandle, shortcut: &Shortcut, state: Sh
     let app = app.clone();
 
     thread::spawn(move || {
+        let surface_window = || {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        };
+
         if behavior == "background" {
             let result = run_automation_steps_headless(&automation);
             let (ok, message) = match &result {
                 Ok(()) => (true, String::new()),
                 Err(error) => (false, error.clone()),
             };
+            // A silent background failure is confusing - bring the window up
+            // so the error is visible; successful runs stay out of the way.
+            if !ok {
+                surface_window();
+            }
             let _ = app.emit(
                 "automation-hotkey-result",
                 serde_json::json!({
@@ -2807,11 +2832,7 @@ fn handle_global_shortcut(app: &tauri::AppHandle, shortcut: &Shortcut, state: Sh
                 }),
             );
         } else {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            surface_window();
             let _ = app.emit("automation-hotkey-fired", automation.id.clone());
         }
     });
@@ -3493,6 +3514,7 @@ mod tests {
         write_app_settings(&AppSettings {
             theme: "dark".to_string(),
             hotkey_behavior: "background".to_string(),
+            show_suggestions: true,
         })
         .unwrap();
 
@@ -3510,6 +3532,7 @@ mod tests {
         assert!(save_settings(AppSettings {
             theme: "sepia".to_string(),
             hotkey_behavior: "window".to_string(),
+            show_suggestions: true,
         })
         .unwrap_err()
         .contains("not a valid theme"));
@@ -3517,6 +3540,7 @@ mod tests {
         assert!(save_settings(AppSettings {
             theme: "light".to_string(),
             hotkey_behavior: "silent".to_string(),
+            show_suggestions: true,
         })
         .unwrap_err()
         .contains("not a valid hotkey behavior"));
@@ -3532,6 +3556,7 @@ mod tests {
         let settings = load_app_settings().unwrap();
         assert_eq!(settings.theme, "light");
         assert_eq!(settings.hotkey_behavior, "window");
+        assert!(settings.show_suggestions);
     }
 
     #[test]
@@ -3554,5 +3579,21 @@ mod tests {
         assert!(parse_shortcut("  Alt+F4  ").is_some());
         assert!(parse_shortcut("").is_none());
         assert!(parse_shortcut("not a shortcut").is_none());
+    }
+
+    #[test]
+    fn automation_working_directory_falls_back_to_a_file_s_parent() {
+        let dir = env::temp_dir().join(format!("easyalias-wd-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("settings.json");
+        fs::write(&file, "{}").unwrap();
+
+        let resolved = automation_working_directory(file.to_str().unwrap()).unwrap();
+        assert_eq!(resolved.canonicalize().unwrap(), dir.canonicalize().unwrap());
+
+        let missing = automation_working_directory(&dir.join("nope").join("x").to_string_lossy());
+        assert!(missing.is_err());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
