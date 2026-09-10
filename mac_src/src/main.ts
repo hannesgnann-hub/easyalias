@@ -142,6 +142,7 @@ type AppSettings = {
   theme: ThemePreference;
   hotkeyBehavior: HotkeyBehavior;
   showSuggestions: boolean;
+  autostart: boolean;
 };
 type AutomationStepKind = "command" | "wait";
 type AutomationCommandBehavior = "wait" | "background";
@@ -732,7 +733,12 @@ let sunRegionOptions: SunRegionOption[] = [];
 let sunLocation: SunLocationSetting = { region: "" };
 // App-wide preferences (theme, hotkey behavior). Loaded from the backend at
 // startup; browser preview mirrors them in localStorage.
-let appSettings: AppSettings = { theme: "system", hotkeyBehavior: "window", showSuggestions: true };
+let appSettings: AppSettings = {
+  theme: "system",
+  hotkeyBehavior: "window",
+  showSuggestions: true,
+  autostart: false
+};
 let settingsBusy = false;
 let settingsError = "";
 // Where the "back" button in Settings returns to (whichever view opened it).
@@ -813,13 +819,14 @@ function readStoredSettings(): AppSettings {
             ? parsed.theme
             : "system",
         hotkeyBehavior: parsed.hotkeyBehavior === "background" ? "background" : "window",
-        showSuggestions: parsed.showSuggestions !== false
+        showSuggestions: parsed.showSuggestions !== false,
+        autostart: parsed.autostart === true
       };
     }
   } catch {
     // Ignore unreadable storage - fall back to defaults.
   }
-  return { theme: "system", hotkeyBehavior: "window", showSuggestions: true };
+  return { theme: "system", hotkeyBehavior: "window", showSuggestions: true, autostart: false };
 }
 
 function persistStoredSettings(settings: AppSettings) {
@@ -2318,6 +2325,14 @@ async function updateShowSuggestions(show: boolean) {
   await saveSettingsToBackend();
 }
 
+async function updateAutostart(enabled: boolean) {
+  if (appSettings.autostart === enabled) return;
+  appSettings = { ...appSettings, autostart: enabled };
+  persistStoredSettings(appSettings);
+  render();
+  await saveSettingsToBackend();
+}
+
 async function saveSettingsToBackend() {
   if (!isTauriRuntime()) return;
   settingsBusy = true;
@@ -2387,7 +2402,7 @@ function renderSettingsView() {
       <div class="settings-card">
         <div class="settings-card-head">
           <h2>Automation shortcuts</h2>
-          <p>What happens when you press an automation's global keyboard shortcut. Shortcuts only work while EasyAlias is running.</p>
+          <p>What happens when you press an automation's global keyboard shortcut. Closing the window keeps EasyAlias running in the menu bar so shortcuts stay active &mdash; use the menu-bar icon to quit.</p>
         </div>
         <div class="settings-segment settings-segment-stacked" role="group" aria-label="Shortcut behavior">
           ${behaviorOptions
@@ -2408,6 +2423,17 @@ function renderSettingsView() {
             .join("")}
         </div>
         <p class="settings-hint">Assign a shortcut to an automation from the keyboard button on its card.</p>
+      </div>
+
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <h2>Start at login</h2>
+          <p>Launch EasyAlias automatically (hidden in the menu bar) when you log in, so automation shortcuts are ready right away.</p>
+        </div>
+        <div class="settings-segment" role="group" aria-label="Start at login">
+          <button type="button" class="settings-segment-option ${appSettings.autostart ? "is-selected" : ""}" aria-pressed="${appSettings.autostart}" data-settings-action="set-autostart" data-value="on" ${settingsBusy ? "disabled" : ""}><span>On</span></button>
+          <button type="button" class="settings-segment-option ${!appSettings.autostart ? "is-selected" : ""}" aria-pressed="${!appSettings.autostart}" data-settings-action="set-autostart" data-value="off" ${settingsBusy ? "disabled" : ""}><span>Off</span></button>
+        </div>
       </div>
 
       <div class="settings-card">
@@ -2449,6 +2475,8 @@ function renderSettingsView() {
       void updateHotkeyBehavior(value as HotkeyBehavior);
     } else if (action === "set-suggestions" && value) {
       void updateShowSuggestions(value === "on");
+    } else if (action === "set-autostart" && value) {
+      void updateAutostart(value === "on");
     }
   });
 }

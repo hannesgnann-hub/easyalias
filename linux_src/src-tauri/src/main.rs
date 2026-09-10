@@ -10,8 +10,17 @@ use std::{
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{Emitter, Manager};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager,
+};
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+// Autostart passes this flag so the app can start hidden (window only in the
+// menu-bar tray) instead of popping to the foreground at login.
+const AUTOSTART_FLAG: &str = "--autostarted";
 
 // Must match the frontend AliasEntry shape. serde's camelCase conversion keeps
 // Rust idiomatic while still producing JSON fields like customCommand/createdAt.
@@ -311,6 +320,11 @@ struct AppSettings {
     // Whether the alias view offers its built-in alias suggestions.
     #[serde(default = "default_true")]
     show_suggestions: bool,
+    // Whether EasyAlias launches (hidden) at login so global hotkeys are
+    // always available. The plugin's OS-level registration is the source of
+    // truth; this field mirrors it for the UI.
+    #[serde(default)]
+    autostart: bool,
 }
 
 fn default_theme() -> String {
@@ -326,6 +340,7 @@ fn default_app_settings() -> AppSettings {
         theme: default_theme(),
         hotkey_behavior: default_hotkey_behavior(),
         show_suggestions: true,
+        autostart: false,
     }
 }
 
@@ -2330,13 +2345,7 @@ fn save_sun_location(setting: SunLocationSetting) -> Result<SunLocationSetting, 
     Ok(setting)
 }
 
-#[tauri::command]
-fn load_settings() -> Result<AppSettings, String> {
-    load_app_settings()
-}
-
-#[tauri::command]
-fn save_settings(settings: AppSettings) -> Result<AppSettings, String> {
+fn validate_app_settings(settings: &AppSettings) -> Result<(), String> {
     if !THEME_VALUES.contains(&settings.theme.as_str()) {
         return Err(format!("\"{}\" is not a valid theme.", settings.theme));
     }
@@ -2346,9 +2355,38 @@ fn save_settings(settings: AppSettings) -> Result<AppSettings, String> {
             settings.hotkey_behavior
         ));
     }
-    write_app_settings(&settings)?;
+    Ok(())
+}
+
+// Reconcile the "autostart" preference with the plugin's actual OS-level
+// registration; the plugin is the source of truth.
+fn apply_autostart(app: &tauri::AppHandle, enabled: bool) {
+    let manager = app.autolaunch();
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    if let Err(error) = result {
+        eprintln!("Autostart could not be updated: {}", error);
+    }
+}
+
+#[tauri::command]
+fn load_settings(app: tauri::AppHandle) -> Result<AppSettings, String> {
+    let mut settings = load_app_settings()?;
+    settings.autostart = app.autolaunch().is_enabled().unwrap_or(settings.autostart);
     Ok(settings)
 }
+
+#[tauri::command]
+fn save_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<AppSettings, String> {
+    validate_app_settings(&settings)?;
+    write_app_settings(&settings)?;
+    apply_autostart(&app, settings.autostart);
+    Ok(settings)
+}
+
 
 // Assigns, replaces, or clears (accelerator = None) an automation's global
 // keyboard shortcut. The OS registration is attempted before anything is
@@ -2774,6 +2812,21 @@ fn register_all_automation_hotkeys(app: &tauri::AppHandle) {
     }
 }
 
+// Reveal and focus the main window (used by the tray, dock reopen, and the
+// "show run window" hotkey mode). Window/AppKit calls are marshalled onto the
+// main thread so this is safe to call from the global-shortcut callback or a
+// spawned worker thread.
+fn show_main_window(app: &tauri::AppHandle) {
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    });
+}
+
 // Fires when any registered global hotkey is pressed. Matches it back to the
 // owning automation and either surfaces the run window or runs the automation
 // headlessly, per the user's settings. All real work happens on a spawned
@@ -2804,13 +2857,7 @@ fn handle_global_shortcut(app: &tauri::AppHandle, shortcut: &Shortcut, state: Sh
     let app = app.clone();
 
     thread::spawn(move || {
-        let surface_window = || {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        };
+        let surface_window = || show_main_window(&app);
 
         if behavior == "background" {
             let result = run_automation_steps_headless(&automation);
@@ -2868,6 +2915,10 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![AUTOSTART_FLAG]),
+        ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -2876,10 +2927,72 @@ fn main() {
                 .build(),
         )
         .manage(AutomationSessions::default())
+        .on_window_event(|window, event| {
+            // Closing the window only hides it - EasyAlias keeps running in the
+            // menu-bar tray so global hotkeys stay active. "Quit EasyAlias"
+            // (tray menu or the app menu) is the real exit.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .setup(|app| {
+            let handle = app.handle();
+
             // Bring every saved automation hotkey live, even when the window
             // starts hidden - the shortcuts must work without focusing the app.
-            register_all_automation_hotkeys(app.handle());
+            register_all_automation_hotkeys(handle);
+
+            // Menu-bar tray so the app is reachable while its window is hidden.
+            let show_item =
+                MenuItem::with_id(app, "show", "Show EasyAlias", true, None::<&str>)?;
+            let quit_item =
+                MenuItem::with_id(app, "quit", "Quit EasyAlias", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let mut tray = TrayIconBuilder::with_id("easyalias")
+                .tooltip("EasyAlias")
+                .menu(&tray_menu)
+                // Left click reveals the window; right click opens the menu.
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                });
+            // A monochrome template image on macOS: the system tints it to
+            // match the menu bar (black on light, white on dark).
+            #[cfg(target_os = "macos")]
+            {
+                tray = tray
+                    .icon(tauri::image::Image::from_bytes(include_bytes!(
+                        "../icons/tray-icon.png"
+                    ))?)
+                    .icon_as_template(true);
+            }
+            #[cfg(not(target_os = "macos"))]
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray = tray.icon(icon);
+            }
+            tray.build(app)?;
+
+            // Autostart launches with a flag so the window stays hidden in the
+            // tray until the user opens it.
+            if !env::args().any(|arg| arg == AUTOSTART_FLAG) {
+                show_main_window(handle);
+            } else if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -3515,6 +3628,7 @@ mod tests {
             theme: "dark".to_string(),
             hotkey_behavior: "background".to_string(),
             show_suggestions: true,
+            autostart: false,
         })
         .unwrap();
 
@@ -3525,22 +3639,20 @@ mod tests {
 
     #[test]
     fn save_settings_rejects_unknown_values() {
-        let _home_lock = HOME_LOCK.lock().unwrap();
-        let _temporary_home = TemporaryHome::create();
-        ensure_app_files().unwrap();
-
-        assert!(save_settings(AppSettings {
+        assert!(validate_app_settings(&AppSettings {
             theme: "sepia".to_string(),
             hotkey_behavior: "window".to_string(),
             show_suggestions: true,
+            autostart: false,
         })
         .unwrap_err()
         .contains("not a valid theme"));
 
-        assert!(save_settings(AppSettings {
+        assert!(validate_app_settings(&AppSettings {
             theme: "light".to_string(),
             hotkey_behavior: "silent".to_string(),
             show_suggestions: true,
+            autostart: false,
         })
         .unwrap_err()
         .contains("not a valid hotkey behavior"));
