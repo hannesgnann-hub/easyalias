@@ -221,6 +221,10 @@ Preferences are stored in `~/.easyalias/settings.json`.
 
 Closing the window no longer quits EasyAlias — it hides the window and the app keeps running in the menu bar (macOS) or system tray (Windows/Linux), so scheduled and shortcut triggers stay available. The tray menu has **Show EasyAlias** and **Quit EasyAlias**; a left click also reveals the window. Turning on **Start at login** launches EasyAlias hidden in the tray when you sign in.
 
+### Tutorial
+
+The graduation-cap button at the far right of the header opens a built-in tutorial: pick **the alias area**, **the automations area**, or **how to support me**, then step through an illustrated walkthrough.
+
 ## Folder Structure
 
 ```text

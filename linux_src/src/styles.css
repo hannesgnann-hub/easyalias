@@ -16,6 +16,7 @@
   --text-on-accent: #ffffff;
   --code-surface: #15221f;
   --code-text: #d9f4ef;
+  --star: #c2255c;
   --accent: #0f766e;
   --accent-ink: #0f665f;
   --accent-deep: #17423d;
@@ -62,6 +63,7 @@
     --text-on-accent: #06110f;
     --code-surface: #10201c;
     --code-text: #a7efe3;
+    --star: #ff8cc0;
     --accent: #4fd6c6;
     --accent-ink: #7fe6d9;
     --accent-deep: #a7efe3;
@@ -109,6 +111,7 @@
     --text-on-accent: #06110f;
     --code-surface: #10201c;
     --code-text: #a7efe3;
+    --star: #ff8cc0;
     --accent: #4fd6c6;
     --accent-ink: #7fe6d9;
     --accent-deep: #a7efe3;
@@ -2142,6 +2145,14 @@ textarea:focus {
   text-decoration: underline;
 }
 
+.support-banner a.support-star {
+  color: var(--star);
+}
+
+.support-banner a.support-star:hover {
+  color: var(--star);
+}
+
 .app-footer {
   display: flex;
   justify-content: center;
@@ -2561,4 +2572,196 @@ textarea:focus {
 .automation-hotkey-actions .primary-button svg {
   width: 15px;
   height: 15px;
+}
+
+/* ---- Guided tutorial ---- */
+
+.tutorial-card {
+  max-width: 560px;
+  gap: 18px;
+}
+
+.tutorial-choices {
+  display: grid;
+  gap: 10px;
+}
+
+.tutorial-choice {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    transform 140ms ease;
+}
+
+.tutorial-choice:hover,
+.tutorial-choice:focus-visible {
+  border-color: var(--accent-contrast-border);
+  background: var(--accent-surface);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.tutorial-choice-index {
+  flex: 0 0 26px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--surface-inset);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.tutorial-choice-icon {
+  flex: 0 0 40px;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  color: var(--accent);
+  background: var(--accent-surface);
+}
+
+.tutorial-choice-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.tutorial-choice-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.tutorial-choice-text strong {
+  font-size: 0.95rem;
+  color: var(--text-strong);
+}
+
+.tutorial-choice-text span {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.tutorial-body {
+  max-height: min(52vh, 440px);
+  overflow-y: auto;
+  padding-right: 4px;
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.tutorial-body p {
+  margin: 0 0 12px;
+}
+
+.tutorial-body p:last-child {
+  margin-bottom: 0;
+}
+
+.tutorial-image {
+  display: block;
+  width: 100%;
+  max-height: 300px;
+  margin: 0 0 14px;
+  object-fit: contain;
+  object-position: top center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  box-shadow: 0 1px 3px var(--shadow-soft);
+}
+
+.tutorial-body ul {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+}
+
+.tutorial-body li {
+  line-height: 1.5;
+}
+
+.tutorial-body code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-inset);
+  color: var(--text-strong);
+  font-size: 0.85em;
+}
+
+.tutorial-body kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text-strong);
+  font-family: inherit;
+  font-size: 0.8em;
+  text-align: center;
+}
+
+.tutorial-body a {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.tutorial-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.tutorial-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.tutorial-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.tutorial-dot.is-done {
+  background: var(--accent-contrast-border);
+}
+
+.tutorial-dot.is-current {
+  background: var(--accent);
+  transform: scale(1.25);
+}
+
+.tutorial-nav {
+  display: flex;
+  gap: 8px;
+}
+
+.tutorial-nav .ghost-button,
+.tutorial-nav .primary-button {
+  padding: 8px 16px;
+  font-size: 0.82rem;
 }
