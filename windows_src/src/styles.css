@@ -3,33 +3,33 @@
    is the pre-JS fallback. */
 :root {
   color-scheme: light dark;
-  --surface-app: #eff3f1;
+  --surface-app: #f7f7f8;
   --surface-1: #ffffff;
-  --surface-2: #fbfdfc;
-  --surface-3: #f4faf7;
-  --surface-inset: #e5ebe8;
-  --text-strong: #15221f;
-  --text: #29413b;
-  --text-heading: #17423d;
-  --text-muted: #66736f;
-  --text-faint: #94a39e;
+  --surface-2: #ffffff;
+  --surface-3: #f0f1f2;
+  --surface-inset: #e9eaec;
+  --text-strong: #232529;
+  --text: #42464d;
+  --text-heading: #30363b;
+  --text-muted: #72767e;
+  --text-faint: #92969e;
   --text-on-accent: #ffffff;
-  --code-surface: #15221f;
-  --code-text: #d9f4ef;
+  --code-surface: #232529;
+  --code-text: #e5f2ee;
   --star: #c2255c;
   --accent: #0f766e;
   --accent-ink: #0f665f;
-  --accent-deep: #17423d;
+  --accent-deep: #30363b;
   --accent-bright: #16877c;
   --accent-contrast-border: #8fb8ad;
-  --accent-surface: #d9f4ef;
-  --accent-surface-strong: #cfe3d5;
-  --accent-surface-border: #a7d7cc;
+  --accent-surface: #e5f2ee;
+  --accent-surface-strong: #dce9e4;
+  --accent-surface-border: #bed8cf;
   --accent-ring: rgba(15, 118, 110, 0.24);
   --accent-ring-soft: rgba(15, 118, 110, 0.14);
-  --border: #dce5e1;
-  --border-strong: #c5d2cd;
-  --border-subtle: #e7f3ef;
+  --border: #e0e2e5;
+  --border-strong: #cdd0d5;
+  --border-subtle: #eceef0;
   --danger-text: #8a302b;
   --danger-text-strong: #79312d;
   --danger-surface: #a33b35;
@@ -50,33 +50,33 @@
 }
 
 :root[data-theme="dark"] {
-    --surface-app: #0e1614;
-    --surface-1: #182320;
-    --surface-2: #1f2c28;
-    --surface-3: #1b2825;
-    --surface-inset: #131d1b;
-    --text-strong: #eef4f2;
-    --text: #d3ded9;
-    --text-heading: #e7f1ee;
-    --text-muted: #93a39d;
-    --text-faint: #6f7f7a;
+    --surface-app: #1c1d20;
+    --surface-1: #24262a;
+    --surface-2: #292b30;
+    --surface-3: #222428;
+    --surface-inset: #303238;
+    --text-strong: #f1f2f4;
+    --text: #d4d6db;
+    --text-heading: #e9ebef;
+    --text-muted: #a3a6af;
+    --text-faint: #818690;
     --text-on-accent: #06110f;
-    --code-surface: #10201c;
-    --code-text: #a7efe3;
+    --code-surface: #191b1f;
+    --code-text: #bce7dc;
     --star: #ff8cc0;
-    --accent: #4fd6c6;
-    --accent-ink: #7fe6d9;
-    --accent-deep: #a7efe3;
-    --accent-bright: #63e0d1;
+    --accent: #64c8b2;
+    --accent-ink: #8adbc7;
+    --accent-deep: #bce7dc;
+    --accent-bright: #83d5c1;
     --accent-contrast-border: #2f6f66;
-    --accent-surface: #123a35;
-    --accent-surface-strong: #17473f;
-    --accent-surface-border: #245a52;
+    --accent-surface: #263c36;
+    --accent-surface-strong: #2a443b;
+    --accent-surface-border: #3b5c51;
     --accent-ring: rgba(79, 214, 198, 0.30);
     --accent-ring-soft: rgba(79, 214, 198, 0.16);
-    --border: #2b3a36;
-    --border-strong: #3a4b46;
-    --border-subtle: #223029;
+    --border: #373940;
+    --border-strong: #4a4d55;
+    --border-subtle: #303238;
     --danger-text: #f4a8a2;
     --danger-text-strong: #f6b3ad;
     --danger-surface: #b5433c;
@@ -98,33 +98,33 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --surface-app: #0e1614;
-    --surface-1: #182320;
-    --surface-2: #1f2c28;
-    --surface-3: #1b2825;
-    --surface-inset: #131d1b;
-    --text-strong: #eef4f2;
-    --text: #d3ded9;
-    --text-heading: #e7f1ee;
-    --text-muted: #93a39d;
-    --text-faint: #6f7f7a;
+    --surface-app: #1c1d20;
+    --surface-1: #24262a;
+    --surface-2: #292b30;
+    --surface-3: #222428;
+    --surface-inset: #303238;
+    --text-strong: #f1f2f4;
+    --text: #d4d6db;
+    --text-heading: #e9ebef;
+    --text-muted: #a3a6af;
+    --text-faint: #818690;
     --text-on-accent: #06110f;
-    --code-surface: #10201c;
-    --code-text: #a7efe3;
+    --code-surface: #191b1f;
+    --code-text: #bce7dc;
     --star: #ff8cc0;
-    --accent: #4fd6c6;
-    --accent-ink: #7fe6d9;
-    --accent-deep: #a7efe3;
-    --accent-bright: #63e0d1;
+    --accent: #64c8b2;
+    --accent-ink: #8adbc7;
+    --accent-deep: #bce7dc;
+    --accent-bright: #83d5c1;
     --accent-contrast-border: #2f6f66;
-    --accent-surface: #123a35;
-    --accent-surface-strong: #17473f;
-    --accent-surface-border: #245a52;
+    --accent-surface: #263c36;
+    --accent-surface-strong: #2a443b;
+    --accent-surface-border: #3b5c51;
     --accent-ring: rgba(79, 214, 198, 0.30);
     --accent-ring-soft: rgba(79, 214, 198, 0.16);
-    --border: #2b3a36;
-    --border-strong: #3a4b46;
-    --border-subtle: #223029;
+    --border: #373940;
+    --border-strong: #4a4d55;
+    --border-subtle: #303238;
     --danger-text: #f4a8a2;
     --danger-text-strong: #f6b3ad;
     --danger-surface: #b5433c;
@@ -149,7 +149,10 @@
   color: var(--text-strong);
   background: var(--surface-app);
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -183,7 +186,7 @@ button:disabled {
 .shell {
   width: min(1180px, calc(100vw - 32px));
   margin: 0 auto;
-  padding: 28px 0 104px;
+  padding: 24px 0 104px;
 }
 
 .topbar {
@@ -204,7 +207,7 @@ button:disabled {
   margin: 0 0 4px;
   color: var(--text-muted);
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -216,7 +219,8 @@ h2 {
 }
 
 h1 {
-  font-size: clamp(2.1rem, 5vw, 4.6rem);
+  font-size: 30px;
+  font-weight: 650;
 }
 
 h2 {
@@ -231,7 +235,7 @@ h2 {
 .suggestion-button {
   border: 0;
   border-radius: 8px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .header-icon-button {
@@ -262,7 +266,6 @@ h2 {
   border-color: var(--accent-contrast-border);
   background: var(--accent-surface);
   color: var(--accent);
-  transform: translateY(-1px);
 }
 
 .header-icon-button:active:not(:disabled) {
@@ -303,7 +306,7 @@ h2 {
   color: var(--surface-1);
   background: var(--danger-surface);
   font-size: 0.62rem;
-  font-weight: 900;
+  font-weight: 650;
   line-height: 1;
 }
 
@@ -316,7 +319,7 @@ h2 {
 .primary-button {
   min-height: 42px;
   padding: 0 16px;
-  color: var(--surface-1);
+  color: var(--text-on-accent);
   background: var(--accent);
 }
 
@@ -345,7 +348,7 @@ h2 {
   display: block;
   color: var(--text-muted);
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .status-grid strong {
@@ -382,7 +385,7 @@ code {
   margin: 14px 0 0;
   padding: 12px 14px;
   border-radius: 8px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .message-banner {
@@ -447,15 +450,17 @@ code {
 
 .editor,
 .list {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-1);
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .editor {
   display: grid;
   gap: 16px;
-  padding: 18px;
+  padding: 18px 20px 18px 0;
+  border-right: 1px solid var(--border);
 }
 
 .form-title,
@@ -471,7 +476,7 @@ label {
   gap: 7px;
   color: var(--text-muted);
   font-size: 0.86rem;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 input,
@@ -505,9 +510,10 @@ textarea:focus {
 
 .picker-button {
   min-width: 74px;
+  min-height: 34px;
   padding: 0 12px;
   color: var(--text-heading);
-  background: var(--accent-surface);
+  background: var(--surface-inset);
   font-size: 0.82rem;
 }
 
@@ -521,15 +527,15 @@ textarea:focus {
 .suggestions {
   margin-top: 18px;
   padding: 12px 14px;
-  border-top: 1px solid var(--accent-contrast-border);
-  border-bottom: 1px solid var(--accent-contrast-border);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   background: var(--surface-3);
   transition: background-color 160ms ease, border-color 160ms ease;
 }
 
 .suggestions[data-expanded="false"] {
-  border-color: var(--accent-contrast-border);
-  background: var(--accent-surface);
+  border-color: var(--border);
+  background: transparent;
 }
 
 .suggestions-heading h2 {
@@ -553,7 +559,7 @@ textarea:focus {
 .suggestion-copy span {
   color: var(--text-muted);
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .suggestions[data-expanded="false"] .suggestions-heading span {
@@ -570,7 +576,7 @@ textarea:focus {
   color: var(--text);
   background: var(--border);
   font-size: 1.35rem;
-  font-weight: 900;
+  font-weight: 650;
   line-height: 1;
 }
 
@@ -645,7 +651,7 @@ textarea:focus {
   color: var(--text-heading);
   background: transparent;
   font-size: 0.9rem;
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1;
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -701,40 +707,51 @@ textarea:focus {
 
 .alias-row {
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 64px 38px;
-  gap: 8px;
-  align-items: stretch;
-  margin-bottom: 8px;
+  grid-template-columns: 30px minmax(0, 1fr) 30px 30px;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 0;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  transition: background-color 140ms ease;
 }
 
 .favorite-button {
   display: grid;
   place-items: center;
-  width: 38px;
-  min-height: 100%;
+  width: 30px;
+  height: 30px;
   padding: 0;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 8px;
   color: var(--text-muted);
-  background: var(--surface-3);
+  background: transparent;
   cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease;
 }
 
 .favorite-button:hover { border-color: var(--warning-border); color: var(--warning-text); background: var(--warning-bg); }
-.favorite-button.active { border-color: var(--warning-border); color: var(--warning-text); background: var(--warning-bg); }
+.favorite-button.active {
+  border-color: transparent;
+  color: var(--warning-text);
+  background: transparent;
+}
 .favorite-button.active svg { fill: currentColor; }
 .favorite-button:focus-visible { outline: 3px solid var(--warning-ring); outline-offset: 2px; }
 .favorite-button svg { display: block; width: 19px; height: 19px; pointer-events: none; }
 
 .row-main {
   display: grid;
-  gap: 5px;
+  gap: 3px;
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px;
+  border: 0;
+  border-radius: 0;
+  padding: 0 6px;
   color: inherit;
-  background: var(--surface-2);
+  background: transparent;
 }
 
 .alias-row.selected .row-main {
@@ -744,7 +761,7 @@ textarea:focus {
 
 .alias-name {
   font-size: 1rem;
-  font-weight: 900;
+  font-weight: 650;
 }
 
 .row-main code {
@@ -761,7 +778,7 @@ textarea:focus {
 
 .edit-button {
   color: var(--text-heading);
-  background: var(--accent-surface);
+  background: transparent;
   font-size: 0.78rem;
 }
 
@@ -847,7 +864,7 @@ textarea:focus {
 .trash-copy small {
   color: var(--text-muted);
   font-size: 0.74rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .trash-copy code {
@@ -938,7 +955,7 @@ textarea:focus {
   border-radius: 8px;
   color: var(--surface-1);
   background: var(--danger-surface-hover);
-  font-weight: 800;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -1002,13 +1019,13 @@ textarea:focus {
   border-radius: 8px;
   color: var(--danger-text);
   background: var(--danger-border);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .import-count {
   color: var(--text);
   font-size: 0.8rem;
-  font-weight: 800;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -1085,7 +1102,7 @@ textarea:focus {
 .import-alias-meta span {
   color: var(--text-muted);
   font-size: 0.72rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .import-alias-copy code {
@@ -1130,7 +1147,7 @@ textarea:focus {
   display: block;
   color: var(--text-muted);
   font-size: 0.76rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .automation-summary strong {
@@ -1140,10 +1157,9 @@ textarea:focus {
 
 .automation-overview {
   margin-top: 18px;
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-1);
+  padding: 18px 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
 }
 
 .automation-overview-header,
@@ -1353,7 +1369,7 @@ textarea:focus {
   color: var(--success-text);
   background: var(--accent-surface);
   font-size: 0.72rem;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -1520,7 +1536,7 @@ textarea:focus {
   color: var(--success-text);
   background: var(--surface-1);
   font-size: 0.76rem;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -1600,14 +1616,14 @@ textarea:focus {
 
 .automation-group-card span {
   font-size: 0.95rem;
-  font-weight: 800;
+  font-weight: 600;
   color: var(--text-strong);
 }
 
 .automation-group-card strong {
   color: var(--text-muted);
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .automation-group-card.is-ungrouped svg,
@@ -1635,7 +1651,7 @@ textarea:focus {
 .automation-preview-list span {
   color: var(--text-muted);
   font-size: 0.7rem;
-  font-weight: 800;
+  font-weight: 600;
   text-transform: uppercase;
 }
 
@@ -1651,7 +1667,7 @@ textarea:focus {
   display: block;
   color: var(--text-muted);
   font-size: 0.76rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .automation-card-actions {
@@ -1730,7 +1746,7 @@ textarea:focus {
   border-radius: 999px;
   color: var(--text-muted);
   font-size: 0.76rem;
-  font-weight: 800;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -1764,7 +1780,7 @@ textarea:focus {
   color: var(--text-muted);
   background: var(--surface-1);
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -1818,7 +1834,7 @@ textarea:focus {
   min-width: 0;
   color: var(--text-muted);
   font-size: 0.78rem;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .automation-path-row {
@@ -1882,7 +1898,7 @@ textarea:focus {
   border-radius: 8px;
   color: var(--text-heading);
   background: var(--accent-surface);
-  font-weight: 900;
+  font-weight: 650;
 }
 
 .automation-step-fields {
@@ -1942,7 +1958,7 @@ textarea:focus {
   color: var(--text-heading);
   background: var(--accent-surface);
   font-size: 0.78rem;
-  font-weight: 900;
+  font-weight: 650;
 }
 
 .automation-run-path {
@@ -2002,7 +2018,7 @@ textarea:focus {
 .run-step-copy > div span {
   color: var(--text-muted);
   font-size: 0.72rem;
-  font-weight: 800;
+  font-weight: 600;
   text-transform: capitalize;
 }
 
@@ -2040,9 +2056,9 @@ textarea:focus {
   border-top: 1px solid var(--warning-border);
   color: var(--warning-text-strong);
   background: var(--warning-bg);
-  box-shadow: 0 -4px 16px var(--warning-ring);
+  box-shadow: none;
   font-size: 0.82rem;
-  font-weight: 800;
+  font-weight: 600;
   text-align: center;
 }
 
@@ -2071,7 +2087,7 @@ textarea:focus {
   margin-top: 14px;
   color: var(--text-muted);
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .app-footer a {
@@ -2099,6 +2115,8 @@ textarea:focus {
   .topbar-actions {
     align-self: flex-end;
     width: auto;
+    max-width: 100%;
+    flex-wrap: wrap;
   }
 
   .topbar-actions .header-icon-button {
@@ -2159,7 +2177,7 @@ textarea:focus {
   }
 
   .alias-row {
-    grid-template-columns: 38px minmax(0, 1fr) 58px 38px;
+    grid-template-columns: 30px minmax(0, 1fr) 30px 30px;
   }
 
   .modal-layer {
@@ -2185,6 +2203,12 @@ textarea:focus {
     align-items: center;
     flex-direction: column;
     gap: 3px;
+  }
+
+  .editor {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 18px 0;
   }
 }
 
@@ -2236,7 +2260,7 @@ textarea:focus {
   color: var(--text-muted);
   background: var(--surface-2);
   font-size: 0.8rem;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
   transition:
     border-color 140ms ease,
@@ -2279,7 +2303,7 @@ textarea:focus {
 
 .settings-segment-option-label {
   font-size: 0.86rem;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .settings-segment-option-hint {
@@ -2397,7 +2421,7 @@ textarea:focus {
   color: var(--text-muted);
   background: var(--surface-2);
   font-size: 0.72rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .automation-card-chips .automation-hotkey-chip svg {
@@ -2445,7 +2469,7 @@ textarea:focus {
 .hotkey-capture-combo {
   color: var(--text-strong);
   font-size: 1rem;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: 1px;
 }
 
@@ -2533,7 +2557,7 @@ textarea:focus {
   background: var(--surface-inset);
   color: var(--text-muted);
   font-size: 0.82rem;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .tutorial-choice-icon {
@@ -2634,7 +2658,7 @@ textarea:focus {
 
 .tutorial-body a {
   color: var(--accent);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .tutorial-footer {
@@ -2675,4 +2699,57 @@ textarea:focus {
 .tutorial-nav .primary-button {
   padding: 8px 16px;
   font-size: 0.82rem;
+}
+
+.alias-row:hover,
+.alias-row:focus-within {
+  background: var(--surface-1);
+}
+
+.alias-row .edit-button,
+.alias-row .icon-button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.alias-row .edit-button:hover {
+  color: var(--accent-ink);
+  background: var(--accent-surface);
+}
+
+.alias-row .icon-button:hover {
+  color: var(--danger-text);
+  background: var(--danger-bg);
+}
+
+.alias-row .edit-button svg,
+.alias-row .icon-button svg {
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

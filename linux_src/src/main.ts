@@ -4572,8 +4572,8 @@ function render() {
                           <code>${escapeHtml(alias.commandPreview)}</code>
                           <span class="created">Created ${formatDate(alias.createdAt)}</span>
                         </div>
-                        <button class="edit-button" title="Edit" data-action="edit" data-id="${alias.id}">Edit</button>
-                        <button class="icon-button" title="Delete" data-action="delete" data-id="${alias.id}">×</button>
+                        <button class="edit-button" title="Edit alias" aria-label="Edit ${escapeHtml(alias.name)}" data-action="edit" data-id="${alias.id}"><i data-lucide="pencil"></i></button>
+                        <button class="icon-button" title="Move to Trash" aria-label="Move ${escapeHtml(alias.name)} to Trash" data-action="delete" data-id="${alias.id}"><i data-lucide="trash-2"></i></button>
                       </article>
                     `
                   )
@@ -4625,6 +4625,7 @@ function render() {
       SquareTerminal,
       FileDown,
       FileUp,
+      Pencil,
       Play,
       RotateCcw,
       Settings,
