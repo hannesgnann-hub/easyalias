@@ -7,3 +7,7 @@ src-tauri/gen/
 .env.local
 npm-debug.log*
 target/
+
+# Build artifacts
+*.pkg
+*.dmg
