@@ -34,7 +34,9 @@ export function dismissMessage() {
 export function scheduleMessageDismissal() {
   const messageKey = state.error ? `error:${state.error}` : state.notice ? `notice:${state.notice}` : "";
 
-  if (!messageKey) {
+  // "Keep messages" (Settings > Accessibility): nothing disappears on its own,
+  // so there is time to read it or to have it read aloud.
+  if (!messageKey || state.appSettings.keepMessages) {
     cancelMessageDismissal();
     return;
   }

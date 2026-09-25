@@ -179,13 +179,10 @@ export function renderBackupDialog() {
   const fileName = state.backupFilePath.split(/[\\/]/).pop() ?? state.backupFilePath;
 
   return `
-    <section class="modal-layer" role="presentation">
+    <section class="modal-layer" role="dialog" aria-modal="true" aria-labelledby="backup-title" data-dialog="alias-backup">
       <form
         class="modal-card import-card backup-card"
         id="${isExport ? "backup-export-form" : "backup-import-form"}"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="backup-title"
       >
         <div class="modal-title">
           <div>
@@ -203,7 +200,7 @@ export function renderBackupDialog() {
           }
         </p>
 
-        ${state.backupError ? `<p class="modal-error">${escapeHtml(state.backupError)}</p>` : ""}
+        ${state.backupError ? `<p class="modal-error" data-announce="assertive">${escapeHtml(state.backupError)}</p>` : ""}
 
         ${
           isExport

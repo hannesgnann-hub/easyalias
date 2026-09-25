@@ -111,7 +111,14 @@ export type AppSettings = {
   hotkeyBehavior: HotkeyBehavior;
   showSuggestions: boolean;
   autostart: boolean;
+  // Accessibility preferences (all off by default).
+  keepMessages: boolean;
+  largeUi: boolean;
+  reduceMotion: boolean;
+  confirmDeletes: boolean;
 };
+
+export type AccessibilitySetting = "keepMessages" | "largeUi" | "reduceMotion" | "confirmDeletes";
 
 export type AutomationStepKind = "command" | "wait";
 

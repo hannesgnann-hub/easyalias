@@ -36,6 +36,7 @@ import {
   createIcons
 } from "lucide";
 import { automationFilterLabels, redditUrl, repoUrl, sponsorUrl, websiteUrl } from "../constants";
+import { replaceAppHtml } from "../a11y";
 import { appElement } from "../dom";
 import { escapeHtml } from "../html";
 import { dismissMessage, scheduleMessageDismissal } from "../messages";
@@ -125,7 +126,7 @@ export function renderAutomationGroupPicker(automation: Automation, allAutomatio
   const currentGroup = automation.group.trim();
   const existingGroups = automationGroups(allAutomations);
 
-  return `<div class="automation-group-picker" role="menu" aria-label="Assign ${escapeHtml(automation.name)} to a group">
+  return `<div class="automation-group-picker" role="group" aria-label="Assign ${escapeHtml(automation.name)} to a group">
       ${
         existingGroups.length
           ? `<div class="automation-group-picker-list">
@@ -172,7 +173,7 @@ export function renderAutomationHotkeyPopover(automation: Automation) {
       }</button>
       ${
         state.hotkeyCaptureError
-          ? `<p class="hotkey-capture-error">${escapeHtml(state.hotkeyCaptureError)}</p>`
+          ? `<p class="hotkey-capture-error" data-announce="assertive">${escapeHtml(state.hotkeyCaptureError)}</p>`
           : `<p class="hotkey-capture-help">Use at least one modifier, e.g. ⌘⇧L.</p>`
       }
       <div class="automation-hotkey-actions">
@@ -410,7 +411,7 @@ export function refreshAutomationResults() {
 export function renderAutomationsView() {
   const sortedAutomations = [...state.automations].sort(compareAutomations);
   const automationGroupNames = automationGroups(sortedAutomations);
-  appElement.innerHTML = `
+  replaceAppHtml(`
     <section class="shell automation-shell">
       <header class="topbar automation-topbar">
         <div>
@@ -447,12 +448,12 @@ export function renderAutomationsView() {
 
       ${
         state.notice
-          ? `<div class="message-banner notice" role="status"><span>${escapeHtml(state.notice)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-automation-action="dismiss-message"><i data-lucide="x"></i></button></div>`
+          ? `<div class="message-banner notice"><span data-announce="polite">${escapeHtml(state.notice)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-automation-action="dismiss-message"><i data-lucide="x"></i></button></div>`
           : ""
       }
       ${
         state.error
-          ? `<div class="message-banner error" role="alert"><span>${escapeHtml(state.error)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-automation-action="dismiss-message"><i data-lucide="x"></i></button></div>`
+          ? `<div class="message-banner error"><span data-announce="assertive">${escapeHtml(state.error)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-automation-action="dismiss-message"><i data-lucide="x"></i></button></div>`
           : ""
       }
 
@@ -518,7 +519,7 @@ export function renderAutomationsView() {
 
       <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>❤ Become a sponsor</a><a class="support-star" href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>★ Give us a star on GitHub</a></aside>
       <footer class="app-footer"><a href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>© Hannes Gnann</a><span aria-hidden="true">-</span><a href="${redditUrl}" target="_blank" rel="noreferrer" data-external-link>Reddit</a><span aria-hidden="true">-</span><a href="${websiteUrl}" target="_blank" rel="noreferrer" data-external-link>Website</a></footer>
-    </section>`;
+    </section>`);
 
   createIcons({
     icons: { ArrowDown, ArrowLeft, ArrowUp, Check, CircleStop, Clock, Clock3, FileDown, FileUp, Filter, FolderOpen, GraduationCap, Heart, Keyboard, LoaderCircle, Pencil, Play, Plus, RotateCcw, Save, Search, Settings, SquareTerminal, Star, Sunrise, Sunset, Tag, Tags, Terminal, Trash2, Workflow, X },
@@ -606,6 +607,8 @@ export function bindAutomationEvents() {
   document
     .querySelector<HTMLButtonElement>('.hotkey-capture[data-automation-action="hotkey-capture"]')
     ?.addEventListener("keydown", (event) => {
+      // Tab keeps working so keyboard users can leave the recorder again.
+      if (event.key === "Tab") return;
       event.preventDefault();
       if (event.key === "Escape") {
         toggleAutomationHotkeyPicker(state.hotkeyEditorAutomationId ?? "");

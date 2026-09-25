@@ -42,6 +42,7 @@ import {
   sponsorUrl,
   websiteUrl
 } from "./constants";
+import { replaceAppHtml } from "./a11y";
 import { appElement } from "./dom";
 import { bindEvents } from "./events";
 import { escapeHtml } from "./html";
@@ -78,7 +79,7 @@ export function render() {
     suggestionPageStart + suggestionPageSize
   );
 
-  appElement.innerHTML = `
+  replaceAppHtml(`
     <section class="shell">
       <header class="topbar">
         <div>
@@ -171,8 +172,8 @@ export function render() {
 
       ${
         state.notice
-          ? `<div class="message-banner notice" role="status">
-              <span>${escapeHtml(state.notice)}</span>
+          ? `<div class="message-banner notice">
+              <span data-announce="polite">${escapeHtml(state.notice)}</span>
               <button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-action="dismiss-message">
                 <i data-lucide="x"></i>
               </button>
@@ -181,8 +182,8 @@ export function render() {
       }
       ${
         state.error
-          ? `<div class="message-banner error" role="alert">
-              <span>${escapeHtml(state.error)}</span>
+          ? `<div class="message-banner error">
+              <span data-announce="assertive">${escapeHtml(state.error)}</span>
               <button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-action="dismiss-message">
                 <i data-lucide="x"></i>
               </button>
@@ -395,7 +396,7 @@ export function render() {
         </a>
       </footer>
     </section>
-  `;
+  `);
 
   // Replace the lightweight icon placeholders after each state-driven render.
   // Importing only the icons used here keeps the production bundle tree-shakable.

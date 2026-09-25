@@ -178,13 +178,10 @@ export function renderAutomationBackupDialog() {
   const fileName = state.automationBackupFilePath.split(/[\\/]/).pop() ?? state.automationBackupFilePath;
 
   return `
-    <section class="modal-layer" role="presentation">
+    <section class="modal-layer" role="dialog" aria-modal="true" aria-labelledby="automation-backup-title" data-dialog="automation-backup">
       <form
         class="modal-card import-card backup-card"
         id="${isExport ? "automation-backup-export-form" : "automation-backup-import-form"}"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="automation-backup-title"
       >
         <div class="modal-title">
           <div>
@@ -202,7 +199,7 @@ export function renderAutomationBackupDialog() {
           }
         </p>
 
-        ${state.automationBackupError ? `<p class="modal-error">${escapeHtml(state.automationBackupError)}</p>` : ""}
+        ${state.automationBackupError ? `<p class="modal-error" data-announce="assertive">${escapeHtml(state.automationBackupError)}</p>` : ""}
 
         ${
           isExport

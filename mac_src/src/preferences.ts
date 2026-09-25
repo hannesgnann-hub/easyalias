@@ -58,6 +58,15 @@ export function applyTheme(theme: ThemePreference) {
   document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
 }
 
+// Stamps the accessibility preferences on <html> so styles.css can enlarge the
+// interface or switch off motion. The OS "reduce motion" setting is honored in
+// CSS on its own; this attribute forces it on regardless.
+export function applyAccessibilityPreferences(settings: AppSettings) {
+  const root = document.documentElement;
+  root.toggleAttribute("data-large-ui", settings.largeUi);
+  root.toggleAttribute("data-reduce-motion", settings.reduceMotion);
+}
+
 export function readStoredSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(settingsStorageKey);
@@ -70,13 +79,26 @@ export function readStoredSettings(): AppSettings {
             : "system",
         hotkeyBehavior: parsed.hotkeyBehavior === "background" ? "background" : "window",
         showSuggestions: parsed.showSuggestions !== false,
-        autostart: parsed.autostart === true
+        autostart: parsed.autostart === true,
+        keepMessages: parsed.keepMessages === true,
+        largeUi: parsed.largeUi === true,
+        reduceMotion: parsed.reduceMotion === true,
+        confirmDeletes: parsed.confirmDeletes === true
       };
     }
   } catch {
     // Ignore unreadable storage - fall back to defaults.
   }
-  return { theme: "system", hotkeyBehavior: "window", showSuggestions: true, autostart: false };
+  return {
+    theme: "system",
+    hotkeyBehavior: "window",
+    showSuggestions: true,
+    autostart: false,
+    keepMessages: false,
+    largeUi: false,
+    reduceMotion: false,
+    confirmDeletes: false
+  };
 }
 
 export function persistStoredSettings(settings: AppSettings) {

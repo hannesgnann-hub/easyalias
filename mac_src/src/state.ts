@@ -207,7 +207,11 @@ export const state: UiState = {
   theme: "system",
   hotkeyBehavior: "window",
   showSuggestions: true,
-  autostart: false
+  autostart: false,
+  keepMessages: false,
+  largeUi: false,
+  reduceMotion: false,
+  confirmDeletes: false
 },
   settingsBusy: false,
   settingsError: "",

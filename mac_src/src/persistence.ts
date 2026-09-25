@@ -4,7 +4,12 @@ import { compareAliases } from "./aliases/list";
 import { SUN_REGION_OPTIONS, trashRetentionSeconds } from "./constants";
 import { clearMessages } from "./messages";
 import { invokeCommand, isTauriRuntime } from "./platform";
-import { applyTheme, persistStoredSettings, readStoredSettings } from "./preferences";
+import {
+  applyAccessibilityPreferences,
+  applyTheme,
+  persistStoredSettings,
+  readStoredSettings
+} from "./preferences";
 import { render } from "./render";
 import { state } from "./state";
 import type {
@@ -61,6 +66,7 @@ export async function loadState() {
         state.appSettings = await invokeCommand<AppSettings>("load_settings");
         persistStoredSettings(state.appSettings);
         applyTheme(state.appSettings.theme);
+        applyAccessibilityPreferences(state.appSettings);
       } catch (settingsLoadError) {
         state.error = `Settings could not be loaded: ${String(settingsLoadError)}`;
       }
@@ -122,6 +128,7 @@ export async function loadState() {
 
   state.appSettings = readStoredSettings();
   applyTheme(state.appSettings.theme);
+  applyAccessibilityPreferences(state.appSettings);
 
   render();
 }

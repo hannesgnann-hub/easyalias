@@ -105,8 +105,8 @@ export function renderImportModal() {
   const allSelected = candidates.every((candidate) => state.selectedImportIds.has(candidate.id));
 
   return `
-    <section class="modal-layer" role="presentation">
-      <form class="modal-card import-card" id="import-form" role="dialog" aria-modal="true" aria-labelledby="import-title">
+    <section class="modal-layer" role="dialog" aria-modal="true" aria-labelledby="import-title" data-dialog="shell-import">
+      <form class="modal-card import-card" id="import-form">
         <div class="modal-title">
           <div>
             <p class="eyebrow">${state.manualImportOpen ? "Import Aliases" : "First Start"}</p>
@@ -119,7 +119,7 @@ export function renderImportModal() {
           Select the aliases EasyAlias should manage. Imported entries become Custom Commands and are removed from their original lines only after a backup is created.
         </p>
 
-        ${state.importError ? `<p class="modal-error">${escapeHtml(state.importError)}</p>` : ""}
+        ${state.importError ? `<p class="modal-error" data-announce="assertive">${escapeHtml(state.importError)}</p>` : ""}
 
         <label class="import-select-all">
           <input type="checkbox" name="import-all" ${allSelected ? "checked" : ""} ${state.importBusy ? "disabled" : ""} />

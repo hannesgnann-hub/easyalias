@@ -134,8 +134,8 @@ export function renderTrashDialog() {
   if (!state.trashOpen) return "";
 
   return `
-    <section class="modal-layer" role="presentation">
-      <section class="modal-card trash-card" role="dialog" aria-modal="true" aria-labelledby="trash-title">
+    <section class="modal-layer" role="dialog" aria-modal="true" aria-labelledby="trash-title" data-dialog="alias-trash">
+      <section class="modal-card trash-card">
         <div class="modal-title">
           <div>
             <p class="eyebrow">Recovery</p>
@@ -148,7 +148,7 @@ export function renderTrashDialog() {
           Deleted aliases stay here for 30 days. Restore an alias at any time, or delete it permanently now.
         </p>
 
-        ${state.trashError ? `<p class="modal-error">${escapeHtml(state.trashError)}</p>` : ""}
+        ${state.trashError ? `<p class="modal-error" data-announce="assertive">${escapeHtml(state.trashError)}</p>` : ""}
 
         ${
           state.trashEntries.length

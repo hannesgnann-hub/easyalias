@@ -112,6 +112,12 @@ export async function upsertAlias(event: SubmitEvent) {
 export async function deleteAlias(id: string) {
   const existing = state.appState.aliases.find((alias) => alias.id === id);
   if (!existing) return;
+  if (
+    state.appSettings.confirmDeletes &&
+    !window.confirm(`Move alias "${existing.name}" to Trash?`)
+  ) {
+    return;
+  }
 
   clearMessages();
 

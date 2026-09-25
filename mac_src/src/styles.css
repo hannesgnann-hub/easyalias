@@ -9,8 +9,8 @@
   --text-strong: #232529;
   --text: #42464d;
   --text-heading: #30363b;
-  --text-muted: #72767e;
-  --text-faint: #92969e;
+  --text-muted: #5c6068;
+  --text-faint: #767a82;
   --text-on-accent: #ffffff;
   --code-surface: #232529;
   --code-text: #e5f2ee;
@@ -57,7 +57,7 @@
     --text: #d4d6db;
     --text-heading: #e9ebef;
     --text-muted: #a3a6af;
-    --text-faint: #818690;
+    --text-faint: #8d929c;
     --text-on-accent: #06110f;
     --code-surface: #191b1f;
     --code-text: #bce7dc;
@@ -105,7 +105,7 @@
     --text: #d4d6db;
     --text-heading: #e9ebef;
     --text-muted: #a3a6af;
-    --text-faint: #818690;
+    --text-faint: #8d929c;
     --text-on-accent: #06110f;
     --code-surface: #191b1f;
     --code-text: #bce7dc;
@@ -1183,7 +1183,7 @@ textarea::placeholder {
   padding: 0 14px;
   border: 0;
   border-radius: 8px;
-  color: var(--surface-1);
+  color: #ffffff;
   background: var(--danger-surface-hover);
   font-weight: 600;
   cursor: pointer;
@@ -2900,4 +2900,109 @@ textarea::placeholder {
 .tutorial-nav .primary-button {
   padding: 8px 16px;
   font-size: 0.82rem;
+}
+
+/* ----- Accessibility ------------------------------------------------------ */
+
+.settings-toggle-list {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-toggle-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.settings-toggle-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-toggle-title {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.settings-toggle-row .settings-segment {
+  flex: none;
+}
+
+/* Labels on the dark command preview need their own light grey. */
+.preview > span {
+  color: #b4b8bf;
+}
+
+/* Headings receive focus programmatically after a dialog closes. */
+h1[tabindex="-1"]:focus,
+[role="dialog"][tabindex="-1"]:focus {
+  outline: none;
+}
+
+/* WCAG 2.5.8: inline links still get a 24px tall target. */
+.support-banner a,
+.app-footer a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+}
+
+/* Larger text and controls (Settings > Accessibility). */
+:root[data-large-ui] body {
+  zoom: 1.2;
+}
+
+/* Reduce motion: system setting or Settings > Accessibility. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+:root[data-reduce-motion] *,
+:root[data-reduce-motion] *::before,
+:root[data-reduce-motion] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* macOS "Increase contrast". */
+@media (prefers-contrast: more) {
+  /* :is() lifts specificity above the dark-theme blocks. */
+  :root:is(*, [data-theme]) {
+    --text: var(--text-strong);
+    --text-muted: var(--text-strong);
+    --text-faint: var(--text-strong);
+    --border: var(--text-faint);
+    --border-subtle: var(--border-strong);
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline-width: 3px !important;
+  }
+}
+
+.settings-toggle-copy .settings-segment-option-hint {
+  font-weight: 400;
 }

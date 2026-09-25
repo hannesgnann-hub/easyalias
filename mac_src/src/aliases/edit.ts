@@ -123,8 +123,8 @@ export function renderEditModal() {
   if (!state.editForm || !state.editingId) return "";
 
   return `
-    <section class="modal-layer" role="presentation">
-      <form class="modal-card" id="edit-form" role="dialog" aria-modal="true" aria-labelledby="edit-title">
+    <section class="modal-layer" role="dialog" aria-modal="true" aria-labelledby="edit-title" data-dialog="edit-alias">
+      <form class="modal-card" id="edit-form">
         <div class="modal-title">
           <div>
             <p class="eyebrow">Edit Alias</p>
@@ -133,7 +133,7 @@ export function renderEditModal() {
           <button class="ghost-button modal-close" type="button" data-action="close-edit">Close</button>
         </div>
 
-        ${state.editError ? `<p class="modal-error">${escapeHtml(state.editError)}</p>` : ""}
+        ${state.editError ? `<p class="modal-error" data-announce="assertive">${escapeHtml(state.editError)}</p>` : ""}
 
         <label>
           Command Name

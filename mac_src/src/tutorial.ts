@@ -220,8 +220,8 @@ export function renderTutorialModal(): string {
     }).join("");
 
     return `
-      <section class="modal-layer" role="presentation">
-        <section class="modal-card tutorial-card" role="dialog" aria-modal="true" aria-labelledby="tutorial-title">
+      <section class="modal-layer" role="dialog" aria-modal="true" aria-labelledby="tutorial-title" data-dialog="tutorial">
+        <section class="modal-card tutorial-card">
           <div class="modal-title">
             <div>
               <p class="eyebrow">Tutorial</p>
@@ -246,8 +246,8 @@ export function renderTutorialModal(): string {
   const isLast = state.tutorialStep >= total - 1;
 
   return `
-    <section class="modal-layer" role="presentation">
-      <section class="modal-card tutorial-card" role="dialog" aria-modal="true" aria-labelledby="tutorial-step-title">
+    <section class="modal-layer" role="dialog" aria-modal="true" aria-labelledby="tutorial-step-title" data-dialog="tutorial">
+      <section class="modal-card tutorial-card">
         <div class="modal-title">
           <div>
             <p class="eyebrow">${escapeHtml(tutorial.label)} &middot; ${state.tutorialStep + 1} / ${total}</p>

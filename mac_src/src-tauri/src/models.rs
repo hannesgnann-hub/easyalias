@@ -318,6 +318,20 @@ pub(crate) struct AppSettings {
     // truth; this field mirrors it for the UI.
     #[serde(default)]
     pub(crate) autostart: bool,
+    // Accessibility preferences. All default to off so existing users see no
+    // change; the OS-level "reduce motion" setting is honored regardless.
+    // Status messages stay until dismissed instead of disappearing after 3 s.
+    #[serde(default)]
+    pub(crate) keep_messages: bool,
+    // Larger text and controls throughout the window.
+    #[serde(default)]
+    pub(crate) large_ui: bool,
+    // No animations or transitions, even if the OS setting is off.
+    #[serde(default)]
+    pub(crate) reduce_motion: bool,
+    // Ask before moving an alias to the Trash.
+    #[serde(default)]
+    pub(crate) confirm_deletes: bool,
 }
 
 pub(crate) fn default_theme() -> String {
@@ -334,6 +348,10 @@ pub(crate) fn default_app_settings() -> AppSettings {
         hotkey_behavior: default_hotkey_behavior(),
         show_suggestions: true,
         autostart: false,
+        keep_messages: false,
+        large_ui: false,
+        reduce_motion: false,
+        confirm_deletes: false,
     }
 }
 

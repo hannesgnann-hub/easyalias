@@ -137,8 +137,8 @@ export function renderAutomationRun() {
   const successful = state.automationRun.steps.filter((step) => step.status === "success").length;
 
   return `
-    <section class="modal-layer" role="presentation">
-      <section class="modal-card automation-runner" role="dialog" aria-modal="true" aria-labelledby="automation-run-title">
+    <section class="modal-layer" role="dialog" aria-modal="true" aria-labelledby="automation-run-title" data-dialog="automation-run">
+      <section class="modal-card automation-runner">
         <div class="modal-title">
           <div>
             <p class="eyebrow automation-run-state">${state.automationRun.running ? '<i class="automation-spinner" data-lucide="loader-circle"></i><span>Running...</span>' : state.automationRun.error ? "Run stopped" : "Completed"}</p>
@@ -149,13 +149,18 @@ export function renderAutomationRun() {
         <p class="automation-run-path"><i data-lucide="folder-open"></i><code>${escapeHtml(automation.path)}</code></p>
         ${
           state.automationRun.running
-            ? `<div class="automation-running-banner" role="status">
-                <span>Step ${state.automationRun.currentStep + 1} is running. EasyAlias is waiting for it to finish.</span>
+            ? `<div class="automation-running-banner">
+                <span data-announce="polite">Step ${state.automationRun.currentStep + 1} is running. EasyAlias is waiting for it to finish.</span>
                 <span class="automation-running-track" aria-hidden="true"><span></span></span>
               </div>`
             : ""
         }
-        ${state.automationRun.error ? `<p class="modal-error">${escapeHtml(state.automationRun.error)}</p>` : ""}
+        ${state.automationRun.error ? `<p class="modal-error" data-announce="assertive">${escapeHtml(state.automationRun.error)}</p>` : ""}
+        ${
+          !state.automationRun.running && !state.automationRun.error
+            ? `<p class="visually-hidden" data-announce="polite">${escapeHtml(automation.name)} completed: ${successful} of ${automation.steps.length} steps succeeded.</p>`
+            : ""
+        }
         <div class="automation-run-list">
           ${automation.steps
             .map((step, index) => {

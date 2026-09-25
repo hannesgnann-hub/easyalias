@@ -140,8 +140,8 @@ export function renderAutomationEditor() {
   if (!state.automationEditor) return "";
 
   return `
-    <section class="modal-layer" role="presentation">
-      <form class="modal-card automation-editor" id="automation-form" role="dialog" aria-modal="true" aria-labelledby="automation-editor-title">
+    <section class="modal-layer" role="dialog" aria-modal="true" aria-labelledby="automation-editor-title" data-dialog="automation-editor">
+      <form class="modal-card automation-editor" id="automation-form">
         <div class="modal-title">
           <div>
             <p class="eyebrow">Workflow</p>
@@ -151,7 +151,7 @@ export function renderAutomationEditor() {
         </div>
 
         <p class="automation-intro">Commands run from top to bottom in the same working directory. Background commands let long-running development servers start without blocking the next step.</p>
-        ${state.automationError ? `<p class="modal-error">${escapeHtml(state.automationError)}</p>` : ""}
+        ${state.automationError ? `<p class="modal-error" data-announce="assertive">${escapeHtml(state.automationError)}</p>` : ""}
 
         <div class="automation-form-grid">
           <label>
@@ -173,7 +173,7 @@ export function renderAutomationEditor() {
             </span>
             ${
               state.automationEditorGroupPickerOpen
-                ? `<div class="automation-group-picker automation-group-picker-editor" role="menu" aria-label="Existing groups">
+                ? `<div class="automation-group-picker automation-group-picker-editor" role="group" aria-label="Existing groups">
                     ${
                       automationGroups(state.automations).length
                         ? automationGroups(state.automations)

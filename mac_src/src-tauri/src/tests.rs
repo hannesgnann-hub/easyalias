@@ -878,6 +878,7 @@ fn app_settings_round_trip_and_default_when_missing() {
         hotkey_behavior: "background".to_string(),
         show_suggestions: true,
         autostart: false,
+        ..default_app_settings()
     })
     .unwrap();
 
@@ -893,6 +894,7 @@ fn save_settings_rejects_unknown_values() {
         hotkey_behavior: "window".to_string(),
         show_suggestions: true,
         autostart: false,
+        ..default_app_settings()
     })
     .unwrap_err()
     .contains("not a valid theme"));
@@ -902,9 +904,35 @@ fn save_settings_rejects_unknown_values() {
         hotkey_behavior: "silent".to_string(),
         show_suggestions: true,
         autostart: false,
+        ..default_app_settings()
     })
     .unwrap_err()
     .contains("not a valid hotkey behavior"));
+}
+
+#[test]
+fn accessibility_settings_round_trip_and_default_to_off() {
+    let _home_lock = HOME_LOCK.lock().unwrap();
+    let _temporary_home = TemporaryHome::create();
+    ensure_app_files().unwrap();
+
+    // Files written before these options existed still load, with all of them off.
+    fs::write(settings_file().unwrap(), "{\"theme\":\"dark\"}\n").unwrap();
+    let old = load_app_settings().unwrap();
+    assert!(!old.keep_messages && !old.large_ui && !old.reduce_motion && !old.confirm_deletes);
+
+    write_app_settings(&AppSettings {
+        keep_messages: true,
+        large_ui: true,
+        reduce_motion: true,
+        confirm_deletes: true,
+        ..default_app_settings()
+    })
+    .unwrap();
+    let saved = fs::read_to_string(settings_file().unwrap()).unwrap();
+    assert!(saved.contains("\"keepMessages\": true") && saved.contains("\"largeUi\": true"));
+    let reloaded = load_app_settings().unwrap();
+    assert!(reloaded.keep_messages && reloaded.large_ui && reloaded.reduce_motion && reloaded.confirm_deletes);
 }
 
 #[test]

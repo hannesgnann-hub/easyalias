@@ -194,8 +194,8 @@ export function renderAutomationScheduleModal() {
   const existingEntry = state.timedAutomations.find((item) => item.automationId === automation.id);
 
   return `
-    <section class="modal-layer" role="presentation">
-      <form class="modal-card automation-editor" id="timed-automation-form" role="dialog" aria-modal="true" aria-labelledby="timed-automation-editor-title">
+    <section class="modal-layer" role="dialog" aria-modal="true" aria-labelledby="timed-automation-editor-title" data-dialog="automation-schedule">
+      <form class="modal-card automation-editor" id="timed-automation-form">
         <div class="modal-title">
           <div>
             <p class="eyebrow">Schedule</p>
@@ -205,7 +205,7 @@ export function renderAutomationScheduleModal() {
         </div>
 
         <p class="automation-intro">Runs through the operating system's own scheduler, so it fires even while EasyAlias is closed.</p>
-        ${state.timedAutomationError ? `<p class="modal-error">${escapeHtml(state.timedAutomationError)}</p>` : ""}
+        ${state.timedAutomationError ? `<p class="modal-error" data-announce="assertive">${escapeHtml(state.timedAutomationError)}</p>` : ""}
 
         <label class="timed-automation-toggle">
           <input type="checkbox" ${entry.enabled ? "checked" : ""} data-timed-action="toggle-enabled" ${state.timedAutomationBusy ? "disabled" : ""} />

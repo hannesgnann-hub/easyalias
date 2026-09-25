@@ -2,14 +2,15 @@
 
 import { ArrowLeft, Monitor, Moon, Sun, X, createIcons } from "lucide";
 import { repoUrl, sponsorUrl } from "../constants";
+import { replaceAppHtml } from "../a11y";
 import { appElement } from "../dom";
 import { escapeHtml } from "../html";
 import { closeSettingsView } from "../navigation";
 import { invokeCommand, isTauriRuntime, openExternalLink } from "../platform";
-import { applyTheme, persistStoredSettings } from "../preferences";
+import { applyAccessibilityPreferences, applyTheme, persistStoredSettings } from "../preferences";
 import { render } from "../render";
 import { state } from "../state";
-import type { AppSettings, HotkeyBehavior, ThemePreference } from "../types";
+import type { AccessibilitySetting, AppSettings, HotkeyBehavior, ThemePreference } from "../types";
 
 // Applies a theme choice: immediate visual switch, optimistic local persistence,
 // then the backend write (which is the source of truth in the native app).
@@ -46,6 +47,68 @@ export async function updateAutostart(enabled: boolean) {
   await saveSettingsToBackend();
 }
 
+export async function updateAccessibilitySetting(setting: AccessibilitySetting, enabled: boolean) {
+  if (state.appSettings[setting] === enabled) return;
+  state.appSettings = { ...state.appSettings, [setting]: enabled };
+  applyAccessibilityPreferences(state.appSettings);
+  persistStoredSettings(state.appSettings);
+  render();
+  await saveSettingsToBackend();
+}
+
+const accessibilityOptions: { setting: AccessibilitySetting; title: string; description: string }[] = [
+  {
+    setting: "keepMessages",
+    title: "Keep messages until dismissed",
+    description: "Status and error messages stay on screen until you close them, instead of disappearing after a few seconds."
+  },
+  {
+    setting: "largeUi",
+    title: "Larger text and controls",
+    description: "Enlarges text, buttons and click targets throughout EasyAlias."
+  },
+  {
+    setting: "reduceMotion",
+    title: "Reduce motion",
+    description: "Turns off animations and transitions. EasyAlias already follows the macOS \"Reduce motion\" setting; this forces it on."
+  },
+  {
+    setting: "confirmDeletes",
+    title: "Confirm before deleting aliases",
+    description: "Asks before an alias is moved to the Trash, so a slip of the hand does not remove it."
+  }
+];
+
+function renderAccessibilityCard() {
+  return `
+      <div class="settings-card">
+        <div class="settings-card-head">
+          <h2>Accessibility</h2>
+          <p>EasyAlias works with VoiceOver and the keyboard alone: Tab moves between controls and Escape closes dialogs. These options adapt it further.</p>
+        </div>
+        <div class="settings-toggle-list">
+          ${accessibilityOptions
+            .map((option) => {
+              const enabled = state.appSettings[option.setting];
+              const labelId = `a11y-${option.setting}-label`;
+              const descriptionId = `a11y-${option.setting}-description`;
+              return `
+                <div class="settings-toggle-row">
+                  <div class="settings-toggle-copy">
+                    <span class="settings-toggle-title" id="${labelId}">${option.title}</span>
+                    <span class="settings-segment-option-hint" id="${descriptionId}">${option.description}</span>
+                  </div>
+                  <div class="settings-segment" role="group" aria-labelledby="${labelId}" aria-describedby="${descriptionId}">
+                    <button type="button" class="settings-segment-option ${enabled ? "is-selected" : ""}" aria-pressed="${enabled}" data-settings-action="set-accessibility" data-setting="${option.setting}" data-value="on" ${state.settingsBusy ? "disabled" : ""}><span>On</span></button>
+                    <button type="button" class="settings-segment-option ${!enabled ? "is-selected" : ""}" aria-pressed="${!enabled}" data-settings-action="set-accessibility" data-setting="${option.setting}" data-value="off" ${state.settingsBusy ? "disabled" : ""}><span>Off</span></button>
+                  </div>
+                </div>`;
+            })
+            .join("")}
+        </div>
+      </div>`;
+}
+
 export async function saveSettingsToBackend() {
   if (!isTauriRuntime()) return;
   state.settingsBusy = true;
@@ -72,7 +135,7 @@ export function renderSettingsView() {
     { value: "background", label: "Run in background", hint: "Runs silently with only a short status message." }
   ];
 
-  appElement.innerHTML = `
+  replaceAppHtml(`
     <section class="shell settings-shell">
       <header class="topbar">
         <div>
@@ -86,7 +149,7 @@ export function renderSettingsView() {
 
       ${
         state.settingsError
-          ? `<div class="message-banner error" role="alert"><span>${escapeHtml(state.settingsError)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-settings-action="dismiss-message"><i data-lucide="x"></i></button></div>`
+          ? `<div class="message-banner error"><span data-announce="assertive">${escapeHtml(state.settingsError)}</span><button class="message-dismiss" type="button" title="Dismiss message" aria-label="Dismiss message" data-settings-action="dismiss-message"><i data-lucide="x"></i></button></div>`
           : ""
       }
 
@@ -160,9 +223,11 @@ export function renderSettingsView() {
         </div>
       </div>
 
+      ${renderAccessibilityCard()}
+
       <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>❤ Become a sponsor</a><a class="support-star" href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>★ Give us a star on GitHub</a></aside>
     </section>
-  `;
+  `);
 
   createIcons({
     icons: { ArrowLeft, Monitor, Moon, Sun, X },
@@ -190,6 +255,8 @@ export function renderSettingsView() {
       void updateShowSuggestions(value === "on");
     } else if (action === "set-autostart" && value) {
       void updateAutostart(value === "on");
+    } else if (action === "set-accessibility" && value && button.dataset.setting) {
+      void updateAccessibilitySetting(button.dataset.setting as AccessibilitySetting, value === "on");
     }
   });
 }

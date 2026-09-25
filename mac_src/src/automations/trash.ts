@@ -137,8 +137,8 @@ export function renderAutomationTrashDialog() {
   if (!state.automationTrashOpen) return "";
 
   return `
-    <section class="modal-layer" role="presentation">
-      <section class="modal-card trash-card" role="dialog" aria-modal="true" aria-labelledby="automation-trash-title">
+    <section class="modal-layer" role="dialog" aria-modal="true" aria-labelledby="automation-trash-title" data-dialog="automation-trash">
+      <section class="modal-card trash-card">
         <div class="modal-title">
           <div>
             <p class="eyebrow">Recovery</p>
@@ -151,7 +151,7 @@ export function renderAutomationTrashDialog() {
           Deleted automations stay here for 30 days. Restore a workflow at any time, or delete it permanently now.
         </p>
 
-        ${state.automationTrashError ? `<p class="modal-error">${escapeHtml(state.automationTrashError)}</p>` : ""}
+        ${state.automationTrashError ? `<p class="modal-error" data-announce="assertive">${escapeHtml(state.automationTrashError)}</p>` : ""}
 
         ${
           state.automationTrashEntries.length
