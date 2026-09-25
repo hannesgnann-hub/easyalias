@@ -1,0 +1,21 @@
+[package]
+name = "easyalias-tui"
+version = "0.1.0"
+description = "EasyAlias in the terminal: manage shell aliases and automations with a TUI"
+authors = ["hannesgnann"]
+license = "MIT"
+edition = "2021"
+
+[[bin]]
+name = "easyalias-tui"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+ratatui = "0.30"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = true
+strip = true

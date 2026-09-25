@@ -1,4 +1,4 @@
-//! In-app tutorial, adapted from the desktop app's tutorial for the terminal.
+//! In-app tutorial (Linux), adapted from the desktop app's tutorial for the terminal.
 
 pub(crate) struct HelpTopic {
     pub(crate) id: &'static str,
@@ -31,11 +31,11 @@ pub(crate) const TOPICS: &[HelpTopic] = &[
             ),
             (
                 "Import & backup",
-                "- `i` scans your shell startup files for simple aliases you already have and imports the ones you pick. A backup of each changed file is written first.\n- `b` exports a portable JSON backup, `B` imports one - useful to move aliases between machines.\n- `t` opens the 30-day Trash: `r` restores, `d` deletes forever, `E` empties it.",
+                "- `i` scans your shell startup file for simple aliases you already have and imports the ones you pick. A backup of the file is written first.\n- `b` exports a portable JSON backup, `B` imports one - useful to move aliases between machines.\n- `t` opens the 30-day Trash: `r` restores, `d` deletes forever, `E` empties it.",
             ),
             (
                 "Using them in the terminal",
-                "EasyAlias writes ~/.easyalias/aliases.zsh and adds `source ~/.easyalias/aliases.zsh` to ~/.zshrc, ~/.bash_profile and ~/.bashrc once.\n\nA new terminal window has your aliases right away. In a terminal that's already open, run `source ~/.zshrc` to pick up changes.\n\nThe data is shared with the EasyAlias desktop app, so you can use both side by side.",
+                "EasyAlias writes ~/.easyalias/aliases.sh and adds `source ~/.easyalias/aliases.sh` to your shell startup file (~/.bashrc, or ~/.zshrc if zsh is your login shell) once.\n\nA new terminal has your aliases right away. In one that's already open, run `source ~/.bashrc` (or `source ~/.zshrc`) to pick up changes.\n\nThe data is shared with the EasyAlias desktop app, so you can use both side by side.",
             ),
         ],
     },
@@ -54,7 +54,7 @@ pub(crate) const TOPICS: &[HelpTopic] = &[
             ),
             (
                 "One shell session",
-                "Every command step in a run shares one shell session started in the working directory.\n\nSo a `cd` or an exported variable in one step is still in effect for every step after it - exactly like a real terminal.",
+                "Every command step in a run shares one shell session (your login shell, bash or zsh) started in the working directory.\n\nSo a `cd` or an exported variable in one step is still in effect for every step after it - exactly like a real terminal.",
             ),
             (
                 "Run it",
@@ -66,7 +66,7 @@ pub(crate) const TOPICS: &[HelpTopic] = &[
             ),
             (
                 "Schedule it",
-                "Press `c` on an automation to schedule it. Pick a trigger with ← →:\n\n- Time - a fixed HH:MM.\n- Sunrise / Sunset - that day's real event for the region you choose, recomputed daily.\n\nOptionally limit it to certain weekdays (← → and Space, or 1-7). EasyAlias hands the schedule to macOS launchd, so it fires even when EasyAlias is closed. The list shows the last run's result. Ctrl+D removes a schedule.",
+                "Press `c` on an automation to schedule it. Pick a trigger with ← →:\n\n- Time - a fixed HH:MM.\n- Sunrise / Sunset - that day's real event for the region you choose, recomputed daily.\n\nOptionally limit it to certain weekdays (← → and Space, or 1-7). EasyAlias hands the schedule to systemd user timers, so it fires even when EasyAlias is closed. The list shows the last run's result. Ctrl+D removes a schedule.",
             ),
         ],
     },

@@ -1,4 +1,4 @@
-//! EasyAlias TUI: the EasyAlias alias and automation manager as a terminal app.
+//! EasyAlias TUI for Windows: the EasyAlias alias and automation manager as a terminal app.
 //!
 //! The data layer (everything except `tui/`, `preview` and `suggestions`) is the
 //! same logic the desktop app uses, minus Tauri. Both read and write
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
-    io::{BufRead, BufReader, ErrorKind, Write},
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc,
@@ -20,13 +20,15 @@ use std::{
 mod models;
 mod paths;
 mod clock;
-mod shell;
+mod cmd_scripts;
+mod user_path;
+mod legacy_import;
 mod aliases;
 mod automations;
 mod session;
 mod timed;
 mod sun;
-mod launchd;
+mod schtasks;
 mod settings;
 mod help;
 mod platform;
@@ -37,13 +39,15 @@ mod tui;
 use models::*;
 use paths::*;
 use clock::*;
-use shell::*;
+use cmd_scripts::*;
+use user_path::*;
+use legacy_import::*;
 use aliases::*;
 use automations::*;
 use session::*;
 use timed::*;
 use sun::*;
-use launchd::*;
+use schtasks::*;
 use settings::*;
 use preview::*;
 

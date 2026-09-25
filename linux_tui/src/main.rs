@@ -1,4 +1,4 @@
-//! EasyAlias TUI: the EasyAlias alias and automation manager as a terminal app.
+//! EasyAlias TUI for Linux: the EasyAlias alias and automation manager as a terminal app.
 //!
 //! The data layer (everything except `tui/`, `preview` and `suggestions`) is the
 //! same logic the desktop app uses, minus Tauri. Both read and write
@@ -26,7 +26,7 @@ mod automations;
 mod session;
 mod timed;
 mod sun;
-mod launchd;
+mod systemd;
 mod settings;
 mod help;
 mod platform;
@@ -43,7 +43,7 @@ use automations::*;
 use session::*;
 use timed::*;
 use sun::*;
-use launchd::*;
+use systemd::*;
 use settings::*;
 use preview::*;
 
