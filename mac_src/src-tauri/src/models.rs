@@ -85,6 +85,9 @@ pub(crate) struct BackupImportResult {
     pub(crate) state: AppState,
     pub(crate) imported_count: usize,
     pub(crate) replaced_count: usize,
+    // Set when the file was a marketplace package that also has automations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) note: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -102,6 +105,9 @@ pub(crate) struct AutomationBackupImportResult {
     pub(crate) automations: Vec<Automation>,
     pub(crate) imported_count: usize,
     pub(crate) replaced_count: usize,
+    // Set when the file was a marketplace package that also has aliases.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) note: Option<String>,
 }
 
 // Deleted aliases live in a separate file so config.json remains fully

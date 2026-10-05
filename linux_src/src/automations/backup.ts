@@ -158,7 +158,7 @@ export async function importSelectedBackupAutomations(event: SubmitEvent) {
     const replacementNote = result.replacedCount
       ? ` ${result.replacedCount} existing automations replaced.`
       : "";
-    state.notice = `${result.importedCount} automations imported.${replacementNote}`;
+    state.notice = `${result.importedCount} automations imported.${replacementNote}${result.note ? ` ${result.note}` : ""}`;
   } catch (backupImportError) {
     state.automationBackupError = String(backupImportError);
   }

@@ -986,3 +986,140 @@ fn automation_working_directory_falls_back_to_a_file_s_parent() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+// ----- marketplace packages ---------------------------------------------------
+
+fn node_vite_package(platforms: &str) -> String {
+    format!(
+        r#"{{
+  "format": "easyalias-marketplace-package",
+  "version": 1,
+  "package": {{
+    "title": "Node & Vite Pack",
+    "slug": "node-vite-pack",
+    "summary": "Install, dev, build, preview, and dependency checks for JavaScript projects.",
+    "author": "EasyAlias",
+    "platforms": {},
+    "source": "official",
+    "risk": "safe"
+  }},
+  "items": {{
+    "aliases": [
+      {{ "name": "nrdev", "action": "custom", "customCommand": "npm run dev", "commandPreview": "npm run dev" }},
+      {{ "name": "nrbuild", "action": "custom", "customCommand": "npm run build", "commandPreview": "rm -rf ~" }},
+      {{ "name": "proj", "action": "navigate", "path": "~/Projects/app" }}
+    ],
+    "automations": [
+      {{
+        "name": "Build and preview",
+        "path": "",
+        "steps": [{{ "kind": "command", "command": "npm install && npm run build && npm run preview", "seconds": 0, "behavior": "wait" }}],
+        "favorite": false,
+        "group": "node",
+        "hotkey": "CmdOrCtrl+Shift+K"
+      }}
+    ]
+  }}
+}}"#,
+        platforms
+    )
+}
+
+#[test]
+fn marketplace_package_imports_through_the_alias_backup_dialog() {
+    let _home_lock = HOME_LOCK.lock().unwrap();
+    let temporary_home = TemporaryHome::create();
+    ensure_app_files().unwrap();
+    write_alias_files(&[test_alias("keep", "gs", "git status")]).unwrap();
+    let package_path = temporary_home.path.join("node-vite-pack.easyaliaspack.json");
+    fs::write(&package_path, node_vite_package(r#"["macos", "linux", "windows"]"#)).unwrap();
+
+    let candidates = inspect_alias_backup(package_path.display().to_string()).unwrap();
+    assert_eq!(candidates.len(), 3);
+    // The command is rebuilt from the alias, never taken from commandPreview.
+    assert_eq!(candidates[1].command_preview, "npm run build");
+    assert_eq!(candidates[2].command_preview, "cd \"$HOME/Projects/app\"");
+    // Reading the file again yields the same ids, so the selection stays valid.
+    let again = inspect_alias_backup(package_path.display().to_string()).unwrap();
+    assert_eq!(
+        candidates.iter().map(|alias| &alias.id).collect::<Vec<_>>(),
+        again.iter().map(|alias| &alias.id).collect::<Vec<_>>()
+    );
+
+    let result = import_alias_backup(
+        package_path.display().to_string(),
+        vec![candidates[0].id.clone(), candidates[1].id.clone()],
+        "2026-10-05T12:00:00.000Z".to_string(),
+    )
+    .unwrap();
+    assert_eq!(result.imported_count, 2);
+    assert_eq!(result.state.aliases.len(), 3);
+    assert_eq!(
+        result.note.as_deref(),
+        Some("The file also contains 1 automation - import it under Automations.")
+    );
+    let generated = fs::read_to_string(aliases_file().unwrap()).unwrap();
+    assert!(generated.contains("alias nrbuild='npm run build'"));
+    assert!(!generated.contains("rm -rf"));
+}
+
+#[test]
+fn marketplace_package_imports_through_the_automation_backup_dialog() {
+    let _home_lock = HOME_LOCK.lock().unwrap();
+    let temporary_home = TemporaryHome::create();
+    let package_path = temporary_home.path.join("node-vite-pack.easyaliaspack.json");
+    fs::write(&package_path, node_vite_package(r#"["macos"]"#)).unwrap();
+
+    let candidates = inspect_automation_backup(package_path.display().to_string()).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].path, "~");
+    assert_eq!(candidates[0].group, "node");
+    assert_eq!(candidates[0].hotkey, None);
+
+    let result = import_automation_backup_inner(
+        package_path.display().to_string(),
+        vec![candidates[0].id.clone()],
+        "2026-10-05T12:00:00.000Z".to_string(),
+    )
+    .unwrap();
+    assert_eq!(result.imported_count, 1);
+    assert_eq!(result.automations[0].name, "Build and preview");
+    assert_eq!(result.automations[0].hotkey, None);
+    assert_eq!(
+        result.note.as_deref(),
+        Some("The file also contains 3 aliases - import it under Aliases.")
+    );
+}
+
+#[test]
+fn marketplace_package_is_rejected_for_other_platforms_and_missing_items() {
+    let _home_lock = HOME_LOCK.lock().unwrap();
+    let temporary_home = TemporaryHome::create();
+    let path = temporary_home.path.join("pack.json");
+
+    fs::write(&path, node_vite_package(r#"["linux", "windows"]"#)).unwrap();
+    let error = inspect_alias_backup(path.display().to_string()).unwrap_err();
+    assert_eq!(error, "\"Node & Vite Pack\" is not made for macOS.");
+
+    fs::write(
+        &path,
+        r#"{"format":"easyalias-marketplace-package","version":1,"package":{"title":"Only automations"},"items":{"automations":[{"name":"A","steps":[{"kind":"wait","seconds":2}]}]}}"#,
+    )
+    .unwrap();
+    let error = inspect_alias_backup(path.display().to_string()).unwrap_err();
+    assert_eq!(
+        error,
+        "Only automations has no aliases, only 1 automation. Import it under Automations."
+    );
+    assert_eq!(inspect_automation_backup(path.display().to_string()).unwrap().len(), 1);
+
+    fs::write(
+        &path,
+        r#"{"format":"easyalias-marketplace-package","version":2,"package":{"title":"Future"},"items":{}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        inspect_alias_backup(path.display().to_string()).unwrap_err(),
+        "This package needs a newer version of EasyAlias."
+    );
+}

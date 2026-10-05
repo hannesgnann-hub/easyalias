@@ -185,6 +185,8 @@ The export button opens a review dialog where all aliases are selected by defaul
 
 ![Selecting or dropping an EasyAlias backup for restore](../docs/assets/v2/import.png)
 
+The same import buttons also accept marketplace packages (`*.easyaliaspack.json`, format `easyalias-marketplace-package`, version 1). Alias import takes the package's aliases and automation import takes its automations; after importing one part, EasyAlias says whether the file has the other part too. A package whose `platforms` list leaves out `macos` is rejected. Because packages come from other people, EasyAlias rebuilds every alias command from `action` and `path`/`customCommand` instead of trusting the package's `commandPreview`, never takes a global shortcut from a package, and starts automations without a `path` in the home folder.
+
 Deleting an alias moves it to `~/.easyalias/trash.json`. Trash entries are retained for 30 days and are purged when Trash is loaded after their retention period. The Trash dialog can restore one alias, permanently delete one alias, or empty all deleted entries.
 
 ![Recovering or permanently deleting a macOS alias](../docs/assets/v2/trash.png)

@@ -33,6 +33,7 @@ mod sun;
 mod schtasks;
 mod settings;
 mod hotkeys;
+mod marketplace;
 
 use models::*;
 use paths::*;
@@ -48,6 +49,7 @@ use sun::*;
 use schtasks::*;
 use settings::*;
 use hotkeys::*;
+use marketplace::*;
 
 fn main() {
     // Task Scheduler invokes this same executable to fire a timed automation,

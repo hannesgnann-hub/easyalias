@@ -80,6 +80,10 @@ pub(crate) fn read_backup(path: &Path) -> Result<AliasBackup, String> {
 
     let content = fs::read_to_string(path)
         .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    // Marketplace packages are imported through the same dialog.
+    if is_package(&content) {
+        return package_aliases(&content);
+    }
     let backup: AliasBackup = serde_json::from_str(&content)
         .map_err(|error| format!("This is not a valid EasyAlias backup: {}", error))?;
 
@@ -431,5 +435,6 @@ pub(crate) fn import_alias_backup(
         state: app_state(aliases, &setup, Vec::new())?,
         imported_count,
         replaced_count,
+        note: remaining_items_note(Path::new(&path), true),
     })
 }

@@ -108,6 +108,10 @@ pub(crate) fn read_automation_backup(path: &Path) -> Result<AutomationBackup, St
 
     let content = fs::read_to_string(path)
         .map_err(|error| format!("{} could not be read: {}", path.display(), error))?;
+    // Marketplace packages are imported through the same dialog.
+    if is_package(&content) {
+        return package_automations(&content);
+    }
     let backup: AutomationBackup = serde_json::from_str(&content)
         .map_err(|error| format!("This is not a valid EasyAlias automation backup: {}", error))?;
 
@@ -490,5 +494,6 @@ pub(crate) fn import_automation_backup_inner(
         automations: current,
         imported_count,
         replaced_count,
+        note: remaining_items_note(Path::new(&path), false),
     })
 }

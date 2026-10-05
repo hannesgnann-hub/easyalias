@@ -222,6 +222,8 @@ Wrapper aliases still accept additional arguments from bash or zsh. For example,
 
 Favorites stay above regular aliases, with both groups sorted alphabetically. The header export button writes all or selected aliases to a versioned EasyAlias JSON backup. Import accepts that backup through the native picker or drag and drop, validates it, and allows a selective restore. Selected matching names replace current managed entries; unselected aliases stay unchanged.
 
+The same import buttons also accept marketplace packages (`*.easyaliaspack.json`, format `easyalias-marketplace-package`, version 1). Alias import takes the package's aliases and automation import takes its automations; after importing one part, EasyAlias says whether the file has the other part too. A package whose `platforms` list leaves out `linux` is rejected. Because packages come from other people, EasyAlias rebuilds every alias command from `action` and `path`/`customCommand` instead of trusting the package's `commandPreview` (so the import dialog shows exactly what ends up in `aliases.sh`), never takes a global shortcut from a package, and starts automations without a `path` in the home folder.
+
 Deleted aliases move to `~/.easyalias/trash.json` for 30 days. Trash can restore or permanently remove an individual entry, or empty all deleted entries immediately.
 
 ## Automations

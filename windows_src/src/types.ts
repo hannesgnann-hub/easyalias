@@ -65,6 +65,8 @@ export type BackupImportResult = {
   state: AppState;
   importedCount: number;
   replacedCount: number;
+  // Set when a marketplace package also has items for the other import.
+  note?: string;
 };
 
 export type TrashEntry = {
@@ -156,6 +158,8 @@ export type AutomationBackupImportResult = {
   automations: Automation[];
   importedCount: number;
   replacedCount: number;
+  // Set when a marketplace package also has items for the other import.
+  note?: string;
 };
 
 export type AutomationCommandResult = {

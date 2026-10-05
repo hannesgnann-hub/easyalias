@@ -31,6 +31,7 @@ mod sun;
 mod systemd;
 mod settings;
 mod hotkeys;
+mod marketplace;
 
 use models::*;
 use paths::*;
@@ -44,6 +45,7 @@ use sun::*;
 use systemd::*;
 use settings::*;
 use hotkeys::*;
+use marketplace::*;
 
 fn main() {
     // systemd invokes this same executable to fire a timed automation, with

@@ -151,7 +151,7 @@ export async function importSelectedBackupAliases(event: SubmitEvent) {
     const replacementNote = result.replacedCount
       ? ` ${result.replacedCount} existing aliases replaced.`
       : "";
-    state.notice = `${result.importedCount} aliases imported.${replacementNote}`;
+    state.notice = `${result.importedCount} aliases imported.${replacementNote}${result.note ? ` ${result.note}` : ""}`;
   } catch (backupImportError) {
     state.backupError = String(backupImportError);
   }

@@ -309,6 +309,8 @@ call mvnw.cmd %*
 
 Favorites stay above regular shortcuts, with both groups sorted alphabetically. The header export button writes all or selected shortcuts to a versioned EasyAlias JSON backup. Import accepts that backup through the native picker or drag and drop, validates it, and allows a selective restore. Selected matching names replace current managed entries; unselected shortcuts stay unchanged.
 
+The same import buttons also accept marketplace packages (`*.easyaliaspack.json`, format `easyalias-marketplace-package`, version 1). Alias import takes the package's aliases and automation import takes its automations; after importing one part, EasyAlias says whether the file has the other part too. A package whose `platforms` list leaves out `windows` is rejected. Because packages come from other people, EasyAlias rebuilds every alias command from `action` and `path`/`customCommand` instead of trusting the package's `commandPreview` (so the import dialog shows exactly what ends up in the alias's `.cmd` file), never takes a global shortcut from a package, and starts automations without a `path` in the home folder.
+
 Deleted shortcuts move to `~\.easyalias\trash.json` for 30 days. Trash can restore or permanently remove an individual entry, or empty all deleted entries immediately. Restoring also regenerates the matching `.cmd` file.
 
 ## Automations

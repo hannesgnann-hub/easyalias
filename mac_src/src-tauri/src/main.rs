@@ -31,6 +31,7 @@ mod sun;
 mod launchd;
 mod settings;
 mod hotkeys;
+mod marketplace;
 
 use models::*;
 use paths::*;
@@ -44,6 +45,7 @@ use sun::*;
 use launchd::*;
 use settings::*;
 use hotkeys::*;
+use marketplace::*;
 
 fn main() {
     // launchd invokes this same executable to fire a timed automation, with
