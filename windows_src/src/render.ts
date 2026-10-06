@@ -16,6 +16,7 @@ import {
   Trash2,
   Workflow,
   X,
+  Store,
   createIcons
 } from "lucide";
 import { renderBackupDialog } from "./aliases/backup";
@@ -26,7 +27,7 @@ import { renderImportModal } from "./aliases/shellImport";
 import { aliasSuggestions } from "./aliases/suggestions";
 import { renderTrashDialog } from "./aliases/trash";
 import { renderAutomationsView } from "./automations/view";
-import { actionLabels, redditUrl, repoUrl, sponsorUrl, websiteUrl } from "./constants";
+import { actionLabels, redditUrl, repoUrl, sponsorUrl, websiteUrl, marketplaceUrl } from "./constants";
 import { appElement } from "./dom";
 import { bindEvents } from "./events";
 import { escapeHtml } from "./html";
@@ -112,6 +113,16 @@ export function render() {
             <i data-lucide="trash-2"></i>
             ${state.trashEntries.length ? `<span class="header-count" aria-hidden="true">${state.trashEntries.length}</span>` : ""}
           </button>
+          <a
+            class="header-icon-button"
+            id="marketplace-link"
+            href="${marketplaceUrl}"
+            target="_blank"
+            rel="noreferrer"
+            title="Marketplace"
+            aria-label="Open the EasyAlias marketplace in your browser"
+            data-external-link
+          ><i data-lucide="store"></i></a>
           <button
             class="header-icon-button"
             type="button"
@@ -384,6 +395,7 @@ export function render() {
   // Importing only the icons used here keeps the production bundle tree-shakable.
   createIcons({
     icons: {
+      Store,
       ChevronLeft,
       ChevronRight,
       SquareTerminal,

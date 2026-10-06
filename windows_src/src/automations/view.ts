@@ -32,9 +32,10 @@ import {
   Trash2,
   Workflow,
   X,
+  Store,
   createIcons
 } from "lucide";
-import { automationFilterLabels, redditUrl, repoUrl, sponsorUrl, websiteUrl } from "../constants";
+import { automationFilterLabels, redditUrl, repoUrl, sponsorUrl, websiteUrl, marketplaceUrl } from "../constants";
 import { appElement } from "../dom";
 import { escapeHtml } from "../html";
 import { dismissMessage, scheduleMessageDismissal } from "../messages";
@@ -433,6 +434,7 @@ export function renderAutomationsView() {
             ${state.automationTrashEntries.length ? `<span class="header-count" aria-hidden="true">${state.automationTrashEntries.length}</span>` : ""}
           </button>
           <button class="header-icon-button automation-create-button" type="button" title="Create automation" aria-label="Create automation" data-automation-action="new" ${state.automationRun?.running ? "disabled" : ""}><i data-lucide="plus"></i></button>
+          <a class="header-icon-button" id="marketplace-link" href="${marketplaceUrl}" target="_blank" rel="noreferrer" title="Marketplace" aria-label="Open the EasyAlias marketplace in your browser" data-external-link><i data-lucide="store"></i></a>
           <button class="header-icon-button" type="button" title="Settings" aria-label="Open settings" data-automation-action="open-settings" ${state.automationRun?.running ? "disabled" : ""}><i data-lucide="settings"></i></button>
           <button class="header-icon-button" type="button" title="Tutorial" aria-label="Open the tutorial" data-automation-action="open-tutorial"><i data-lucide="graduation-cap"></i></button>
         </div>
@@ -520,7 +522,7 @@ export function renderAutomationsView() {
     </section>`;
 
   createIcons({
-    icons: { ArrowDown, ArrowLeft, ArrowUp, Check, CircleStop, Clock, Clock3, FileDown, FileUp, Filter, FolderOpen, Keyboard, Pencil, Play, Plus, RotateCcw, Save, Search, Settings, Star, Sunrise, Sunset, Tag, Tags, Terminal, Trash2, Workflow, GraduationCap, Heart, SquareTerminal, X },
+    icons: { Store, ArrowDown, ArrowLeft, ArrowUp, Check, CircleStop, Clock, Clock3, FileDown, FileUp, Filter, FolderOpen, Keyboard, Pencil, Play, Plus, RotateCcw, Save, Search, Settings, Star, Sunrise, Sunset, Tag, Tags, Terminal, Trash2, Workflow, GraduationCap, Heart, SquareTerminal, X },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
   scheduleMessageDismissal();

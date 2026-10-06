@@ -236,6 +236,10 @@ h2 {
   font-weight: 600;
 }
 
+a.header-icon-button {
+  text-decoration: none;
+}
+
 .header-icon-button {
   display: grid;
   place-items: center;

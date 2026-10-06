@@ -80,5 +80,6 @@ export const repoUrl = "https://github.com/hannesgnann-hub/easyalias";
 export const redditUrl = "https://www.reddit.com/r/easyalias/";
 
 export const websiteUrl = "https://easyalias.org";
+export const marketplaceUrl = "https://market.easyalias.org";
 
 export const sponsorUrl = "https://github.com/sponsors/hannesgnann-hub";
