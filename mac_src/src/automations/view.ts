@@ -519,7 +519,7 @@ export function renderAutomationsView() {
       ${renderAutomationTrashDialog()}
       ${renderTutorialModal()}
 
-      <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>❤ Become a sponsor</a><a class="support-star" href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>★ Give us a star on GitHub</a></aside>
+      <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>❤ Become a sponsor</a><a class="support-star" href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>★ Give us a star on GitHub</a><a href="${marketplaceUrl}" target="_blank" rel="noreferrer" data-external-link>◆ Browse the marketplace</a></aside>
       <footer class="app-footer"><a href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>© Hannes Gnann</a><span aria-hidden="true">-</span><a href="${redditUrl}" target="_blank" rel="noreferrer" data-external-link>Reddit</a><span aria-hidden="true">-</span><a href="${websiteUrl}" target="_blank" rel="noreferrer" data-external-link>Website</a></footer>
     </section>`);
 

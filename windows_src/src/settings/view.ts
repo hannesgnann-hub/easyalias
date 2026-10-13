@@ -1,7 +1,7 @@
 // Settings view.
 
 import { ArrowLeft, Monitor, Moon, Sun, X, createIcons } from "lucide";
-import { repoUrl, sponsorUrl } from "../constants";
+import { marketplaceUrl, repoUrl, sponsorUrl } from "../constants";
 import { appElement } from "../dom";
 import { escapeHtml } from "../html";
 import { closeSettingsView } from "../navigation";
@@ -160,7 +160,7 @@ export function renderSettingsView() {
         </div>
       </div>
 
-      <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>❤ Become a sponsor</a><a class="support-star" href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>★ Give us a star on GitHub</a></aside>
+      <aside class="support-banner" aria-label="Support EasyAlias"><span>Support EasyAlias development</span><a href="${sponsorUrl}" target="_blank" rel="noreferrer" data-external-link>❤ Become a sponsor</a><a class="support-star" href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>★ Give us a star on GitHub</a><a href="${marketplaceUrl}" target="_blank" rel="noreferrer" data-external-link>◆ Browse the marketplace</a></aside>
     </section>
   `;
 

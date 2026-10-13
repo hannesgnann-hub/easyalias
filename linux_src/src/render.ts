@@ -355,6 +355,9 @@ export function render() {
         <a class="support-star" href="${repoUrl}" target="_blank" rel="noreferrer" data-external-link>
           ★ Give us a star on GitHub
         </a>
+        <a href="${marketplaceUrl}" target="_blank" rel="noreferrer" data-external-link>
+          ◆ Browse the marketplace
+        </a>
       </aside>
 
       <footer class="app-footer">
