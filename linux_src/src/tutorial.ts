@@ -73,7 +73,7 @@ export const TUTORIALS: Record<TutorialTopic, TutorialContent> = {
         title: "Using them in the terminal",
         body: `
           <p>EasyAlias writes <code>~/.easyalias/aliases.sh</code> and adds <code>source ~/.easyalias/aliases.sh</code> to your shell startup file (<code>~/.bashrc</code> or <code>~/.zshrc</code>) once.</p>
-          <p>A <strong>new</strong> terminal has your aliases right away. In one that's already open, run <code>source ~/.bashrc</code> (or <code>~/.zshrc</code>) to pick up changes.</p>`
+          <p>A <strong>new</strong> terminal has your aliases right away. This works in Ghostty, WezTerm, Kitty, Alacritty, GNOME Terminal, Konsole, Xfce Terminal, Tilix, XTerm, VS Code, and other terminal apps that start Bash or zsh. In one that's already open, run <code>source ~/.bashrc</code> or <code>source ~/.zshrc</code> to pick up changes.</p>`
       }
     ]
   },
@@ -107,7 +107,8 @@ export const TUTORIALS: Record<TutorialTopic, TutorialContent> = {
       {
         title: "Run it",
         body: `
-          <p>Click <strong>Run</strong> on a card. A progress dialog shows each step's status and captured output. <strong>Stop</strong> ends the run immediately (a background process that already launched keeps going on its own). If a foreground step exits non-zero, the run stops and the rest are marked skipped.</p>`
+          <p>Start from a <strong>workflow template</strong> or build your own, then click <strong>Run</strong> on its card. A progress dialog shows each step's status and captured output. <strong>Stop</strong> ends the run immediately (a background process that already launched keeps going on its own). If a foreground step exits non-zero, the run stops and the rest are marked skipped.</p>
+          <p>The <strong>terminal</strong> icon opens the working directory in an installed app such as Ghostty, WezTerm, Kitty, Alacritty, GNOME Terminal, Konsole, Xfce Terminal, Tilix, or XTerm.</p>`
       },
       {
         title: "Organize",

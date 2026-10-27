@@ -540,8 +540,11 @@ textarea:focus {
   background: transparent;
 }
 
-.suggestions-heading h2 {
+.suggestions-heading h2,
+.suggestions-heading h3 {
+  margin: 0;
   color: var(--text-heading);
+  font-size: 1.05rem;
 }
 
 .suggestions-header {
@@ -1411,6 +1414,21 @@ textarea::placeholder {
 
 .automation-overview-header {
   margin-bottom: 16px;
+}
+
+.automation-suggestions {
+  margin: 0 0 16px;
+}
+
+.automation-suggestion-grid .suggestion-item {
+  min-height: 116px;
+}
+
+.automation-suggestion-grid .suggestion-copy code {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .automation-overview-header > div {
@@ -2528,7 +2546,7 @@ textarea::placeholder {
   line-height: 1.45;
 }
 
-/* ---- Automation card: four meta buttons need to stay compact ---- */
+/* ---- Automation card: meta buttons need to stay compact ---- */
 
 .automation-card-title {
   gap: 6px;
@@ -2544,7 +2562,8 @@ textarea::placeholder {
 .automation-favorite-button,
 .automation-group-button,
 .automation-schedule-button,
-.automation-hotkey-button {
+.automation-hotkey-button,
+.automation-terminal-button {
   flex: 0 0 30px;
   width: 30px;
   height: 30px;
@@ -2553,7 +2572,8 @@ textarea::placeholder {
 .automation-favorite-button svg,
 .automation-group-button svg,
 .automation-schedule-button svg,
-.automation-hotkey-button svg {
+.automation-hotkey-button svg,
+.automation-terminal-button svg {
   width: 16px;
   height: 16px;
 }
@@ -2600,6 +2620,53 @@ textarea::placeholder {
   width: 17px;
   height: 17px;
   pointer-events: none;
+}
+
+.automation-terminal-button {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: var(--surface-3);
+  cursor: pointer;
+}
+
+.automation-terminal-button:hover,
+.automation-terminal-button[aria-expanded="true"] {
+  border-color: var(--accent-contrast-border);
+  color: var(--accent);
+  background: var(--accent-surface);
+}
+
+.automation-terminal-picker {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--accent-surface-strong);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.automation-terminal-picker > strong {
+  font-size: 0.78rem;
+}
+
+.automation-terminal-picker > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.automation-terminal-picker .ghost-button {
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.automation-terminal-empty {
+  color: var(--text-muted);
+  font-size: 0.78rem;
 }
 
 .automation-card-chips {

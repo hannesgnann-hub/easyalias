@@ -116,6 +116,7 @@ export function toggleAutomationGroupPicker(id: string) {
   // Only one card popover (group or schedule) is open at a time.
   state.scheduleEditorAutomationId = null;
   state.timedAutomationEditor = null;
+  state.terminalPickerAutomationId = null;
   refreshAutomationResults();
 }
 

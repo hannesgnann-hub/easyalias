@@ -73,7 +73,7 @@ export const TUTORIALS: Record<TutorialTopic, TutorialContent> = {
         title: "Using them in the terminal",
         body: `
           <p>EasyAlias writes <code>~/.easyalias/aliases.zsh</code> and adds <code>source ~/.easyalias/aliases.zsh</code> to your <code>~/.zshrc</code> once.</p>
-          <p>A <strong>new</strong> terminal window has your aliases right away. In a terminal that's already open, run <code>source ~/.zshrc</code> to pick up changes.</p>`
+          <p>A <strong>new</strong> terminal window has your aliases right away. This works in Terminal, Ghostty, Warp, iTerm2, WezTerm, Kitty, Alacritty, Rio, Hyper, VS Code, and other terminal apps that start zsh or Bash. In a terminal that's already open, run <code>source ~/.zshrc</code> or <code>source ~/.bashrc</code> to pick up changes.</p>`
       }
     ]
   },
@@ -107,7 +107,8 @@ export const TUTORIALS: Record<TutorialTopic, TutorialContent> = {
       {
         title: "Run it",
         body: `
-          <p>Click <strong>Run</strong> on a card. A progress dialog shows each step's status and captured output. <strong>Stop</strong> ends the run immediately (a background process that already launched keeps going on its own). If a foreground step exits non-zero, the run stops and the rest are marked skipped.</p>`
+          <p>Start from a <strong>workflow template</strong> or build your own, then click <strong>Run</strong> on its card. A progress dialog shows each step's status and captured output. <strong>Stop</strong> ends the run immediately (a background process that already launched keeps going on its own). If a foreground step exits non-zero, the run stops and the rest are marked skipped.</p>
+          <p>The <strong>terminal</strong> icon opens the working directory in an installed app such as Ghostty, Warp, iTerm2, WezTerm, Kitty, Alacritty, Rio, Hyper, or Terminal.</p>`
       },
       {
         title: "Organize",

@@ -13,6 +13,7 @@ import type {
   SunLocationSetting,
   SunRegionOption,
   TimedAutomation,
+  TerminalApp,
   TrashEntry,
   TutorialTopic
 } from "./types";
@@ -53,6 +54,11 @@ type UiState = {
   automationRun: AutomationRunState | null;
   automationSearchQuery: string;
   automationFilter: AutomationFilter;
+  automationSuggestionsExpanded: boolean;
+  automationSuggestionPage: number;
+  terminalApps: TerminalApp[];
+  terminalPickerAutomationId: string | null;
+  terminalBusy: boolean;
   automationGroupPickerId: string | null;
   automationEditorGroupPickerOpen: boolean;
   scheduleEditorAutomationId: string | null;
@@ -141,6 +147,11 @@ export const state: UiState = {
   automationRun: null,
   automationSearchQuery: "",
   automationFilter: "all",
+  automationSuggestionsExpanded: false,
+  automationSuggestionPage: 1,
+  terminalApps: [],
+  terminalPickerAutomationId: null,
+  terminalBusy: false,
 
   // Only one card's quick group-picker is open at a time; the editor's picker
   // is separate since it lives in its own modal.
@@ -203,3 +214,7 @@ export const state: UiState = {
 
 // Nine cards fill the three-column layout and keep every page the same height.
 export const suggestionPageSize = 9;
+
+// Workflow templates carry more information than alias suggestions, so six
+// cards keep the expanded automation section compact and easy to scan.
+export const automationSuggestionPageSize = 6;

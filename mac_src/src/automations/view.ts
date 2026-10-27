@@ -49,7 +49,7 @@ import {
 import { invokeCommand, isTauriRuntime, openExternalLink, openPathPicker } from "../platform";
 import { acceleratorFromEvent, formatAccelerator } from "../preferences";
 import { render } from "../render";
-import { state } from "../state";
+import { automationSuggestionPageSize, state } from "../state";
 import { bindTutorialEvents, openTutorial, renderTutorialModal } from "../tutorial";
 import type {
   Automation,
@@ -95,6 +95,13 @@ import {
   filterAutomations
 } from "./filters";
 import { closeAutomationRun, renderAutomationRun, runAutomation, stopAutomation } from "./run";
+import { openAutomationTerminal, toggleTerminalPicker } from "./terminal";
+import {
+  availableAutomationSuggestions,
+  showAutomationSuggestionPage,
+  toggleAutomationSuggestions,
+  useAutomationSuggestion
+} from "./suggestions";
 import {
   closeAutomationSchedulePicker,
   deleteAutomationSchedule,
@@ -196,6 +203,7 @@ export function renderAutomationHotkeyPopover(automation: Automation) {
 }
 
 export function toggleAutomationHotkeyPicker(id: string) {
+  state.terminalPickerAutomationId = null;
   if (state.hotkeyEditorAutomationId === id) {
     state.hotkeyEditorAutomationId = null;
     state.hotkeyDraft = null;
@@ -276,6 +284,15 @@ export function renderAutomationGroupOverview(sortedAutomations: Automation[]) {
   return `<div class="automation-group-grid">${cards.join("")}</div>`;
 }
 
+function renderTerminalPicker(automation: Automation) {
+  return `<div class="automation-terminal-picker" role="group" aria-label="Open ${escapeHtml(automation.name)} in terminal">
+    <strong>Open working directory in</strong>
+    <div>${state.terminalApps.length
+      ? state.terminalApps.map((terminal) => `<button class="ghost-button" type="button" data-automation-action="open-terminal" data-id="${escapeHtml(automation.id)}" data-terminal-id="${escapeHtml(terminal.id)}" ${state.terminalBusy ? "disabled" : ""}><i data-lucide="square-terminal"></i><span>${escapeHtml(terminal.name)}</span></button>`).join("")
+      : `<span class="automation-terminal-empty">No supported terminal app was detected.</span>`}</div>
+  </div>`;
+}
+
 export function renderAutomationResults(sortedAutomations: Automation[]) {
   if (!sortedAutomations.length) {
     return `<div class="automation-empty"><div class="automation-empty-icon"><i data-lucide="play"></i></div><strong>No automations yet</strong><span>Combine project commands and waits into a repeatable workflow.</span><button class="primary-button" type="button" data-automation-action="new"><i data-lucide="plus"></i><span>Create automation</span></button></div>`;
@@ -349,6 +366,16 @@ export function renderAutomationResults(sortedAutomations: Automation[]) {
                     data-id="${escapeHtml(automation.id)}"
                     ${state.automationRun?.running ? "disabled" : ""}
                   ><i data-lucide="keyboard"></i></button>
+                  <button
+                    class="automation-terminal-button"
+                    type="button"
+                    title="Open working directory in terminal"
+                    aria-label="Open ${escapeHtml(automation.name)} in terminal"
+                    aria-expanded="${state.terminalPickerAutomationId === automation.id}"
+                    data-automation-action="toggle-terminal-picker"
+                    data-id="${escapeHtml(automation.id)}"
+                    ${state.automationRun?.running ? "disabled" : ""}
+                  ><i data-lucide="square-terminal"></i></button>
                   <div>
                     <strong>${escapeHtml(automation.name)}</strong>
                     <code>${escapeHtml(automation.path)}</code>
@@ -370,6 +397,7 @@ export function renderAutomationResults(sortedAutomations: Automation[]) {
               </div>
               ${state.automationGroupPickerId === automation.id ? renderAutomationGroupPicker(automation, sortedAutomations) : ""}
               ${state.hotkeyEditorAutomationId === automation.id ? renderAutomationHotkeyPopover(automation) : ""}
+              ${state.terminalPickerAutomationId === automation.id ? renderTerminalPicker(automation) : ""}
               <ol class="automation-preview-list">
                 ${automation.steps
                   .slice(0, 4)
@@ -404,9 +432,54 @@ export function refreshAutomationResults() {
 
   results.innerHTML = renderAutomationResults(sortedAutomations);
   createIcons({
-    icons: { Check, Clock, Keyboard, Pencil, Play, Plus, Star, Tag, Tags, Trash2 },
+    icons: { Check, Clock, Keyboard, Pencil, Play, Plus, SquareTerminal, Star, Tag, Tags, Trash2 },
     attrs: { "aria-hidden": "true", width: "20", height: "20", "stroke-width": "2" }
   });
+}
+
+function renderAutomationSuggestions() {
+  const available = availableAutomationSuggestions();
+  if (!available.length) return "";
+
+  const pageCount = Math.max(1, Math.ceil(available.length / automationSuggestionPageSize));
+  state.automationSuggestionPage = Math.min(state.automationSuggestionPage, pageCount);
+  const pageStart = (state.automationSuggestionPage - 1) * automationSuggestionPageSize;
+  const visible = available.slice(pageStart, pageStart + automationSuggestionPageSize);
+
+  return `<section class="suggestions automation-suggestions" data-expanded="${state.automationSuggestionsExpanded}">
+    <div class="suggestions-header">
+      <div class="suggestions-heading"><h3>Workflow templates</h3><span>${available.length} available</span></div>
+      <button class="suggestions-toggle" type="button" aria-label="${state.automationSuggestionsExpanded ? "Collapse" : "Expand"} workflow templates" aria-expanded="${state.automationSuggestionsExpanded}" data-automation-action="toggle-suggestions">${state.automationSuggestionsExpanded ? "⌄" : "›"}</button>
+    </div>
+    ${
+      state.automationSuggestionsExpanded
+        ? `<div class="suggestion-grid automation-suggestion-grid">
+            ${visible
+              .map((suggestion) => {
+                const preview = suggestion.steps
+                  .map((step) => (step.kind === "wait" ? `Wait ${step.seconds}s` : step.command))
+                  .join(" → ");
+                return `<article class="suggestion-item">
+                  <div class="suggestion-copy"><strong>${escapeHtml(suggestion.name)}</strong><span>${escapeHtml(suggestion.description)}</span><code>${escapeHtml(preview)}</code></div>
+                  <button class="suggestion-button" type="button" data-automation-action="use-suggestion" data-id="${escapeHtml(suggestion.id)}" ${state.automationRun?.running ? "disabled" : ""}>Use</button>
+                </article>`;
+              })
+              .join("")}
+          </div>
+          ${
+            pageCount > 1
+              ? `<nav class="suggestion-pagination" aria-label="Workflow template pages">
+                  <button class="suggestion-page-button suggestion-page-arrow" type="button" aria-label="Previous template page" data-automation-action="suggestion-page" data-page="${state.automationSuggestionPage - 1}" ${state.automationSuggestionPage === 1 ? "disabled" : ""}>‹</button>
+                  ${Array.from({ length: pageCount }, (_, index) => index + 1)
+                    .map((page) => `<button class="suggestion-page-button ${page === state.automationSuggestionPage ? "is-current" : ""}" type="button" aria-label="Template page ${page}" aria-current="${page === state.automationSuggestionPage ? "page" : "false"}" data-automation-action="suggestion-page" data-page="${page}">${page}</button>`)
+                    .join("")}
+                  <button class="suggestion-page-button suggestion-page-arrow" type="button" aria-label="Next template page" data-automation-action="suggestion-page" data-page="${state.automationSuggestionPage + 1}" ${state.automationSuggestionPage === pageCount ? "disabled" : ""}>›</button>
+                </nav>`
+              : ""
+          }`
+        : ""
+    }
+  </section>`;
 }
 
 export function renderAutomationsView() {
@@ -464,6 +537,7 @@ export function renderAutomationsView() {
           <div><h2>Your Automations</h2><span data-automation-count>${automationOverviewCountLabel(sortedAutomations)}</span></div>
           <button class="primary-button" type="button" data-automation-action="new" ${state.automationRun?.running ? "disabled" : ""}><i data-lucide="plus"></i><span>New automation</span></button>
         </div>
+        ${renderAutomationSuggestions()}
         <div class="automation-tools">
           <div class="automation-search" role="search">
             <i data-lucide="search"></i>
@@ -600,6 +674,8 @@ export function bindAutomationEvents() {
     if (action === "assign-group" && id) void assignAutomationGroup(id, button.dataset.group ?? "");
     if (action === "toggle-schedule-picker" && id) openAutomationSchedulePicker(id);
     if (action === "toggle-hotkey-picker" && id) toggleAutomationHotkeyPicker(id);
+    if (action === "toggle-terminal-picker" && id) toggleTerminalPicker(id);
+    if (action === "open-terminal" && id && button.dataset.terminalId) void openAutomationTerminal(id, button.dataset.terminalId);
     if (action === "hotkey-cancel") toggleAutomationHotkeyPicker(state.hotkeyEditorAutomationId ?? "");
     if (action === "hotkey-clear" && id) void saveAutomationHotkey(id, null);
     if (action === "hotkey-save" && id && state.hotkeyDraft) void saveAutomationHotkey(id, state.hotkeyDraft);
@@ -689,6 +765,9 @@ export function bindAutomationEvents() {
       if (action === "delete-trash-permanently" && id) void permanentlyDeleteTrashAutomation(id);
       if (action === "empty-trash") void emptyAutomationTrash();
       if (action === "new") openAutomationEditor();
+      if (action === "toggle-suggestions") toggleAutomationSuggestions();
+      if (action === "suggestion-page") showAutomationSuggestionPage(Number(button.dataset.page));
+      if (action === "use-suggestion" && id) useAutomationSuggestion(id);
       if (action === "close-editor") closeAutomationEditor();
       if (action === "pick-folder") void openPathPicker("automation", "folder");
       if (action === "add-command") addAutomationStep("command");

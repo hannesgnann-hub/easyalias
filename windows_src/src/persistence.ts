@@ -14,6 +14,7 @@ import type {
   SunLocationSetting,
   SunRegionOption,
   TimedAutomation,
+  TerminalApp,
   TrashEntry
 } from "./types";
 
@@ -37,6 +38,11 @@ export async function loadState() {
       } catch (automationLoadError) {
         state.automations = [];
         state.error = `Automations could not be loaded: ${String(automationLoadError)}`;
+      }
+      try {
+        state.terminalApps = await invokeCommand<TerminalApp[]>("list_terminal_apps");
+      } catch {
+        state.terminalApps = [];
       }
       try {
         state.timedAutomations = await invokeCommand<TimedAutomation[]>("list_timed_automations");
@@ -90,6 +96,11 @@ export async function loadState() {
       group: automation.group ?? ""
     }));
   }
+  state.terminalApps = [
+    { id: "windows-terminal", name: "Windows Terminal" },
+    { id: "powershell", name: "PowerShell" },
+    { id: "cmd", name: "Command Prompt" }
+  ];
   const savedTimedAutomations = localStorage.getItem("easyalias-timed-automations");
   if (savedTimedAutomations) {
     state.timedAutomations = JSON.parse(savedTimedAutomations) as TimedAutomation[];

@@ -20,6 +20,7 @@ import type {
   SunLocationSetting,
   SunRegionOption,
   TimedAutomation,
+  TerminalApp,
   TrashEntry
 } from "./types";
 
@@ -43,6 +44,11 @@ export async function loadState() {
       } catch (automationLoadError) {
         state.automations = [];
         state.error = `Automations could not be loaded: ${String(automationLoadError)}`;
+      }
+      try {
+        state.terminalApps = await invokeCommand<TerminalApp[]>("list_terminal_apps");
+      } catch {
+        state.terminalApps = [];
       }
       try {
         state.automationTrashEntries = await invokeCommand<AutomationTrashEntry[]>("list_automation_trash");
@@ -102,6 +108,11 @@ export async function loadState() {
       group: automation.group ?? ""
     }));
   }
+  state.terminalApps = [
+    { id: "ghostty", name: "Ghostty" },
+    { id: "iterm", name: "iTerm2" },
+    { id: "terminal", name: "Terminal" }
+  ];
   const savedAutomationTrash = localStorage.getItem("easyalias-automation-trash");
   if (savedAutomationTrash) {
     const cutoff = Math.floor(Date.now() / 1000) - trashRetentionSeconds;

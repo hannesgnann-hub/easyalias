@@ -32,6 +32,7 @@ mod systemd;
 mod settings;
 mod hotkeys;
 mod marketplace;
+mod terminals;
 
 use models::*;
 use paths::*;
@@ -46,6 +47,7 @@ use systemd::*;
 use settings::*;
 use hotkeys::*;
 use marketplace::*;
+use terminals::*;
 
 fn main() {
     // systemd invokes this same executable to fire a timed automation, with
@@ -174,6 +176,8 @@ fn main() {
             start_automation_session,
             run_session_command,
             stop_automation_session,
+            list_terminal_apps,
+            open_in_terminal,
             list_timed_automations,
             save_timed_automation,
             delete_timed_automation,

@@ -16,6 +16,7 @@ import type { SunLocationSetting, TimedAutomation, TimedAutomationTriggerKind } 
 // card popover) so its content never has to fit inside a grid cell, which
 // is what caused the picker to overflow into neighboring cards.
 export function openAutomationSchedulePicker(automationId: string) {
+  state.terminalPickerAutomationId = null;
   const existing = state.timedAutomations.find((entry) => entry.automationId === automationId);
   const timestamp = nowIso();
   state.timedAutomationEditor = existing

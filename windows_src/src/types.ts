@@ -184,6 +184,11 @@ export type AutomationRunState = {
   steps: AutomationRunStep[];
 };
 
+export type TerminalApp = {
+  id: string;
+  name: string;
+};
+
 // Schedules an existing Automation to run through the OS's own scheduler
 // (Windows Task Scheduler), so it fires even while EasyAlias itself is not
 // running. `triggerKind` is "clock" (a fixed "HH:MM" in `time`), or

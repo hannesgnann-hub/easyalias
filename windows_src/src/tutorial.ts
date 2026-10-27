@@ -73,7 +73,7 @@ export const TUTORIALS: Record<TutorialTopic, TutorialContent> = {
         title: "Using them in the terminal",
         body: `
           <p>EasyAlias writes one <code>.cmd</code> file per alias under <code>~\\.easyalias\\bin</code> and adds that folder to your user <code>PATH</code> once.</p>
-          <p>Open a <strong>new</strong> <code>cmd.exe</code> window so the updated <code>PATH</code> is picked up, then type your alias like any command. <code>where myalias</code> confirms it resolves.</p>`
+          <p>Open a <strong>new</strong> terminal so the updated <code>PATH</code> is picked up, then type your alias like any command. This includes Windows Terminal profiles, PowerShell, Command Prompt, Ghostty, WezTerm, Alacritty, and VS Code when they use a Windows shell. <code>where myalias</code> confirms it resolves.</p>`
       }
     ]
   },
@@ -107,7 +107,8 @@ export const TUTORIALS: Record<TutorialTopic, TutorialContent> = {
       {
         title: "Run it",
         body: `
-          <p>Click <strong>Run</strong> on a card. A progress dialog shows each step's status and captured output. <strong>Stop</strong> ends the run immediately (a background process that already launched keeps going on its own). If a foreground step exits non-zero, the run stops and the rest are marked skipped.</p>`
+          <p>Start from a <strong>workflow template</strong> or build your own, then click <strong>Run</strong> on its card. A progress dialog shows each step's status and captured output. <strong>Stop</strong> ends the run immediately (a background process that already launched keeps going on its own). If a foreground step exits non-zero, the run stops and the rest are marked skipped.</p>
+          <p>The <strong>terminal</strong> icon opens the working directory in an installed app such as Windows Terminal, Ghostty, WezTerm, Alacritty, PowerShell, or Command Prompt.</p>`
       },
       {
         title: "Organize",

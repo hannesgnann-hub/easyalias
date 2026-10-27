@@ -182,6 +182,13 @@ pub(crate) struct AutomationCommandResult {
     pub(crate) process_id: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TerminalApp {
+    pub(crate) id: String,
+    pub(crate) name: String,
+}
+
 // One automation run gets one persistent shell process (bash or zsh, matching
 // the user's detected login shell), so `cd` and exported environment
 // variables carry over between steps exactly as they would in a real

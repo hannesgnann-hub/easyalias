@@ -12,6 +12,7 @@ export function closeAllAutomationCardPopovers() {
   state.hotkeyEditorAutomationId = null;
   state.hotkeyDraft = null;
   state.hotkeyCaptureError = "";
+  state.terminalPickerAutomationId = null;
 }
 
 export function openSettingsView() {
