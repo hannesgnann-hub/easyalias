@@ -1,3 +1,7 @@
+// Release builds are desktop GUI applications. Keep the console available for
+// development builds, but do not create a terminal window for installed users.
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+
 use chrono::{DateTime, Datelike, Local, Offset, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 use std::{
